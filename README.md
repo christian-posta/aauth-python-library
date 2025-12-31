@@ -30,7 +30,7 @@ aauth/
 - [PHASE1.md](PHASE1.md) - Phase 1 implementation details
 - [PHASE2.md](PHASE2.md) - Phase 2 implementation details
 - [PLAN.md](PLAN.md) - Overall implementation plan
-- [CLAUDE-CHAT.md](CLAUDE-CHAT.md) - Design discussions and Q&A
+
 
 ## Implementation Status
 
