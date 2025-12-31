@@ -75,13 +75,23 @@ python demo_phase1.py
 
 **Terminal 1 - Resource (with debug):**
 ```bash
+# Basic debug (signature verification details)
 AAUTH_DEBUG=1 python -m participants.resource
+
+# HTTP-level debug (shows full request/response headers and bodies, curl-like)
+AAUTH_DEBUG_HTTP=1 python -m participants.resource
+
+# Both debug levels
+AAUTH_DEBUG=1 AAUTH_DEBUG_HTTP=1 python -m participants.resource
 ```
 
 **Terminal 2 - Agent (interactive):**
 ```python
 import os
-os.environ["AAUTH_DEBUG"] = "1"  # Enable debug output
+# Enable HTTP-level debug to see full request/response (curl-like)
+os.environ["AAUTH_DEBUG_HTTP"] = "1"
+# Or enable signature verification debug
+# os.environ["AAUTH_DEBUG"] = "1"
 
 from participants.agent import Agent
 import asyncio
@@ -90,19 +100,21 @@ agent = Agent("https://agent.example")
 async def test():
     response = await agent.request_resource("http://localhost:8002/data")
     print(f"Status: {response.status_code}")
-    print(f"Headers: {dict(response.headers)}")
     if response.status_code == 200:
         print(f"Response: {response.json()}")
     else:
         print(f"Error: {response.text}")
-        # Debug: show what headers were sent
-        print("\nDebug - Request headers sent:")
-        sig_headers = agent.sign_request("GET", "http://localhost:8002/data", {}, b"")
-        for k, v in sig_headers.items():
-            print(f"  {k}: {v[:80]}..." if len(v) > 80 else f"  {k}: {v}")
 
 asyncio.run(test())
 ```
+
+**Note:** When `AAUTH_DEBUG_HTTP=1` is set, you'll see:
+- **Agent side**: Full HTTP request headers and body (what the agent sends)
+- **Agent side**: Full HTTP response headers and body (what the agent receives)
+- **Resource side**: Full HTTP request headers and body (what the resource receives)
+- **Resource side**: Full HTTP response headers and body (what the resource sends)
+
+This gives you curl-like visibility into the HTTP traffic between agent and resource.
 
 ## Key Features
 

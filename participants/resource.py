@@ -51,25 +51,52 @@ class Resource:
     
     async def _handle_protected_request(self, request: Request, method: str):
         """Handle a protected request with signature verification."""
+        import os
+        import sys
+        
+        # Get request body first (can only be read once)
+        body = await request.body()
+        
+        # Debug: Print incoming HTTP request (curl-like format)
+        if os.environ.get("AAUTH_DEBUG_HTTP"):
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f">>> RESOURCE REQUEST received", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"{method} {request.url.path} HTTP/1.1", file=sys.stderr)
+            print(f"Host: {request.url.hostname}:{request.url.port}", file=sys.stderr)
+            for name, value in sorted(request.headers.items()):
+                # Truncate long values for readability
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            if body:
+                print(f"\n[Body ({len(body)} bytes)]", file=sys.stderr)
+                try:
+                    print(body.decode('utf-8'), file=sys.stderr)
+                except:
+                    print(f"[Binary body: {len(body)} bytes]", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
         # Get signature headers (all three required per spec)
         signature_input_header = request.headers.get("Signature-Input")
         signature_header = request.headers.get("Signature")
         signature_key_header = request.headers.get("Signature-Key")
         
         if not signature_input_header or not signature_header or not signature_key_header:
-            return Response(
+            response = Response(
                 status_code=401,
                 headers={"Agent-Auth": "httpsig"},
                 content="Missing signature headers"
             )
+            if os.environ.get("AAUTH_DEBUG_HTTP"):
+                self._print_response_debug(response)
+            return response
         
         # Parse signature key to determine scheme
         parsed_key = parse_signature_key(signature_key_header)
         scheme = parsed_key["scheme"]
         params = parsed_key["params"]
-        
-        # Get request body
-        body = await request.body()
         
         # Build target URI
         target_uri = str(request.url)
@@ -132,26 +159,68 @@ class Resource:
                 import os
                 if os.environ.get("AAUTH_DEBUG"):
                     print("DEBUG RESOURCE: Signature verification failed")
-                return Response(
+                response = Response(
                     status_code=401,
                     headers={"Agent-Auth": "httpsig"},
                     content="Invalid signature"
                 )
+                if os.environ.get("AAUTH_DEBUG_HTTP"):
+                    self._print_response_debug(response)
+                return response
             
             # Signature valid - return data
-            return JSONResponse({
+            response = JSONResponse({
                 "message": "Access granted",
                 "data": "This is protected data",
                 "scheme": "hwk",
                 "method": method
             })
+            if os.environ.get("AAUTH_DEBUG_HTTP"):
+                self._print_response_debug(response)
+            return response
         
         else:
-            return Response(
+            response = Response(
                 status_code=401,
                 headers={"Agent-Auth": "httpsig"},
                 content=f"Unsupported signature scheme: {scheme}"
             )
+            if os.environ.get("AAUTH_DEBUG_HTTP"):
+                self._print_response_debug(response)
+            return response
+    
+    def _print_response_debug(self, response: Response):
+        """Print HTTP response in curl-like format for debugging."""
+        import json
+        print("\n" + "=" * 80, file=sys.stderr)
+        print(f"<<< RESOURCE RESPONSE", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print(f"HTTP/1.1 {response.status_code}", file=sys.stderr)
+        for name, value in sorted(response.headers.items()):
+            display_value = value
+            if len(display_value) > 100:
+                display_value = display_value[:97] + "..."
+            print(f"{name}: {display_value}", file=sys.stderr)
+        if hasattr(response, 'body') and response.body:
+            body_bytes = response.body if isinstance(response.body, bytes) else response.body.encode()
+            print(f"\n[Body ({len(body_bytes)} bytes)]", file=sys.stderr)
+            try:
+                print(body_bytes.decode('utf-8'), file=sys.stderr)
+            except:
+                print(f"[Binary body: {len(body_bytes)} bytes]", file=sys.stderr)
+        elif hasattr(response, 'content') and response.content:
+            body_bytes = response.content if isinstance(response.content, bytes) else response.content.encode()
+            print(f"\n[Body ({len(body_bytes)} bytes)]", file=sys.stderr)
+            try:
+                print(body_bytes.decode('utf-8'), file=sys.stderr)
+            except:
+                print(f"[Binary body: {len(body_bytes)} bytes]", file=sys.stderr)
+        # For JSONResponse, get the body from the response
+        elif isinstance(response, JSONResponse):
+            # JSONResponse stores body in _content, but we can't easily access it here
+            # The body will be serialized by FastAPI
+            pass
+        print("=" * 80 + "\n", file=sys.stderr)
     
     def run(self):
         """Run the resource server."""

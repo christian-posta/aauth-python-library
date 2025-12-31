@@ -102,6 +102,9 @@ class Agent:
         Returns:
             HTTP response
         """
+        import os
+        import sys
+        
         if headers is None:
             headers = {}
         
@@ -114,6 +117,26 @@ class Agent:
         # Add signature headers to request
         request_headers = {**headers, **sig_headers}
         
+        # Debug: Print HTTP request (curl-like format)
+        if os.environ.get("AAUTH_DEBUG_HTTP"):
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f">>> AGENT REQUEST to {resource_url}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"{method} {resource_url} HTTP/1.1", file=sys.stderr)
+            for name, value in sorted(request_headers.items()):
+                # Truncate long values for readability
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            if body:
+                print(f"\n[Body ({len(body)} bytes)]", file=sys.stderr)
+                try:
+                    print(body.decode('utf-8'), file=sys.stderr)
+                except:
+                    print(f"[Binary body: {len(body)} bytes]", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
         # Make request
         async with httpx.AsyncClient() as client:
             response = await client.request(
@@ -122,6 +145,26 @@ class Agent:
                 headers=request_headers,
                 content=body
             )
+        
+        # Debug: Print HTTP response (curl-like format)
+        if os.environ.get("AAUTH_DEBUG_HTTP"):
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f"<<< AGENT RESPONSE from {resource_url}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"HTTP/1.1 {response.status_code} {response.reason_phrase}", file=sys.stderr)
+            for name, value in sorted(response.headers.items()):
+                # Truncate long values for readability
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            if response.content:
+                print(f"\n[Body ({len(response.content)} bytes)]", file=sys.stderr)
+                try:
+                    print(response.text, file=sys.stderr)
+                except:
+                    print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
         
         return response
     
