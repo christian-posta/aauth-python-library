@@ -58,6 +58,28 @@ Phase 1 implements basic proof-of-possession without identity:
 
 See [PHASE1.md](PHASE1.md) for detailed Phase 1 documentation.
 
+## Phase 2: Agent Identity via JWKS
+
+Phase 2 adds agent identity verification:
+- Agent publishes metadata at `/.well-known/aauth-agent`
+- Agent publishes JWKS at `/jwks.json`
+- Resource can verify agent identity using `sig=jwks` scheme
+- Separate endpoints (`/data-hwk`, `/data-jwks`) for both schemes
+
+See [PHASE2.md](PHASE2.md) for detailed Phase 2 documentation.
+
+### Running Phase 2 Demo
+
+```bash
+python demo_phase2.py
+```
+
+### Running Phase 2 Tests
+
+```bash
+pytest tests/test_phase2.py -v
+```
+
 ## Project Structure
 
 ```
@@ -70,8 +92,8 @@ aauth/
 
 ## Implementation Status
 
-- [x] Phase 1: Pseudonymous flow (sig=hwk)
-- [ ] Phase 2: Agent identity (sig=jwks)
-- [ ] Phase 3: Autonomous authorization (tokens)
-- [ ] Phase 4: User delegation (OAuth-like flow)
+- [x] Phase 1: Pseudonymous flow (sig=hwk) - Complete
+- [x] Phase 2: Agent identity (sig=jwks) - Complete
+- [ ] Phase 3: Autonomous authorization (tokens) - Planned
+- [ ] Phase 4: User delegation (OAuth-like flow) - Planned
 

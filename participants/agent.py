@@ -12,6 +12,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk, generate_jwks
 from core.httpsig import sign_request
+from core.metadata import generate_agent_metadata
+
+
+def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
+    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
+    value = os.environ.get(env_var, "1")
+    return value.lower() not in ("0", "false", "no", "off", "")
+
+
+def _is_http_debug_enabled() -> bool:
+    """Check if HTTP debug is enabled (defaults to True unless explicitly disabled)."""
+    return _is_debug_enabled("AAUTH_DEBUG_HTTP")
 
 
 class Agent:
@@ -44,16 +56,24 @@ class Agent:
         
         @self.app.get("/jwks.json")
         async def jwks():
-            """JWKS endpoint for Phase 2 (not used in Phase 1)."""
+            """JWKS endpoint for Phase 2."""
             jwk = public_key_to_jwk(self.public_key, kid=self.kid)
             return generate_jwks([jwk])
+        
+        @self.app.get("/.well-known/aauth-agent")
+        async def metadata():
+            """Agent metadata endpoint per AAuth spec Section 8.1."""
+            # Construct JWKS URI from agent_id
+            jwks_uri = f"{self.agent_id}/jwks.json"
+            return generate_agent_metadata(self.agent_id, jwks_uri)
     
     def sign_request(
         self,
         method: str,
         url: str,
         headers: Optional[Dict[str, str]] = None,
-        body: Optional[bytes] = None
+        body: Optional[bytes] = None,
+        sig_scheme: str = "hwk"
     ) -> Dict[str, str]:
         """Sign an HTTP request.
         
@@ -62,6 +82,7 @@ class Agent:
             url: Target URL
             headers: Request headers
             body: Request body
+            sig_scheme: Signature scheme - "hwk" (Phase 1) or "jwks" (Phase 2)
             
         Returns:
             Dictionary with Signature-Input, Signature, and Signature-Key headers
@@ -72,14 +93,20 @@ class Agent:
         if body is None:
             body = b""
         
-        # For Phase 1, use sig=hwk (pseudonymous)
+        # Prepare kwargs for sig=jwks
+        kwargs = {}
+        if sig_scheme == "jwks":
+            kwargs["id"] = self.agent_id
+            kwargs["kid"] = self.kid
+        
         sig_headers = sign_request(
             method=method,
             target_uri=url,
             headers=headers,
             body=body,
             private_key=self.private_key,
-            sig_scheme="hwk"
+            sig_scheme=sig_scheme,
+            **kwargs
         )
         
         return sig_headers
@@ -89,7 +116,8 @@ class Agent:
         resource_url: str,
         method: str = "GET",
         headers: Optional[Dict[str, str]] = None,
-        body: Optional[bytes] = None
+        body: Optional[bytes] = None,
+        sig_scheme: str = "hwk"
     ) -> httpx.Response:
         """Make a signed request to a resource.
         
@@ -98,6 +126,7 @@ class Agent:
             method: HTTP method
             headers: Request headers
             body: Request body
+            sig_scheme: Signature scheme - "hwk" (Phase 1) or "jwks" (Phase 2)
             
         Returns:
             HTTP response
@@ -112,13 +141,13 @@ class Agent:
             body = b""
         
         # Sign the request
-        sig_headers = self.sign_request(method, resource_url, headers, body)
+        sig_headers = self.sign_request(method, resource_url, headers, body, sig_scheme=sig_scheme)
         
         # Add signature headers to request
         request_headers = {**headers, **sig_headers}
         
         # Debug: Print HTTP request (curl-like format)
-        if os.environ.get("AAUTH_DEBUG_HTTP"):
+        if _is_http_debug_enabled():
             print("\n" + "=" * 80, file=sys.stderr)
             print(f">>> AGENT REQUEST to {resource_url}", file=sys.stderr)
             print("=" * 80, file=sys.stderr)
@@ -147,7 +176,7 @@ class Agent:
             )
         
         # Debug: Print HTTP response (curl-like format)
-        if os.environ.get("AAUTH_DEBUG_HTTP"):
+        if _is_http_debug_enabled():
             print("\n" + "=" * 80, file=sys.stderr)
             print(f"<<< AGENT RESPONSE from {resource_url}", file=sys.stderr)
             print("=" * 80, file=sys.stderr)

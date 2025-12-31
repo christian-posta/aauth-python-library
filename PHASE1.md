@@ -135,11 +135,15 @@ This gives you curl-like visibility into the HTTP traffic between agent and reso
 
 ## What's Next: Phase 2
 
-Phase 2 will add:
-- Agent identity via JWKS
-- Metadata endpoints (`/.well-known/aauth-agent-server`)
-- `sig=jwks` scheme (agent publishes JWKS, resource fetches it)
-- Identity verification (not just proof-of-possession)
+Phase 2 adds **Agent Identity via JWKS**:
+- Agent metadata endpoint (`/.well-known/aauth-agent`)
+- JWKS discovery (Mode 2: identifier + metadata)
+- `sig=jwks` signature scheme
+- Separate endpoints (`/data-hwk`, `/data-jwks`) for clear demonstration
+
+**Status**: ✅ Complete - See `PHASE2.md` for details.
+
+Note: Phase 2 maintains full backward compatibility. The `/data` endpoint still works with `sig=hwk`, and new endpoints (`/data-hwk`, `/data-jwks`) allow side-by-side comparison of both schemes.
 
 ## Notes
 

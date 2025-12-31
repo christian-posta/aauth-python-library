@@ -28,11 +28,13 @@ aauth/
 
 - [INSTRUCTIONS.md](INSTRUCTIONS.md) - Setup and usage instructions
 - [PHASE1.md](PHASE1.md) - Phase 1 implementation details
+- [PHASE2.md](PHASE2.md) - Phase 2 implementation details
+- [PLAN.md](PLAN.md) - Overall implementation plan
 - [CLAUDE-CHAT.md](CLAUDE-CHAT.md) - Design discussions and Q&A
 
 ## Implementation Status
 
-- [x] Phase 1: Pseudonymous flow (sig=hwk)
-- [ ] Phase 2: Agent identity (sig=jwks)
-- [ ] Phase 3: Autonomous authorization (tokens)
-- [ ] Phase 4: User delegation (OAuth-like flow)
+- [x] Phase 1: Pseudonymous flow (sig=hwk) - Complete
+- [x] Phase 2: Agent identity (sig=jwks) - Complete
+- [ ] Phase 3: Autonomous authorization (tokens) - Planned
+- [ ] Phase 4: User delegation (OAuth-like flow) - Planned
