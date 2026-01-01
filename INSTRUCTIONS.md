@@ -80,6 +80,67 @@ python demo_phase2.py
 pytest tests/test_phase2.py -v
 ```
 
+## Phase 3: Autonomous Authorization
+
+Phase 3 implements autonomous authorization flow:
+- Resources issue resource tokens when agents request access
+- Agents present resource tokens to auth servers
+- Auth servers validate resource tokens and issue auth tokens
+- Agents use auth tokens to access protected resources
+- Complete token flow without user interaction
+
+See [PHASE3.md](PHASE3.md) for detailed Phase 3 documentation.
+
+### Running Phase 3 Demo
+
+```bash
+python demo_phase3.py
+```
+
+This will start all three participants (agent, resource, auth server) and demonstrate the complete autonomous authorization flow.
+
+### Running Phase 3 Tests
+
+```bash
+pytest tests/test_phase3.py -v
+```
+
+### Manual Testing Phase 3
+
+**Terminal 1 - Agent**:
+```bash
+python -c "from participants.agent import Agent; Agent('http://127.0.0.1:8001', port=8001).run()"
+```
+
+**Terminal 2 - Resource**:
+```bash
+python -c "from participants.resource import Resource; Resource('http://127.0.0.1:8002', port=8002, auth_server='http://127.0.0.1:8003').run()"
+```
+
+**Terminal 3 - Auth Server**:
+```bash
+python -c "from participants.auth_server import AuthServer; AuthServer('http://127.0.0.1:8003', port=8003).run()"
+```
+
+**Terminal 4 - Test**:
+```python
+import asyncio
+from participants.agent import Agent
+
+async def test():
+    agent = Agent("http://127.0.0.1:8001", port=8001)
+    response = await agent.request_resource(
+        resource_url="http://127.0.0.1:8002/data-auth",
+        method="GET",
+        sig_scheme="jwks"
+    )
+    print(f"Status: {response.status_code}")
+    if response.status_code == 200:
+        print(f"Response: {response.json()}")
+
+asyncio.run(test())
+```
+
 ## Project Structure
 
 ```
@@ -94,6 +155,6 @@ aauth/
 
 - [x] Phase 1: Pseudonymous flow (sig=hwk) - Complete
 - [x] Phase 2: Agent identity (sig=jwks) - Complete
-- [ ] Phase 3: Autonomous authorization (tokens) - Planned
+- [x] Phase 3: Autonomous authorization (tokens) - Complete
 - [ ] Phase 4: User delegation (OAuth-like flow) - Planned
 

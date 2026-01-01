@@ -29,6 +29,7 @@ aauth/
 - [INSTRUCTIONS.md](INSTRUCTIONS.md) - Setup and usage instructions
 - [PHASE1.md](PHASE1.md) - Phase 1 implementation details
 - [PHASE2.md](PHASE2.md) - Phase 2 implementation details
+- [PHASE3.md](PHASE3.md) - Phase 3 implementation details
 - [PLAN.md](PLAN.md) - Overall implementation plan
 
 
@@ -36,5 +37,5 @@ aauth/
 
 - [x] Phase 1: Pseudonymous flow (sig=hwk) - Complete
 - [x] Phase 2: Agent identity (sig=jwks) - Complete
-- [ ] Phase 3: Autonomous authorization (tokens) - Planned
+- [x] Phase 3: Autonomous authorization (tokens) - Complete
 - [ ] Phase 4: User delegation (OAuth-like flow) - Planned

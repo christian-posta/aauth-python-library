@@ -6,6 +6,7 @@ import base64
 import hashlib
 import time
 import re
+import jwt
 
 # Try to import http-message-signatures library, fall back to manual implementation
 try:
@@ -400,8 +401,186 @@ def verify_signature(
     elif scheme == "jwt":
         if not jwks_fetcher:
             raise ValueError("sig=jwt requires jwks_fetcher")
-        jwt = params.get("jwt")
-        raise NotImplementedError("sig=jwt not implemented in Phase 1")
+        jwt_token = params.get("jwt")
+        if not jwt_token:
+            if debug:
+                print(f"DEBUG VERIFY: sig=jwt missing jwt parameter", file=sys.stderr, flush=True)
+            return False
+        
+        if debug:
+            print(f"DEBUG VERIFY: sig=jwt - extracting JWT from Signature-Key header", file=sys.stderr, flush=True)
+            print(f"DEBUG VERIFY:   JWT (first 100 chars): {jwt_token[:100]}...", file=sys.stderr, flush=True)
+        
+        # Parse JWT to extract header and payload (unverified first)
+        try:
+            header = jwt.get_unverified_header(jwt_token)
+            payload = jwt.decode(jwt_token, options={"verify_signature": False})
+            
+            if debug:
+                import json
+                print(f"DEBUG VERIFY:   Decoded header: {json.dumps(header, indent=2)}", file=sys.stderr, flush=True)
+                print(f"DEBUG VERIFY:   Decoded payload: {json.dumps(payload, indent=2)}", file=sys.stderr, flush=True)
+        except Exception as e:
+            if debug:
+                print(f"DEBUG VERIFY:   Failed to parse JWT: {e}", file=sys.stderr, flush=True)
+            return False
+        
+        # Check typ claim (must be auth+jwt for resource access)
+        typ = header.get("typ")
+        if debug:
+            print(f"DEBUG VERIFY:   Typ claim: {typ}", file=sys.stderr, flush=True)
+        
+        if typ != "auth+jwt":
+            if debug:
+                print(f"DEBUG VERIFY:   Typ check FAILED: expected=auth+jwt, got={typ}", file=sys.stderr, flush=True)
+            return False
+        
+        if debug:
+            print(f"DEBUG VERIFY:   Typ check PASSED: {typ}", file=sys.stderr, flush=True)
+        
+        # Extract cnf.jwk from payload
+        cnf = payload.get("cnf")
+        if not cnf:
+            if debug:
+                print(f"DEBUG VERIFY:   Missing cnf claim in JWT payload", file=sys.stderr, flush=True)
+            return False
+        
+        cnf_jwk = cnf.get("jwk")
+        if not cnf_jwk:
+            if debug:
+                print(f"DEBUG VERIFY:   Missing cnf.jwk claim in JWT payload", file=sys.stderr, flush=True)
+            return False
+        
+        if debug:
+            import json
+            print(f"DEBUG VERIFY:   Extracted cnf.jwk: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
+        
+        # Verify JWT signature using auth server's JWKS
+        iss = payload.get("iss")
+        if not iss:
+            if debug:
+                print(f"DEBUG VERIFY:   Missing iss claim in JWT payload", file=sys.stderr, flush=True)
+            return False
+        
+        kid = header.get("kid")
+        if not kid:
+            if debug:
+                print(f"DEBUG VERIFY:   Missing kid in JWT header", file=sys.stderr, flush=True)
+            return False
+        
+        if debug:
+            print(f"DEBUG VERIFY:   Verifying JWT signature using auth server JWKS", file=sys.stderr, flush=True)
+            print(f"DEBUG VERIFY:     Issuer (auth server): {iss}", file=sys.stderr, flush=True)
+            print(f"DEBUG VERIFY:     Key ID: {kid}", file=sys.stderr, flush=True)
+        
+        # Fetch auth server JWKS
+        # jwks_fetcher interface: for jwt scheme, it should accept (issuer_url, None) or similar
+        # We'll try calling it with issuer URL
+        try:
+            # Try calling with issuer URL (for auth server JWKS)
+            auth_jwks = jwks_fetcher(iss, None) if callable(jwks_fetcher) else None
+            if not auth_jwks:
+                # Try alternative: jwks_fetcher might be a dict mapping issuer -> JWKS fetcher
+                # Or it might accept just the issuer URL
+                if debug:
+                    print(f"DEBUG VERIFY:   Attempting to fetch auth server JWKS from {iss}", file=sys.stderr, flush=True)
+                # For now, we'll need to handle this in the caller
+                # But let's try a simple approach: if jwks_fetcher is callable with one arg
+                try:
+                    auth_jwks = jwks_fetcher(iss) if callable(jwks_fetcher) else None
+                except:
+                    auth_jwks = None
+            
+            if not auth_jwks:
+                if debug:
+                    print(f"DEBUG VERIFY:   Failed to fetch auth server JWKS", file=sys.stderr, flush=True)
+                return False
+            
+            if debug:
+                import json
+                print(f"DEBUG VERIFY:   Auth server JWKS received: {json.dumps(auth_jwks, indent=2)}", file=sys.stderr, flush=True)
+        except Exception as e:
+            if debug:
+                print(f"DEBUG VERIFY:   Error fetching auth server JWKS: {e}", file=sys.stderr, flush=True)
+            return False
+        
+        # Find signing key by kid
+        keys = auth_jwks.get("keys", [])
+        signing_key = None
+        for key in keys:
+            if key.get("kid") == kid:
+                signing_key = key
+                break
+        
+        if not signing_key:
+            if debug:
+                print(f"DEBUG VERIFY:   Key with kid={kid} not found in auth server JWKS", file=sys.stderr, flush=True)
+            return False
+        
+        if debug:
+            import json
+            print(f"DEBUG VERIFY:   Found signing key: {json.dumps(signing_key, indent=2)}", file=sys.stderr, flush=True)
+        
+        # Verify JWT signature
+        from .crypto_utils import jwk_to_public_key
+        auth_public_key = jwk_to_public_key(signing_key)
+        
+        if debug:
+            print(f"DEBUG VERIFY:   Verifying JWT signature with auth server public key", file=sys.stderr, flush=True)
+        
+        try:
+            jwt.decode(
+                jwt_token,
+                auth_public_key,
+                algorithms=["EdDSA"],
+                options={"verify_signature": True, "verify_exp": False, "verify_aud": False}  # We'll check exp and aud separately
+            )
+            if debug:
+                print(f"DEBUG VERIFY:   JWT signature verification PASSED", file=sys.stderr, flush=True)
+        except jwt.ExpiredSignatureError:
+            if debug:
+                print(f"DEBUG VERIFY:   JWT has expired", file=sys.stderr, flush=True)
+            return False
+        except jwt.InvalidSignatureError as e:
+            if debug:
+                print(f"DEBUG VERIFY:   JWT signature verification FAILED: {e}", file=sys.stderr, flush=True)
+            return False
+        
+        # Check expiration
+        exp = payload.get("exp")
+        if exp:
+            now = int(time.time())
+            if now >= exp:
+                if debug:
+                    print(f"DEBUG VERIFY:   JWT expiration check FAILED: exp={exp}, now={now}", file=sys.stderr, flush=True)
+                return False
+            if debug:
+                print(f"DEBUG VERIFY:   JWT expiration check PASSED: exp={exp}, now={now}, time until expiration: {exp - now} seconds", file=sys.stderr, flush=True)
+        
+        # Convert cnf.jwk to public key for HTTPSig verification
+        if debug:
+            print(f"DEBUG VERIFY:   Converting cnf.jwk to public key for HTTPSig verification", file=sys.stderr, flush=True)
+        
+        try:
+            public_key = jwk_to_public_key(cnf_jwk)
+            if debug:
+                from .crypto_utils import public_key_to_jwk
+                jwk_for_debug = public_key_to_jwk(public_key)
+                print(f"DEBUG VERIFY:   Public key from cnf.jwk - kty={jwk_for_debug.get('kty')}, crv={jwk_for_debug.get('crv')}, x={jwk_for_debug.get('x')[:20]}...", file=sys.stderr, flush=True)
+        except Exception as e:
+            if debug:
+                print(f"DEBUG VERIFY:   Failed to convert cnf.jwk to public key: {e}", file=sys.stderr, flush=True)
+            return False
+        
+        # Use extracted key for HTTPSig verification
+        if debug:
+            print(f"DEBUG VERIFY:   Calling _verify_signature_manual for scheme=jwt", file=sys.stderr, flush=True)
+        
+        return _verify_signature_manual(
+            method, target_uri, headers, body,
+            signature_input_header, signature_header, signature_key_header,
+            public_key, jwks_fetcher
+        )
     
     else:
         raise ValueError(f"Unknown signature scheme: {scheme}")
@@ -484,8 +663,8 @@ def _verify_signature_manual(
                 print(f"DEBUG VERIFY: Unsupported scheme in manual verification: {scheme}", file=sys.stderr, flush=True)
             return False
     
-    # Verify signature (works for both hwk and jwks once we have public_key)
-    if scheme in ("hwk", "jwks"):
+    # Verify signature (works for hwk, jwks, and jwt once we have public_key)
+    if scheme in ("hwk", "jwks", "jwt"):
         
         # Reconstruct signature base
         parsed_uri = urlparse(target_uri)
