@@ -10,6 +10,10 @@ AAUTH_DEBUG_DEFAULT = "0"
 # Set to "1" to enable HTTP debug logging by default, "0" to disable by default
 AAUTH_DEBUG_HTTP_DEFAULT = "1"
 
+# Default value for AAUTH_DEBUG_JWT_TOKEN environment variable
+# Set to "1" to enable JWT token decoding/printing by default, "0" to disable by default
+AAUTH_DEBUG_JWT_TOKEN_DEFAULT = "1"
+
 
 def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
     """Check if debug is enabled.
@@ -33,4 +37,15 @@ def _is_http_debug_enabled() -> bool:
         Defaults to True unless explicitly disabled via AAUTH_DEBUG_HTTP environment variable.
     """
     value = os.environ.get("AAUTH_DEBUG_HTTP", AAUTH_DEBUG_HTTP_DEFAULT)
+    return value.lower() not in ("0", "false", "no", "off", "")
+
+
+def _is_jwt_token_debug_enabled() -> bool:
+    """Check if JWT token debug (decoding/printing) is enabled.
+    
+    Returns:
+        True if JWT token debug is enabled, False otherwise.
+        Defaults to True unless explicitly disabled via AAUTH_DEBUG_JWT_TOKEN environment variable.
+    """
+    value = os.environ.get("AAUTH_DEBUG_JWT_TOKEN", AAUTH_DEBUG_JWT_TOKEN_DEFAULT)
     return value.lower() not in ("0", "false", "no", "off", "")
