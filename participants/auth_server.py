@@ -16,17 +16,7 @@ from core.httpsig import verify_signature, parse_signature_key
 from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk, generate_jwks, jwk_to_public_key
 from core.metadata import generate_auth_metadata, fetch_resource_metadata
 from core.tokens import verify_token, create_auth_token, calculate_jwk_thumbprint
-
-
-def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
-    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
-    value = os.environ.get(env_var, "1")
-    return value.lower() not in ("0", "false", "no", "off", "")
-
-
-def _is_http_debug_enabled() -> bool:
-    """Check if HTTP debug is enabled (defaults to True unless explicitly disabled)."""
-    return _is_debug_enabled("AAUTH_DEBUG_HTTP")
+from core import _is_debug_enabled, _is_http_debug_enabled
 
 
 class AuthServer:
@@ -241,22 +231,43 @@ class AuthServer:
         if debug:
             print(f"DEBUG AUTH:   Agent ID: {agent_id}", file=sys.stderr, flush=True)
         
+        # Extract well-known parameter (optional, defaults to "aauth-agent" for AAuth agents)
+        well_known = key_params.get("well-known", "aauth-agent") if scheme == "jwks" else None
+        
         # Verify signature
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
             """Fetch JWKS for agent and return the matching key.
             
             Returns a single JWK matching the kid, not the full JWKS document.
+            Uses well-known parameter from signature if present, otherwise fetches {id} directly as JWKS.
             """
             if debug:
-                print(f"DEBUG AUTH:   Fetching JWKS for agent: {agent_id_param}, kid={kid_param}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Fetching JWKS for agent: {agent_id_param}, kid={kid_param}, well-known={well_known}", file=sys.stderr, flush=True)
             try:
-                from core.metadata import fetch_metadata
-                metadata_url = f"{agent_id_param}/.well-known/aauth-agent"
-                metadata = fetch_metadata(metadata_url)
-                jwks_uri = metadata.get("jwks_uri")
-                if debug:
-                    print(f"DEBUG AUTH:   JWKS URI: {jwks_uri}", file=sys.stderr, flush=True)
                 import httpx
+                jwks_uri = None
+                
+                if well_known:
+                    # Fetch metadata from {id}/.well-known/{well-known}
+                    from core.metadata import fetch_metadata
+                    metadata_url = f"{agent_id_param}/.well-known/{well_known}"
+                    if debug:
+                        print(f"DEBUG AUTH:   Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
+                    metadata = fetch_metadata(metadata_url)
+                    jwks_uri = metadata.get("jwks_uri")
+                    if debug:
+                        print(f"DEBUG AUTH:   JWKS URI from metadata: {jwks_uri}", file=sys.stderr, flush=True)
+                else:
+                    # Fetch {id} directly as JWKS
+                    jwks_uri = agent_id_param
+                    if debug:
+                        print(f"DEBUG AUTH:   well-known absent, fetching {agent_id_param} directly as JWKS", file=sys.stderr, flush=True)
+                
+                if not jwks_uri:
+                    if debug:
+                        print(f"DEBUG AUTH:   No jwks_uri found", file=sys.stderr, flush=True)
+                    return None
+                
                 response = httpx.get(jwks_uri, timeout=10.0)
                 response.raise_for_status()
                 jwks_doc = response.json()
@@ -345,18 +356,26 @@ class AuthServer:
             
             if kid:
                 # jwks_fetcher returns a single JWK, but we need the full JWKS document
-                # So we'll fetch it directly
+                # So we'll fetch it directly using the same well-known logic
                 try:
-                    from core.metadata import fetch_metadata
-                    metadata_url = f"{agent_id}/.well-known/aauth-agent"
-                    if debug:
-                        print(f"DEBUG AUTH:   Fetching agent metadata from {metadata_url} for agent_jkt verification", file=sys.stderr, flush=True)
-                    metadata = fetch_metadata(metadata_url)
-                    jwks_uri = metadata.get("jwks_uri")
+                    import httpx
+                    jwks_uri = None
+                    
+                    if well_known:
+                        from core.metadata import fetch_metadata
+                        metadata_url = f"{agent_id}/.well-known/{well_known}"
+                        if debug:
+                            print(f"DEBUG AUTH:   Fetching agent metadata from {metadata_url} for agent_jkt verification", file=sys.stderr, flush=True)
+                        metadata = fetch_metadata(metadata_url)
+                        jwks_uri = metadata.get("jwks_uri")
+                    else:
+                        jwks_uri = agent_id
+                        if debug:
+                            print(f"DEBUG AUTH:   well-known absent, fetching {agent_id} directly as JWKS for agent_jkt verification", file=sys.stderr, flush=True)
+                    
                     if jwks_uri:
                         if debug:
                             print(f"DEBUG AUTH:   Fetching agent JWKS from {jwks_uri} for agent_jkt verification", file=sys.stderr, flush=True)
-                        import httpx
                         response = httpx.get(jwks_uri, timeout=10.0)
                         response.raise_for_status()
                         agent_jwks_doc = response.json()
@@ -936,15 +955,30 @@ class AuthServer:
         method = request.method
         target_uri = str(request.url)
         
+        # Extract well-known parameter from signature (if present)
+        well_known = key_params.get("well-known", "aauth-agent") if scheme == "jwks" else None
+        
         # Create JWKS fetcher for verify_signature
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
-            """Fetch JWKS for agent and return the matching key."""
+            """Fetch JWKS for agent and return the matching key.
+            
+            Uses well-known parameter from signature if present, otherwise fetches {id} directly as JWKS.
+            """
             try:
-                from core.metadata import fetch_metadata
-                metadata_url = f"{agent_id_param}/.well-known/aauth-agent"
-                metadata = fetch_metadata(metadata_url)
-                jwks_uri = metadata.get("jwks_uri")
                 import httpx
+                jwks_uri = None
+                
+                if well_known:
+                    from core.metadata import fetch_metadata
+                    metadata_url = f"{agent_id_param}/.well-known/{well_known}"
+                    metadata = fetch_metadata(metadata_url)
+                    jwks_uri = metadata.get("jwks_uri")
+                else:
+                    jwks_uri = agent_id_param
+                
+                if not jwks_uri:
+                    return None
+                
                 response = httpx.get(jwks_uri, timeout=10.0)
                 response.raise_for_status()
                 jwks_doc = response.json()

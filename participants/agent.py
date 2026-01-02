@@ -13,19 +13,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk, generate_jwks
 from core.httpsig import sign_request
 from core.metadata import generate_agent_metadata, fetch_auth_metadata
+from core import _is_debug_enabled, _is_http_debug_enabled
 import json
 import re
-
-
-def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
-    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
-    value = os.environ.get(env_var, "1")
-    return value.lower() not in ("0", "false", "no", "off", "")
-
-
-def _is_http_debug_enabled() -> bool:
-    """Check if HTTP debug is enabled (defaults to True unless explicitly disabled)."""
-    return _is_debug_enabled("AAUTH_DEBUG_HTTP")
 
 
 class Agent:
@@ -140,6 +130,9 @@ class Agent:
         if sig_scheme == "jwks":
             kwargs["id"] = self.agent_id
             kwargs["kid"] = self.kid
+            # Default to "aauth-agent" for AAuth agent pattern (backward compatible)
+            # Can be set to None to use direct JWKS pattern (fetch {id} as JWKS)
+            kwargs["well-known"] = "aauth-agent"
         elif sig_scheme == "jwt":
             if not jwt:
                 raise ValueError("sig=jwt requires 'jwt' parameter")

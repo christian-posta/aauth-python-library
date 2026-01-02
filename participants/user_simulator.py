@@ -9,11 +9,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
-    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
-    value = os.environ.get(env_var, "1")
-    return value.lower() not in ("0", "false", "no", "off", "")
+from core import _is_debug_enabled
 
 
 class UserSimulator:

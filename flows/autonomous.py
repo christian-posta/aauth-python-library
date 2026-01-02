@@ -8,13 +8,7 @@ import httpx
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
-
-
-def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
-    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
-    import os
-    value = os.environ.get(env_var, "1")
-    return value.lower() not in ("0", "false", "no", "off", "")
+from core import _is_debug_enabled
 
 
 async def run_autonomous_flow(

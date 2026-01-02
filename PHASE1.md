@@ -1,51 +1,12 @@
 # Phase 1 Implementation: Pseudonymous Flow
 
+![Phase 1 Demo Screenshot](images/demo1.png)
+
+
 ## Status: ✅ Complete
 
 Phase 1 implements basic proof-of-possession without identity using `sig=hwk` scheme.
 
-## What Was Implemented
-
-### Core Components
-
-1. **`core/crypto_utils.py`**
-   - Ed25519 key pair generation
-   - JWK conversion (private/public key ↔ JWK format)
-   - JWKS document generation
-   - Key utilities for Phase 2+ preparation
-
-2. **`core/httpsig.py`**
-   - HTTP Message Signing (RFC 9421) implementation
-   - Signature generation with `sig=hwk` scheme (using label `sig1`)
-   - Signature verification with label consistency checking
-   - Signature-Key header parsing (supports any label: sig, sig1, etc.)
-   - Support for `@method`, `@authority`, `@path`, `@query`, `content-type`, `content-digest`, and `signature-key` components
-   - RFC 9530 Content-Digest support
-   - Timestamp validation (60-second tolerance)
-
-### Participants
-
-3. **`participants/agent.py`**
-   - Agent that signs requests with `sig=hwk`
-   - FastAPI server (for future metadata endpoints)
-   - `request_resource()` method for making signed requests
-
-4. **`participants/resource.py`**
-   - Resource server that validates signatures
-   - Protected `/data` endpoint (GET and POST)
-   - Signature verification logic
-   - Returns 401 for unsigned/invalid requests
-
-### Testing
-
-5. **`tests/test_phase1.py`**
-   - Test for successful signed request
-   - Test for rejected unsigned request
-   - Test for POST request with body
-
-6. **`demo_phase1.py`**
-   - Interactive demo script
-   - Shows all Phase 1 functionality
 
 ## How It Works
 
@@ -126,24 +87,7 @@ This gives you curl-like visibility into the HTTP traffic between agent and reso
 - ✅ Label consistency checking (Signature-Input, Signature, Signature-Key must use same label)
 - ✅ Timestamp validation (60-second tolerance)
 
-## Issues Fixed During Implementation
 
-1. **Label Consistency**: Fixed bug where Signature-Key used label `sig` while Signature-Input and Signature used `sig1`. All headers now use consistent label (`sig1`).
-2. **Signature-Key Parsing**: Updated `parse_signature_key()` to accept any label (not just `sig`).
-3. **Signature Base Construction**: Fixed indentation bug that was breaking signature base construction.
-4. **Agent-Auth Header**: Changed from `WWW-Authenticate: AAuth` to `Agent-Auth: httpsig` per spec.
-
-## What's Next: Phase 2
-
-Phase 2 adds **Agent Identity via JWKS**:
-- Agent metadata endpoint (`/.well-known/aauth-agent`)
-- JWKS discovery (Mode 2: identifier + metadata)
-- `sig=jwks` signature scheme
-- Separate endpoints (`/data-hwk`, `/data-jwks`) for clear demonstration
-
-**Status**: ✅ Complete - See `PHASE2.md` for details.
-
-Note: Phase 2 maintains full backward compatibility. The `/data` endpoint still works with `sig=hwk`, and new endpoints (`/data-hwk`, `/data-jwks`) allow side-by-side comparison of both schemes.
 
 ## Notes
 
@@ -152,3 +96,45 @@ Note: Phase 2 maintains full backward compatibility. The `/data` endpoint still 
 - No tokens yet (that comes in Phase 3)
 - Simple in-memory implementation (no persistence)
 
+## What Was Implemented
+
+### Core Components
+
+1. **`core/crypto_utils.py`**
+   - Ed25519 key pair generation
+   - JWK conversion (private/public key ↔ JWK format)
+   - JWKS document generation
+   - Key utilities for Phase 2+ preparation
+
+2. **`core/httpsig.py`**
+   - HTTP Message Signing (RFC 9421) implementation
+   - Signature generation with `sig=hwk` scheme (using label `sig1`)
+   - Signature verification with label consistency checking
+   - Signature-Key header parsing (supports any label: sig, sig1, etc.)
+   - Support for `@method`, `@authority`, `@path`, `@query`, `content-type`, `content-digest`, and `signature-key` components
+   - RFC 9530 Content-Digest support
+   - Timestamp validation (60-second tolerance)
+
+### Participants
+
+3. **`participants/agent.py`**
+   - Agent that signs requests with `sig=hwk`
+   - FastAPI server (for future metadata endpoints)
+   - `request_resource()` method for making signed requests
+
+4. **`participants/resource.py`**
+   - Resource server that validates signatures
+   - Protected `/data` endpoint (GET and POST)
+   - Signature verification logic
+   - Returns 401 for unsigned/invalid requests
+
+### Testing
+
+5. **`tests/test_phase1.py`**
+   - Test for successful signed request
+   - Test for rejected unsigned request
+   - Test for POST request with body
+
+6. **`demo_phase1.py`**
+   - Interactive demo script
+   - Shows all Phase 1 functionality

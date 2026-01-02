@@ -75,8 +75,23 @@ todos:
     status: pending
     dependencies:
       - phase4-flow
-  - id: integration
-    content: Create main.py orchestrator to run all participants together and verify full flows
+  - id: flow-agent-is-resource
+    content: Implement 3.5 Agent is Resource flow - agent authenticates users to itself (SSO pattern) with scope-based auth requests
+    status: pending
+    dependencies:
+      - phase4-tests
+  - id: flow-auth-refresh
+    content: Implement 3.7 Auth Refresh flow - refresh expired auth tokens using refresh tokens with request_type=refresh
+    status: pending
+    dependencies:
+      - phase4-tests
+  - id: flow-user-interaction
+    content: Implement 3.8 User Interaction Request flow - resource-initiated user interaction with user_interaction URL parameter
+    status: pending
+    dependencies:
+      - phase4-tests
+  - id: flow-token-exchange
+    content: Implement 3.9 Token Exchange flow - multi-hop resource access with request_type=exchange and act claim delegation chain
     status: pending
     dependencies:
       - phase4-tests
@@ -172,6 +187,33 @@ aauth/
 - `participants/auth_server.py`: Add request_token and code exchange
 - `participants/user_simulator.py`: Browser redirect simulation
 - `flows/user_delegated.py`: User delegation flow orchestrator
+
+### Additional Flows (Post-Phase 4)
+
+These flows extend the core protocol with additional capabilities:
+
+**3.5 Agent is Resource (SSO Pattern)**:
+- Agent requests authorization to itself (agent identifier matches resource identifier)
+- Uses `scope` or `auth_request_url` directly (no `resource_token`)
+- Auth token used for both user identity (SSO) and API access by delegates
+- Solves OIDC limitation where ID tokens and access tokens are separate
+
+**3.7 Auth Refresh**:
+- Refresh expired auth tokens using `request_type=refresh`
+- Refresh tokens bound to agent identity
+- No token rotation needed (proof-of-possession provides security)
+
+**3.8 User Interaction Request**:
+- Resource-initiated user interaction when resource cannot interact directly
+- Resource returns `user_interaction` URL in Agent-Auth header
+- Agent redirects user, resource handles auth flow, redirects back
+- Enables AAuth resources to consume OAuth/OIDC protected APIs
+
+**3.9 Token Exchange**:
+- Multi-hop resource access with `request_type=exchange`
+- Resource acts as agent, presents upstream auth token to downstream auth server
+- Downstream auth server validates upstream token and issues new token
+- Token includes `act` claim showing delegation chain
 
 ## Core Components
 

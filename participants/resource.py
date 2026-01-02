@@ -13,21 +13,11 @@ from core.httpsig import verify_signature, parse_signature_key, parse_signature_
 from core.crypto_utils import jwk_to_public_key, generate_ed25519_keypair, public_key_to_jwk, generate_jwks
 from core.metadata import fetch_metadata, generate_resource_metadata
 from core.tokens import create_resource_token, verify_token, calculate_jwk_thumbprint
+from core import _is_debug_enabled, _is_http_debug_enabled
 import httpx
 from typing import Optional
 import time
 import json
-
-
-def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
-    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
-    value = os.environ.get(env_var, "1")
-    return value.lower() not in ("0", "false", "no", "off", "")
-
-
-def _is_http_debug_enabled() -> bool:
-    """Check if HTTP debug is enabled (defaults to True unless explicitly disabled)."""
-    return _is_debug_enabled("AAUTH_DEBUG_HTTP")
 
 
 class Resource:
@@ -352,14 +342,27 @@ class Resource:
             return response
         
         elif scheme == "jwks":
-            # Extract agent_id and kid from Signature-Key
+            # Extract agent_id, kid, and optional well-known from Signature-Key
             agent_id = params.get("id")
             kid = params.get("kid")
+            well_known = params.get("well-known")
+            jwks_param = params.get("jwks")
+            
+            # Per spec Section 10.7 Mode 2: jwks parameter MUST NOT be present
+            if jwks_param:
+                response = Response(
+                    status_code=401,
+                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    content="Invalid Signature-Key: jwks parameter must not be present for sig=jwks"
+                )
+                if _is_http_debug_enabled():
+                    self._print_response_debug(response)
+                return response
             
             if not agent_id or not kid:
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig"},
+                    headers={"Agent-Auth": "httpsig; identity=?1"},
                     content="Missing id or kid in Signature-Key for sig=jwks"
                 )
                 if _is_http_debug_enabled():
@@ -367,11 +370,11 @@ class Resource:
                 return response
             
             if _is_debug_enabled():
-                print(f"DEBUG RESOURCE: sig=jwks - agent_id={agent_id}, kid={kid}", file=sys.stderr, flush=True)
+                print(f"DEBUG RESOURCE: sig=jwks - agent_id={agent_id}, kid={kid}, well-known={well_known}", file=sys.stderr, flush=True)
             
             # Create jwks_fetcher callback
             def jwks_fetcher(agent_id_param: str, kid_param: str):
-                return self._fetch_jwks_for_agent(agent_id_param, kid_param)
+                return self._fetch_jwks_for_agent(agent_id_param, kid_param, well_known)
             
             # Verify signature
             is_valid = verify_signature(
@@ -492,7 +495,8 @@ class Resource:
             if agent_id:
                 # Fetch agent's JWKS to calculate thumbprint
                 kid = params.get("kid")
-                agent_jwk = self._fetch_jwks_for_agent(agent_id, kid)
+                well_known = params.get("well-known")
+                agent_jwk = self._fetch_jwks_for_agent(agent_id, kid, well_known)
                 if agent_jwk:
                     agent_jkt = calculate_jwk_thumbprint(agent_jwk)
         elif scheme == "hwk":
@@ -707,44 +711,62 @@ class Resource:
         
         return True, claims
     
-    def _fetch_jwks_for_agent(self, agent_id: str, kid: str) -> Optional[Dict[str, Any]]:
+    def _fetch_jwks_for_agent(self, agent_id: str, kid: str, well_known: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Fetch JWKS for an agent using Mode 2 discovery (spec Section 10.7).
         
         Args:
             agent_id: Agent identifier (HTTPS URL)
             kid: Key identifier
+            well_known: Optional well-known document name (e.g., "aauth-agent")
             
         Returns:
             JWK dictionary if found, None otherwise
+            
+        Discovery procedure per spec Section 10.7 Mode 2:
+        1. If well-known is present:
+           - Fetch metadata from {id}/.well-known/{well-known} via HTTPS
+           - Extract jwks_uri from metadata
+           - Fetch JWKS from jwks_uri
+        2. If well-known is absent:
+           - Fetch {id} directly as JWKS via HTTPS
+        3. Match key by kid
         """
         import os
         import sys
         
         if _is_debug_enabled():
-            print(f"DEBUG RESOURCE: Fetching JWKS for agent_id={agent_id}, kid={kid}", file=sys.stderr, flush=True)
+            print(f"DEBUG RESOURCE: Fetching JWKS for agent_id={agent_id}, kid={kid}, well-known={well_known}", file=sys.stderr, flush=True)
         
         try:
-            # Step 1: Fetch metadata from agent
-            metadata_url = f"{agent_id}/.well-known/aauth-agent"
-            if _is_debug_enabled():
-                print(f"DEBUG RESOURCE: Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
+            jwks_uri = None
             
-            metadata = fetch_metadata(metadata_url)
-            
-            if _is_debug_enabled():
-                print(f"DEBUG RESOURCE: Metadata received: {metadata}", file=sys.stderr, flush=True)
-            
-            # Step 2: Extract jwks_uri from metadata
-            jwks_uri = metadata.get("jwks_uri")
-            if not jwks_uri:
+            if well_known:
+                # Step 1: Fetch metadata from agent using well-known parameter
+                metadata_url = f"{agent_id}/.well-known/{well_known}"
                 if _is_debug_enabled():
-                    print(f"DEBUG RESOURCE: No jwks_uri in metadata", file=sys.stderr, flush=True)
-                return None
+                    print(f"DEBUG RESOURCE: Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
+                
+                metadata = fetch_metadata(metadata_url)
+                
+                if _is_debug_enabled():
+                    print(f"DEBUG RESOURCE: Metadata received: {metadata}", file=sys.stderr, flush=True)
+                
+                # Step 2: Extract jwks_uri from metadata
+                jwks_uri = metadata.get("jwks_uri")
+                if not jwks_uri:
+                    if _is_debug_enabled():
+                        print(f"DEBUG RESOURCE: No jwks_uri in metadata", file=sys.stderr, flush=True)
+                    return None
+            else:
+                # Step 1: Fetch {id} directly as JWKS (well-known absent)
+                jwks_uri = agent_id
+                if _is_debug_enabled():
+                    print(f"DEBUG RESOURCE: well-known absent, fetching {agent_id} directly as JWKS", file=sys.stderr, flush=True)
             
+            # Step 2/3: Fetch JWKS from jwks_uri
             if _is_debug_enabled():
                 print(f"DEBUG RESOURCE: Fetching JWKS from {jwks_uri}", file=sys.stderr, flush=True)
             
-            # Step 3: Fetch JWKS
             jwks_response = httpx.get(jwks_uri, timeout=10.0)
             jwks_response.raise_for_status()
             jwks_doc = jwks_response.json()
@@ -752,7 +774,7 @@ class Resource:
             if _is_debug_enabled():
                 print(f"DEBUG RESOURCE: JWKS received: {jwks_doc}", file=sys.stderr, flush=True)
             
-            # Step 4: Find key by kid
+            # Step 3/4: Find key by kid
             keys = jwks_doc.get("keys", [])
             for key in keys:
                 if key.get("kid") == kid:
@@ -878,8 +900,9 @@ class Resource:
         
         # Verify signature
         target_uri = str(request.url)
+        well_known = key_params.get("well-known")
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
-            return self._fetch_jwks_for_agent(agent_id_param, kid_param)
+            return self._fetch_jwks_for_agent(agent_id_param, kid_param, well_known)
         
         is_valid = verify_signature(
             method=request.method,
@@ -901,7 +924,8 @@ class Resource:
         
         # Get agent's key for agent_jkt calculation
         kid = key_params.get("kid")
-        agent_jwk = self._fetch_jwks_for_agent(agent_id, kid)
+        well_known = key_params.get("well-known")
+        agent_jwk = self._fetch_jwks_for_agent(agent_id, kid, well_known)
         if not agent_jwk:
             return JSONResponse(
                 status_code=500,

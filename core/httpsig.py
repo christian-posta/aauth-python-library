@@ -7,6 +7,7 @@ import hashlib
 import time
 import re
 import jwt
+from . import _is_debug_enabled
 
 # Try to import http-message-signatures library, fall back to manual implementation
 try:
@@ -16,13 +17,6 @@ try:
     HAS_LIBRARY = True
 except ImportError:
     HAS_LIBRARY = False
-
-
-def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
-    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
-    import os
-    value = os.environ.get(env_var, "1")
-    return value.lower() not in ("0", "false", "no", "off", "")
 
 
 def sign_request(
@@ -200,9 +194,13 @@ def build_signature_key_header(
     elif sig_scheme == "jwks":
         agent_id = kwargs.get("id")
         kid = kwargs.get("kid", "key-1")
+        well_known = kwargs.get("well-known")
         if not agent_id:
             raise ValueError("sig=jwks requires 'id' parameter")
-        return f'{label}=(scheme=jwks id="{agent_id}" kid="{kid}")'
+        header_parts = [f'scheme=jwks', f'id="{agent_id}"', f'kid="{kid}"']
+        if well_known:
+            header_parts.append(f'well-known="{well_known}"')
+        return f'{label}=({" ".join(header_parts)})'
     elif sig_scheme == "jwt":
         jwt = kwargs.get("jwt")
         if not jwt:
@@ -227,7 +225,8 @@ def parse_signature_key(header_value: str) -> Dict[str, Any]:
     params = {}
     scheme = None
     
-    param_pattern = r'(\w+)=(?:"([^"]*)"|([^\s)]+))'
+    # Allow hyphens in parameter names (e.g., "well-known")
+    param_pattern = r'([\w-]+)=(?:"([^"]*)"|([^\s)]+))'
     for match in re.finditer(param_pattern, inner_content):
         key = match.group(1)
         value = match.group(2) or match.group(3)
@@ -370,9 +369,17 @@ def verify_signature(
             raise ValueError("sig=jwks requires jwks_fetcher")
         agent_id = params.get("id")
         kid = params.get("kid")
+        well_known = params.get("well-known")
+        jwks_param = params.get("jwks")
+        
+        # Per spec Section 10.7 Mode 2: jwks parameter MUST NOT be present
+        if jwks_param:
+            if debug:
+                print(f"DEBUG VERIFY: sig=jwks - REJECTED: jwks parameter must not be present", file=sys.stderr, flush=True)
+            return False
         
         if debug:
-            print(f"DEBUG VERIFY: sig=jwks - agent_id={agent_id}, kid={kid}", file=sys.stderr, flush=True)
+            print(f"DEBUG VERIFY: sig=jwks - agent_id={agent_id}, kid={kid}, well-known={well_known}", file=sys.stderr, flush=True)
         
         jwks = jwks_fetcher(agent_id, kid)
         if not jwks:

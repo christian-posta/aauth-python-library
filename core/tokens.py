@@ -8,13 +8,7 @@ from typing import Dict, Any, Optional, Callable
 import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .crypto_utils import public_key_to_jwk, jwk_to_public_key
-
-
-def _is_debug_enabled(env_var: str = "AAUTH_DEBUG") -> bool:
-    """Check if debug is enabled (defaults to True unless explicitly disabled)."""
-    import os
-    value = os.environ.get(env_var, "1")
-    return value.lower() not in ("0", "false", "no", "off", "")
+from . import _is_debug_enabled
 
 
 def calculate_jwk_thumbprint(jwk: Dict[str, Any]) -> str:

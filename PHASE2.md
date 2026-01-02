@@ -4,34 +4,6 @@
 
 Phase 2 adds agent identity verification using JWKS discovery while maintaining full backward compatibility with Phase 1's `sig=hwk` scheme. The resource exposes **separate endpoints for each signature scheme** (`/data-hwk`, `/data-jwks`) to enable clear demonstration of both capabilities simultaneously.
 
-## What Was Implemented
-
-### Core Components
-
-1. **Metadata Module** (`core/metadata.py`)
-   - `generate_agent_metadata()` - Generates agent metadata JSON per AAuth spec Section 8.1
-   - `fetch_metadata()` - Fetches metadata documents via HTTPS
-
-2. **Agent Updates** (`participants/agent.py`)
-   - Added `/.well-known/aauth-agent` metadata endpoint
-   - Updated `/jwks.json` endpoint to include `kid` in keys
-   - Made signing scheme configurable (`sig_scheme` parameter)
-   - Added `sig_scheme` parameter to `sign_request()` and `request_resource()` methods
-   - Defaults to `sig=hwk` for backward compatibility
-
-3. **Resource Updates** (`participants/resource.py`)
-   - Added separate endpoints:
-     - `/data-hwk` - Requires `sig=hwk` scheme (Phase 1)
-     - `/data-jwks` - Requires `sig=jwks` scheme (Phase 2)
-   - Kept `/data` endpoint for backward compatibility (defaults to `sig=hwk`)
-   - Added scheme validation (rejects wrong scheme for endpoint)
-   - Implemented `_fetch_jwks_for_agent()` using Mode 2 discovery (spec Section 10.7)
-   - Added JWKS fetching with debug support
-
-4. **HTTPSig Updates** (`core/httpsig.py`)
-   - Updated `_verify_signature_manual()` to handle both `sig=hwk` and `sig=jwks`
-   - Added debug output for JWKS fetching steps
-   - Enhanced `verify_signature()` to support `jwks_fetcher` callback
 
 ## How It Works
 
@@ -421,3 +393,31 @@ Phase 3 will add **Autonomous Authorization** using tokens:
 
 See `PLAN.md` for the full implementation plan.
 
+## What Was Implemented
+
+### Core Components
+
+1. **Metadata Module** (`core/metadata.py`)
+   - `generate_agent_metadata()` - Generates agent metadata JSON per AAuth spec Section 8.1
+   - `fetch_metadata()` - Fetches metadata documents via HTTPS
+
+2. **Agent Updates** (`participants/agent.py`)
+   - Added `/.well-known/aauth-agent` metadata endpoint
+   - Updated `/jwks.json` endpoint to include `kid` in keys
+   - Made signing scheme configurable (`sig_scheme` parameter)
+   - Added `sig_scheme` parameter to `sign_request()` and `request_resource()` methods
+   - Defaults to `sig=hwk` for backward compatibility
+
+3. **Resource Updates** (`participants/resource.py`)
+   - Added separate endpoints:
+     - `/data-hwk` - Requires `sig=hwk` scheme (Phase 1)
+     - `/data-jwks` - Requires `sig=jwks` scheme (Phase 2)
+   - Kept `/data` endpoint for backward compatibility (defaults to `sig=hwk`)
+   - Added scheme validation (rejects wrong scheme for endpoint)
+   - Implemented `_fetch_jwks_for_agent()` using Mode 2 discovery (spec Section 10.7)
+   - Added JWKS fetching with debug support
+
+4. **HTTPSig Updates** (`core/httpsig.py`)
+   - Updated `_verify_signature_manual()` to handle both `sig=hwk` and `sig=jwks`
+   - Added debug output for JWKS fetching steps
+   - Enhanced `verify_signature()` to support `jwks_fetcher` callback
