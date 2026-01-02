@@ -12,7 +12,125 @@ This project implements the AAuth protocol incrementally, phase by phase:
 
 ## Quick Start
 
-See [INSTRUCTIONS.md](INSTRUCTIONS.md) for setup and usage instructions.
+### Setup
+
+1. Install dependencies:
+```bash
+# (Recommended) Use virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+
+pip install -r requirements.txt
+
+```
+
+### Running Demos
+
+#### Phase 1: Pseudonymous Flow
+
+Demonstrates basic proof-of-possession without identity using `sig=hwk` scheme:
+
+```bash
+python demo_phase1.py
+```
+
+#### Phase 2: Agent Identity via JWKS
+
+Demonstrates agent identity verification using `sig=jwks` scheme:
+
+```bash
+python demo_phase2.py
+```
+
+#### Phase 3: Autonomous Authorization
+
+Demonstrates complete token flow without user interaction:
+
+```bash
+python demo_phase3.py
+```
+
+#### Phase 4: User Delegation
+
+Demonstrates OAuth-like authorization code flow with user consent:
+
+**Automated mode** (uses user simulator):
+```bash
+python demo_phase4.py
+```
+
+**Manual mode** (browser-based testing):
+```bash
+python demo_phase4.py --manual
+```
+
+## Testing
+
+Run all tests:
+```bash
+pytest tests/ -v
+```
+
+Run tests for a specific phase:
+```bash
+pytest tests/test_phase1.py -v
+pytest tests/test_phase2.py -v
+pytest tests/test_phase3.py -v
+pytest tests/test_phase4.py -v
+```
+
+## Phase Overview
+
+### Phase 1: Pseudonymous Flow
+- Agent signs requests with `sig=hwk` (public key in header)
+- Resource validates signatures
+- No tokens, no identity - just signature verification
+
+See [PHASE1.md](PHASE1.md) for detailed documentation.
+
+### Phase 2: Agent Identity via JWKS
+- Agent publishes metadata at `/.well-known/aauth-agent`
+- Agent publishes JWKS at `/jwks.json`
+- Resource can verify agent identity using `sig=jwks` scheme
+- Separate endpoints (`/data-hwk`, `/data-jwks`) for both schemes
+
+See [PHASE2.md](PHASE2.md) for detailed documentation.
+
+### Phase 3: Autonomous Authorization
+- Resources issue resource tokens when agents request access
+- Agents present resource tokens to auth servers
+- Auth servers validate resource tokens and issue auth tokens
+- Agents use auth tokens to access protected resources
+- Complete token flow without user interaction
+
+See [PHASE3.md](PHASE3.md) for detailed documentation.
+
+### Phase 4: User Delegation
+- Auth servers issue `request_token` when user consent is required
+- Agents redirect users to auth server's authorization endpoint
+- Users authenticate and grant consent
+- Auth server redirects back with authorization code
+- Agents exchange code for auth tokens with `sub` claim
+
+See [PHASE4.md](PHASE4.md) for detailed documentation.
+
+## Running Individual Participants
+
+### Run Resource Server:
+```bash
+python -m participants.resource
+```
+
+### Run Agent:
+```bash
+python -m participants.agent
+```
+
+### Run Auth Server:
+```bash
+python -m participants.auth_server
+```
 
 ## Project Structure
 
@@ -26,16 +144,11 @@ aauth/
 
 ## Documentation
 
-- [INSTRUCTIONS.md](INSTRUCTIONS.md) - Setup and usage instructions
 - [PHASE1.md](PHASE1.md) - Phase 1 implementation details
 - [PHASE2.md](PHASE2.md) - Phase 2 implementation details
 - [PHASE3.md](PHASE3.md) - Phase 3 implementation details
+- [PHASE4.md](PHASE4.md) - Phase 4 implementation details
+- [SPEC.md](SPEC.md) - AAuth protocol specification
 - [PLAN.md](PLAN.md) - Overall implementation plan
 
 
-## Implementation Status
-
-- [x] Phase 1: Pseudonymous flow (sig=hwk) - Complete
-- [x] Phase 2: Agent identity (sig=jwks) - Complete
-- [x] Phase 3: Autonomous authorization (tokens) - Complete
-- [ ] Phase 4: User delegation (OAuth-like flow) - Planned
