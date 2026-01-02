@@ -39,6 +39,7 @@ class Agent:
         # Phase 3: Token storage
         self.auth_token = None
         self.refresh_token = None
+        self.resource_token = None  # Store resource token for debug output
         
         # Phase 4: Manual mode - store pending request_token for user interaction
         self.pending_request_token = None
@@ -271,6 +272,9 @@ class Agent:
                     auth_server = challenge_info.get("auth_server")
                     
                     if resource_token and auth_server:
+                        # Store resource token for debug output
+                        self.resource_token = resource_token
+                        
                         if debug:
                             print(f"DEBUG AGENT: Extracted resource_token and auth_server", file=sys.stderr, flush=True)
                             print(f"DEBUG AGENT:   Resource token: {resource_token[:100]}...", file=sys.stderr, flush=True)

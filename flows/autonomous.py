@@ -2,7 +2,6 @@
 
 import asyncio
 import sys
-import re
 import json
 from typing import Optional
 import httpx
@@ -74,25 +73,22 @@ async def run_autonomous_flow(
             return response
     
     # Extract and decode resource token (if JWT token debug is enabled)
+    # Note: The agent stores the resource_token when it receives the 401 challenge,
+    # so we can access it from agent.resource_token even if the response is already 200 (after retry)
     jwt_token_debug = _is_jwt_token_debug_enabled()
-    if jwt_token_debug and response.status_code == 401:
-        agent_auth_header = response.headers.get("agent-auth", "")
-        if agent_auth_header and "resource_token" in agent_auth_header:
-            resource_token_match = re.search(r'resource_token="([^"]+)"', agent_auth_header)
-            if resource_token_match:
-                resource_token = resource_token_match.group(1)
-                print("\n" + "=" * 80, file=sys.stderr, flush=True)
-                print("RESOURCE TOKEN (decoded)", file=sys.stderr, flush=True)
-                print("=" * 80, file=sys.stderr, flush=True)
-                try:
-                    claims = parse_token_claims(resource_token)
-                    print(f"Header:", file=sys.stderr, flush=True)
-                    print(json.dumps(claims["header"], indent=2), file=sys.stderr, flush=True)
-                    print(f"\nPayload:", file=sys.stderr, flush=True)
-                    print(json.dumps(claims["payload"], indent=2), file=sys.stderr, flush=True)
-                    print("=" * 80 + "\n", file=sys.stderr, flush=True)
-                except Exception as e:
-                    print(f"Failed to decode resource token: {e}", file=sys.stderr, flush=True)
+    if jwt_token_debug and agent.resource_token:
+        print("\n" + "=" * 80, file=sys.stderr, flush=True)
+        print("RESOURCE TOKEN (decoded)", file=sys.stderr, flush=True)
+        print("=" * 80, file=sys.stderr, flush=True)
+        try:
+            claims = parse_token_claims(agent.resource_token)
+            print(f"Header:", file=sys.stderr, flush=True)
+            print(json.dumps(claims["header"], indent=2), file=sys.stderr, flush=True)
+            print(f"\nPayload:", file=sys.stderr, flush=True)
+            print(json.dumps(claims["payload"], indent=2), file=sys.stderr, flush=True)
+            print("=" * 80 + "\n", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"Failed to decode resource token: {e}", file=sys.stderr, flush=True)
     
     # Step 2-4: Agent should have automatically handled the challenge
     # (request_resource handles 401 responses and retries with auth token)
