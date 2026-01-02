@@ -2,7 +2,6 @@
 
 ![Phase 2 Demo Screenshot](images/demo2.png)
 
-## Status: Complete ✅
 
 Phase 2 adds agent identity verification using JWKS discovery while maintaining full backward compatibility with Phase 1's `sig=hwk` scheme. The resource exposes **separate endpoints for each signature scheme** (`/data-hwk`, `/data-jwks`) to enable clear demonstration of both capabilities simultaneously.
 

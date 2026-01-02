@@ -3,8 +3,6 @@
 ![Phase 1 Demo Screenshot](images/demo1.png)
 
 
-## Status: ✅ Complete
-
 Phase 1 implements basic proof-of-possession without identity using `sig=hwk` scheme.
 
 
