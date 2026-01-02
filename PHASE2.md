@@ -1,5 +1,7 @@
 # Phase 2: Agent Identity via JWKS
 
+![Phase 2 Demo Screenshot](images/demo2.png)
+
 ## Status: Complete ✅
 
 Phase 2 adds agent identity verification using JWKS discovery while maintaining full backward compatibility with Phase 1's `sig=hwk` scheme. The resource exposes **separate endpoints for each signature scheme** (`/data-hwk`, `/data-jwks`) to enable clear demonstration of both capabilities simultaneously.
@@ -139,10 +141,6 @@ asyncio.run(test())
 python -c "from participants.resource import Resource; Resource('https://resource.example.com', port=8002).run()"
 ```
 
-**Terminal 2 - Agent Server:**
-```bash
-python -c "from participants.agent import Agent; Agent('http://127.0.0.1:8001', port=8001).run()"
-```
 
 **Note:** If you create a new `Agent()` instance in Terminal 3, it will have a different key pair and `sig=jwks` will fail. Use the demo script (`python demo_phase2.py`) for `sig=jwks` testing, or use Option 1 above.
 
@@ -171,42 +169,7 @@ Status: 200
 Response: {'message': 'Access granted', 'data': 'This is protected data', 'scheme': 'hwk', 'method': 'GET'}
 ```
 
-#### 3. Test sig=jwks on /data-jwks
-
-**Important:** For `sig=jwks` to work, the agent instance used for signing MUST be the same one serving the JWKS endpoint. The key pair used for signing must match the public key published in JWKS.
-
-**Terminal 3 - Python REPL (using the SAME agent instance):**
-```python
-import asyncio
-from participants.agent import Agent
-
-# Create agent instance (same one that's running the server)
-agent = Agent("http://127.0.0.1:8001", port=8001)
-
-async def test():
-    # Use the SAME agent instance for requests
-    response = await agent.request_resource(
-        "http://127.0.0.1:8002/data-jwks",
-        sig_scheme="jwks"
-    )
-    print(f"Status: {response.status_code}")
-    if response.status_code == 200:
-        print(f"Response: {response.json()}")
-    else:
-        print(f"Error: {response.text}")
-
-asyncio.run(test())
-```
-
-**Note:** If you create a NEW `Agent()` instance, it will generate a different key pair, and verification will fail because the JWKS endpoint returns a different public key than the one used for signing.
-
-Expected output:
-```
-Status: 200
-Response: {'message': 'Access granted', 'data': 'This is protected data', 'scheme': 'jwks', 'method': 'GET', 'agent_id': 'http://127.0.0.1:8001'}
-```
-
-#### 4. Verify Metadata Endpoint
+#### 3. Verify Metadata Endpoint
 
 ```bash
 curl http://127.0.0.1:8001/.well-known/aauth-agent
@@ -220,7 +183,7 @@ Expected output:
 }
 ```
 
-#### 5. Verify JWKS Endpoint
+#### 4. Verify JWKS Endpoint
 
 ```bash
 curl http://127.0.0.1:8001/jwks.json
@@ -240,7 +203,7 @@ Expected output:
 }
 ```
 
-#### 6. Test Wrong Scheme Rejection
+#### 5. Test Wrong Scheme Rejection
 
 **Terminal 3 - Python REPL:**
 ```python
@@ -268,6 +231,10 @@ Response: Invalid signature scheme: expected jwks, got hwk
 
 ## Debug Mode
 
+Debug output is controlled via environment variables. Default values are configured in `core/__init__.py`:
+- `AAUTH_DEBUG`: Defaults to `"0"` (disabled)
+- `AAUTH_DEBUG_HTTP`: Defaults to `"1"` (enabled)
+
 ### AAUTH_DEBUG
 
 Enable detailed signature verification debug output:
@@ -275,6 +242,8 @@ Enable detailed signature verification debug output:
 ```bash
 AAUTH_DEBUG=1 python demo_phase2.py
 ```
+
+**Note:** By default, `AAUTH_DEBUG` is disabled (`"0"`). Set it to `"1"` to enable.
 
 This shows:
 - Signature base construction
@@ -286,11 +255,13 @@ This shows:
 
 ### AAUTH_DEBUG_HTTP
 
-Enable HTTP-level request/response logging (curl-like format):
+HTTP-level request/response logging (curl-like format):
 
 ```bash
 AAUTH_DEBUG_HTTP=1 python demo_phase2.py
 ```
+
+**Note:** By default, `AAUTH_DEBUG_HTTP` is enabled (`"1"`). Set it to `"0"` to disable.
 
 This shows:
 - Full HTTP request headers and bodies
@@ -306,73 +277,7 @@ Enable both debug modes:
 AAUTH_DEBUG=1 AAUTH_DEBUG_HTTP=1 python demo_phase2.py
 ```
 
-## Examples
-
-### Example 1: sig=hwk Request
-
-```python
-from participants.agent import Agent
-import asyncio
-
-async def example():
-    agent = Agent("http://127.0.0.1:8001", port=8001)
-    
-    response = await agent.request_resource(
-        "http://127.0.0.1:8002/data-hwk",
-        sig_scheme="hwk"
-    )
-    
-    print(response.json())
-    # {'message': 'Access granted', 'data': 'This is protected data', 'scheme': 'hwk', 'method': 'GET'}
-
-asyncio.run(example())
-```
-
-### Example 2: sig=jwks Request
-
-```python
-from participants.agent import Agent
-import asyncio
-
-async def example():
-    agent = Agent("http://127.0.0.1:8001", port=8001)
-    
-    response = await agent.request_resource(
-        "http://127.0.0.1:8002/data-jwks",
-        sig_scheme="jwks"
-    )
-    
-    print(response.json())
-    # {'message': 'Access granted', 'data': 'This is protected data', 'scheme': 'jwks', 'method': 'GET', 'agent_id': 'http://127.0.0.1:8001'}
-
-asyncio.run(example())
-```
-
-### Example 3: Both Schemes Side-by-Side
-
-```python
-from participants.agent import Agent
-import asyncio
-
-async def example():
-    agent = Agent("http://127.0.0.1:8001", port=8001)
-    
-    # Test both endpoints
-    response_hwk = await agent.request_resource(
-        "http://127.0.0.1:8002/data-hwk",
-        sig_scheme="hwk"
-    )
-    
-    response_jwks = await agent.request_resource(
-        "http://127.0.0.1:8002/data-jwks",
-        sig_scheme="jwks"
-    )
-    
-    print(f"sig=hwk: {response_hwk.json()['scheme']}")
-    print(f"sig=jwks: {response_jwks.json()['scheme']}")
-
-asyncio.run(example())
-```
+**Note:** Since `AAUTH_DEBUG_HTTP` is enabled by default, you only need to set `AAUTH_DEBUG=1` to enable both modes.
 
 ## Backward Compatibility
 
@@ -383,15 +288,7 @@ Phase 2 maintains full backward compatibility with Phase 1:
 - ✅ `sig=hwk` scheme unchanged
 - ✅ No breaking changes to API
 
-## What's Next: Phase 3
 
-Phase 3 will add **Autonomous Authorization** using tokens:
-- Agent Tokens (issued by Agent Server to Agent Delegates)
-- Resource Tokens (issued by Resource to Agent)
-- Auth Tokens (issued by Auth Server to Agent)
-- Token-based signature schemes (`sig=jwt`)
-
-See `PLAN.md` for the full implementation plan.
 
 ## What Was Implemented
 
