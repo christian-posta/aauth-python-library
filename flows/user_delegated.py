@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+import json
 from typing import Optional
 import httpx
 
@@ -9,7 +10,8 @@ from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
 from participants.user_simulator import UserSimulator
-from core import _is_debug_enabled
+from core import _is_debug_enabled, _is_jwt_token_debug_enabled
+from core.tokens import parse_token_claims
 
 
 async def run_user_delegated_flow(
@@ -74,6 +76,47 @@ async def run_user_delegated_flow(
             print(f"Step 1: Unexpected status code: {response.status_code}", file=sys.stderr, flush=True)
             return response
     
+    # Extract and decode resource token (if JWT token debug is enabled)
+    # Note: The agent stores the resource_token when it receives the 401 challenge,
+    # so we can access it from agent.resource_token even if the response is already 200 (after retry)
+    jwt_token_debug = _is_jwt_token_debug_enabled()
+    if jwt_token_debug and agent.resource_token:
+        print("\n" + "=" * 80, file=sys.stderr, flush=True)
+        print("RESOURCE TOKEN (decoded)", file=sys.stderr, flush=True)
+        print("=" * 80, file=sys.stderr, flush=True)
+        try:
+            claims = parse_token_claims(agent.resource_token)
+            print(f"Header:", file=sys.stderr, flush=True)
+            print(json.dumps(claims["header"], indent=2), file=sys.stderr, flush=True)
+            print(f"\nPayload:", file=sys.stderr, flush=True)
+            print(json.dumps(claims["payload"], indent=2), file=sys.stderr, flush=True)
+            print("=" * 80 + "\n", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"Failed to decode resource token: {e}", file=sys.stderr, flush=True)
+    
+    # Print request_token information (if JWT token debug is enabled)
+    # Note: request_token is opaque (not a JWT), but we can show its value and associated request details
+    if jwt_token_debug and agent.pending_request_token:
+        print("\n" + "=" * 80, file=sys.stderr, flush=True)
+        print("REQUEST TOKEN (opaque)", file=sys.stderr, flush=True)
+        print("=" * 80, file=sys.stderr, flush=True)
+        print(f"Token value: {agent.pending_request_token}", file=sys.stderr, flush=True)
+        print(f"\nNote: request_token is an opaque value (not a JWT) representing a pending authorization request.", file=sys.stderr, flush=True)
+        
+        # Try to get request details from auth server if available
+        if hasattr(auth_server, 'pending_requests') and agent.pending_request_token in auth_server.pending_requests:
+            request_details = auth_server.pending_requests[agent.pending_request_token]
+            print(f"\nAssociated request details:", file=sys.stderr, flush=True)
+            print(json.dumps({
+                "agent": request_details.get("agent"),
+                "resource": request_details.get("resource"),
+                "scope": request_details.get("scope"),
+                "redirect_uri": request_details.get("redirect_uri"),
+                "expires_at": request_details.get("expires_at")
+            }, indent=2), file=sys.stderr, flush=True)
+        
+        print("=" * 80 + "\n", file=sys.stderr, flush=True)
+    
     # Step 2-5: Agent should have automatically handled the challenge
     # (request_resource handles 401, gets request_token, uses user simulator, exchanges code)
     if debug:
@@ -82,6 +125,21 @@ async def run_user_delegated_flow(
             print(f"Agent now has auth token: {agent.auth_token[:100]}...", file=sys.stderr, flush=True)
         else:
             print("Agent does not have auth token - flow may have failed", file=sys.stderr, flush=True)
+    
+    # Decode and print auth token (if JWT token debug is enabled)
+    if jwt_token_debug and agent.auth_token:
+        print("\n" + "=" * 80, file=sys.stderr, flush=True)
+        print("AUTH TOKEN (decoded)", file=sys.stderr, flush=True)
+        print("=" * 80, file=sys.stderr, flush=True)
+        try:
+            claims = parse_token_claims(agent.auth_token)
+            print(f"Header:", file=sys.stderr, flush=True)
+            print(json.dumps(claims["header"], indent=2), file=sys.stderr, flush=True)
+            print(f"\nPayload:", file=sys.stderr, flush=True)
+            print(json.dumps(claims["payload"], indent=2), file=sys.stderr, flush=True)
+            print("=" * 80 + "\n", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"Failed to decode auth token: {e}", file=sys.stderr, flush=True)
     
     # The response should be the final response after retry
     if debug:

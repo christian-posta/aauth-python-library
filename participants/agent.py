@@ -16,6 +16,7 @@ from core.metadata import generate_agent_metadata, fetch_auth_metadata
 from core import _is_debug_enabled, _is_http_debug_enabled
 import json
 import re
+import threading
 
 
 class Agent:
@@ -45,7 +46,7 @@ class Agent:
         self.pending_request_token = None
         self.pending_redirect_uri = None
         self.pending_auth_server = None
-        self._manual_consent_event = None  # asyncio.Event to wait for callback
+        self._manual_consent_event = None  # threading.Event to wait for callback (cross-thread safe)
         self._manual_consent_result = None  # Store auth token result
         
         # Create FastAPI app
@@ -563,33 +564,50 @@ class Agent:
                 return await self._exchange_authorization_code(code, redirect_uri, auth_server)
             else:
                 # Manual mode: Store request details and wait for user to complete consent
+                # Always print the URL (not just in debug mode) so user knows what to do
+                print(f"\n" + "=" * 80, file=sys.stderr)
+                print("MANUAL CONSENT REQUIRED", file=sys.stderr)
+                print("=" * 80, file=sys.stderr)
+                print(f"\nPlease open the following URL in your browser:", file=sys.stderr)
+                print(f"\n  {redirect_url}\n", file=sys.stderr)
+                print("After granting consent, the agent will automatically exchange the code.", file=sys.stderr)
+                print("Waiting for authorization code...", file=sys.stderr)
+                print("=" * 80 + "\n", file=sys.stderr)
+                
                 if debug:
                     print(f"DEBUG AGENT:   Manual mode - waiting for user to complete consent in browser", file=sys.stderr, flush=True)
-                    print(f"\n" + "=" * 80, file=sys.stderr)
-                    print("MANUAL CONSENT REQUIRED", file=sys.stderr)
-                    print("=" * 80, file=sys.stderr)
-                    print(f"\nPlease open the following URL in your browser:", file=sys.stderr)
-                    print(f"\n  {redirect_url}\n", file=sys.stderr)
-                    print("After granting consent, the agent will automatically exchange the code.", file=sys.stderr)
-                    print("Waiting for authorization code...", file=sys.stderr)
-                    print("=" * 80 + "\n", file=sys.stderr)
                 
                 # Store pending request details
                 self.pending_request_token = request_token
                 self.pending_redirect_uri = redirect_uri
                 self.pending_auth_server = auth_server
                 
-                # Create event to wait for callback
-                import asyncio
-                self._manual_consent_event = asyncio.Event()
+                # Create threading.Event for cross-thread synchronization
+                # (agent server runs in separate thread with its own event loop)
+                self._manual_consent_event = threading.Event()
                 self._manual_consent_result = None
                 
-                # Wait for callback to receive the code and exchange it
-                # This will block until the callback sets the event
                 if debug:
+                    print(f"DEBUG AGENT:   Created _manual_consent_event: {self._manual_consent_event}", file=sys.stderr, flush=True)
                     print(f"DEBUG AGENT:   Waiting for user to complete consent flow...", file=sys.stderr, flush=True)
                 
-                await self._manual_consent_event.wait()
+                # Wait for callback to receive the code and exchange it
+                # Use run_in_executor to wait on threading.Event without blocking event loop
+                # Wait on threading.Event in a thread pool to avoid blocking the event loop
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.get_event_loop()
+                
+                if debug:
+                    print(f"DEBUG AGENT:   Using event loop: {loop}", file=sys.stderr, flush=True)
+                    print(f"DEBUG AGENT:   Calling run_in_executor to wait on event...", file=sys.stderr, flush=True)
+                
+                await loop.run_in_executor(None, self._manual_consent_event.wait)
+                
+                if debug:
+                    print(f"DEBUG AGENT:   Event wait completed!", file=sys.stderr, flush=True)
                 
                 if debug:
                     print(f"DEBUG AGENT:   Consent flow completed", file=sys.stderr, flush=True)
@@ -767,6 +785,12 @@ class Agent:
         
         if code:
             # In manual mode, exchange the code for tokens
+            if debug:
+                print(f"DEBUG AGENT:   Callback received code, checking mode...", file=sys.stderr, flush=True)
+                print(f"DEBUG AGENT:     use_user_simulator: {self.use_user_simulator}", file=sys.stderr, flush=True)
+                print(f"DEBUG AGENT:     pending_redirect_uri: {self.pending_redirect_uri}", file=sys.stderr, flush=True)
+                print(f"DEBUG AGENT:     _manual_consent_event: {self._manual_consent_event}", file=sys.stderr, flush=True)
+            
             if not self.use_user_simulator and self.pending_redirect_uri:
                 if debug:
                     print(f"DEBUG AGENT:   Manual mode - exchanging authorization code for tokens", file=sys.stderr, flush=True)
@@ -781,14 +805,24 @@ class Agent:
                 # Store result and signal the waiting coroutine
                 self._manual_consent_result = auth_token
                 
-                # Clear pending state
-                self.pending_request_token = None
-                self.pending_redirect_uri = None
-                self.pending_auth_server = None
+                if debug:
+                    print(f"DEBUG AGENT:   Stored auth_token result, signaling event...", file=sys.stderr, flush=True)
                 
                 # Signal the event to wake up the waiting coroutine
                 if self._manual_consent_event:
+                    if debug:
+                        print(f"DEBUG AGENT:   Setting _manual_consent_event...", file=sys.stderr, flush=True)
                     self._manual_consent_event.set()
+                    if debug:
+                        print(f"DEBUG AGENT:   Event set successfully", file=sys.stderr, flush=True)
+                else:
+                    if debug:
+                        print(f"DEBUG AGENT:   WARNING: _manual_consent_event is None!", file=sys.stderr, flush=True)
+                
+                # Clear pending state AFTER signaling
+                self.pending_request_token = None
+                self.pending_redirect_uri = None
+                self.pending_auth_server = None
                 
                 if auth_token:
                     if debug:
