@@ -89,6 +89,16 @@ async def main():
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
     
+    # Prompt before starting test
+    print("\n" + "=" * 80, file=sys.stderr)
+    if args.manual:
+        print("Ready to start test (Manual Browser Testing mode).", file=sys.stderr)
+        print("Press Enter to begin...", file=sys.stderr)
+    else:
+        print("Ready to start test. Press Enter to begin...", file=sys.stderr)
+    print("=" * 80, file=sys.stderr)
+    input()
+    
     # Track test results
     test_results = []
     

@@ -65,6 +65,8 @@ async def main():
         print(f"Error: {e}")
     
     print()
+    input("Press Enter to continue to Demo 2...")
+    print()
     print("=" * 80)
     print("Demo 2: sig=jwks on /data-jwks endpoint (Phase 2)")
     print("=" * 80)
@@ -87,6 +89,8 @@ async def main():
         print(f"Error: {e}")
     
     print()
+    input("Press Enter to continue to Demo 3...")
+    print()
     print("=" * 80)
     print("Demo 3: Verify metadata endpoint")
     print("=" * 80)
@@ -104,6 +108,8 @@ async def main():
     except Exception as e:
         print(f"Error: {e}")
     
+    print()
+    input("Press Enter to continue to Demo 4...")
     print()
     print("=" * 80)
     print("Demo 4: Verify JWKS endpoint")
@@ -125,6 +131,8 @@ async def main():
         print(f"Error: {e}")
     
     print()
+    input("Press Enter to continue to Demo 5...")
+    print()
     print("=" * 80)
     print("Demo 5: Wrong scheme rejected")
     print("=" * 80)
@@ -145,6 +153,8 @@ async def main():
     except Exception as e:
         print(f"Error: {e}")
     
+    print()
+    input("Press Enter to continue to Demo 6...")
     print()
     print("=" * 80)
     print("Demo 6: Both endpoints work independently")
