@@ -332,18 +332,43 @@ class AuthServer:
             print(f"DEBUG AUTH:   redirect_uri: {redirect_uri}", file=sys.stderr, flush=True)
             print(f"DEBUG AUTH:   Note: For Phase 3 autonomous flow, redirect_uri is not used but required by spec", file=sys.stderr, flush=True)
         
-        # Get resource_token from request body
+        # Phase 5: Support direct authorization (agent is resource)
+        # Exactly one of resource_token, scope, or auth_request_url must be provided
         resource_token = params_dict.get("resource_token")
-        if not resource_token:
+        scope = params_dict.get("scope")
+        auth_request_url = params_dict.get("auth_request_url")
+        
+        # Count how many are provided
+        provided_count = sum([bool(resource_token), bool(scope), bool(auth_request_url)])
+        
+        if provided_count == 0:
             if debug:
-                print(f"DEBUG AUTH:   Missing resource_token parameter", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Missing required parameter: must provide resource_token, scope, or auth_request_url", file=sys.stderr, flush=True)
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_request", "error_description": "Missing resource_token parameter"}
+                content={"error": "invalid_request", "error_description": "Must provide exactly one of: resource_token, scope, or auth_request_url"}
             )
         
+        if provided_count > 1:
+            if debug:
+                print(f"DEBUG AUTH:   Multiple parameters provided: resource_token={bool(resource_token)}, scope={bool(scope)}, auth_request_url={bool(auth_request_url)}", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "Must provide exactly one of: resource_token, scope, or auth_request_url"}
+            )
+        
+        # Determine if this is Phase 5 (agent is resource) or Phase 4 (resource token)
+        agent_is_resource = bool(scope) or bool(auth_request_url)
+        
         if debug:
-            print(f"DEBUG AUTH:   Resource token received: {resource_token[:100]}...", file=sys.stderr, flush=True)
+            if agent_is_resource:
+                print(f"DEBUG AUTH:   Phase 5: Agent is resource (direct authorization)", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
+                if auth_request_url:
+                    print(f"DEBUG AUTH:   Auth request URL: {auth_request_url}", file=sys.stderr, flush=True)
+            else:
+                print(f"DEBUG AUTH:   Phase 4: Resource token provided", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Resource token received: {resource_token[:100]}...", file=sys.stderr, flush=True)
         
         # Extract agent's current signing key for agent_jkt verification
         # We need to get the JWK from the signature to verify agent_jkt
@@ -410,28 +435,41 @@ class AuthServer:
         if debug:
             print(f"DEBUG AUTH:   agent_jwk extracted: {agent_jwk is not None}", file=sys.stderr, flush=True)
         
-        # Validate resource token
-        try:
-            resource_claims = await self._verify_resource_token(resource_token, agent_id, agent_jwk)
-        except Exception as e:
+        # Phase 5: Handle agent-is-resource vs Phase 4 resource-token flow
+        if agent_is_resource:
+            # Phase 5: Agent is resource - use agent identifier as resource
+            resource_id = agent_id  # Agent is the resource
+            # Scope is provided directly in the request
+            if not scope:
+                scope = ""  # Empty scope if not provided
+            
             if debug:
-                print(f"DEBUG AUTH:   Resource token validation FAILED: {e}", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_resource_token", "error_description": str(e)}
-            )
-        
-        if debug:
-            print(f"DEBUG AUTH:   Resource token validation PASSED", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Resource claims: {json.dumps(resource_claims, indent=2)}", file=sys.stderr, flush=True)
-        
-        # Extract resource and scope from resource token
-        resource_id = resource_claims.get("iss")  # Resource is the issuer
-        scope = resource_claims.get("scope", "")
-        
-        if debug:
-            print(f"DEBUG AUTH:   Resource ID: {resource_id}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Phase 5: Using agent as resource", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Resource ID (agent): {resource_id}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
+        else:
+            # Phase 4: Validate resource token
+            try:
+                resource_claims = await self._verify_resource_token(resource_token, agent_id, agent_jwk)
+            except Exception as e:
+                if debug:
+                    print(f"DEBUG AUTH:   Resource token validation FAILED: {e}", file=sys.stderr, flush=True)
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "invalid_resource_token", "error_description": str(e)}
+                )
+            
+            if debug:
+                print(f"DEBUG AUTH:   Resource token validation PASSED", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Resource claims: {json.dumps(resource_claims, indent=2)}", file=sys.stderr, flush=True)
+            
+            # Extract resource and scope from resource token
+            resource_id = resource_claims.get("iss")  # Resource is the issuer
+            scope = resource_claims.get("scope", "")
+            
+            if debug:
+                print(f"DEBUG AUTH:   Resource ID: {resource_id}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
         
         # Evaluate policy
         policy_result = self._evaluate_policy(agent_id, resource_id, scope)
@@ -454,7 +492,8 @@ class AuthServer:
                 resource=resource_id,
                 scope=scope,
                 redirect_uri=redirect_uri,
-                agent_jwk=agent_jwk
+                agent_jwk=agent_jwk,
+                agent_is_resource=agent_is_resource
             )
             
             if debug:
@@ -510,7 +549,8 @@ class AuthServer:
             agent=agent_id,
             resource=resource_id,
             scope=scope,
-            cnf_jwk=cnf_jwk
+            cnf_jwk=cnf_jwk,
+            agent_is_resource=agent_is_resource
         )
         
         if debug:
@@ -685,17 +725,19 @@ class AuthServer:
         scope: str,
         cnf_jwk: Dict[str, Any],
         sub: Optional[str] = None,
-        agent_delegate: Optional[str] = None
+        agent_delegate: Optional[str] = None,
+        agent_is_resource: bool = False
     ) -> str:
         """Issue auth token per AAuth spec Section 7.
         
         Args:
             agent: Agent identifier
-            resource: Resource identifier (audience)
+            resource: Resource identifier (audience). When agent_is_resource=True, this should be the agent identifier.
             scope: Authorized scope
             cnf_jwk: Agent's public signing key (JWK format)
             sub: Optional user identifier
             agent_delegate: Optional agent delegate identifier
+            agent_is_resource: If True, omit 'agent' claim and set aud to agent identifier (Phase 5)
             
         Returns:
             Signed auth token JWT string
@@ -708,6 +750,7 @@ class AuthServer:
             print(f"DEBUG AUTH:   Resource (aud): {resource}", file=sys.stderr, flush=True)
             print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
             print(f"DEBUG AUTH:   cnf.jwk: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
+            print(f"DEBUG AUTH:   Agent is resource: {agent_is_resource}", file=sys.stderr, flush=True)
             if sub:
                 print(f"DEBUG AUTH:   User (sub): {sub}", file=sys.stderr, flush=True)
             if agent_delegate:
@@ -724,7 +767,8 @@ class AuthServer:
             kid=self.kid,
             exp=None,  # Default 1 hour
             sub=sub,
-            agent_delegate=agent_delegate
+            agent_delegate=agent_delegate,
+            agent_is_resource=agent_is_resource
         )
         
         if debug:
@@ -738,7 +782,8 @@ class AuthServer:
         resource: str,
         scope: str,
         redirect_uri: str,
-        agent_jwk: Optional[Dict[str, Any]] = None
+        agent_jwk: Optional[Dict[str, Any]] = None,
+        agent_is_resource: bool = False
     ) -> str:
         """Generate request_token for user consent flow.
         
@@ -748,6 +793,7 @@ class AuthServer:
             scope: Requested scope
             redirect_uri: Agent's callback URI
             agent_jwk: Agent's JWK (for future use)
+            agent_is_resource: If True, agent is requesting authorization to itself (Phase 5)
             
         Returns:
             Opaque request_token string
@@ -769,7 +815,8 @@ class AuthServer:
             "scope": scope,
             "redirect_uri": redirect_uri,
             "expires_at": expires_at,
-            "agent_jwk": agent_jwk
+            "agent_jwk": agent_jwk,
+            "agent_is_resource": agent_is_resource
         }
         
         if debug:
@@ -1015,6 +1062,7 @@ class AuthServer:
         resource_id = code_details.get("resource")
         scope = code_details.get("scope")
         user_id = code_details.get("user_id")  # Set during consent
+        agent_is_resource = code_details.get("agent_is_resource", False)  # Phase 5: agent is resource
         
         # Use fetched agent_jwk, or fall back to stored one
         if not agent_jwk:
@@ -1034,7 +1082,8 @@ class AuthServer:
             resource=resource_id,
             scope=scope,
             cnf_jwk=agent_jwk,
-            sub=user_id
+            sub=user_id,
+            agent_is_resource=agent_is_resource
         )
         
         # Remove code (single-use)

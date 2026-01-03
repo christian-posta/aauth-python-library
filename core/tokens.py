@@ -148,14 +148,15 @@ def create_auth_token(
     kid: str,
     exp: Optional[int] = None,
     sub: Optional[str] = None,
-    agent_delegate: Optional[str] = None
+    agent_delegate: Optional[str] = None,
+    agent_is_resource: bool = False
 ) -> str:
     """Create an auth token (auth+jwt) per AAuth spec Section 7.
     
     Args:
         iss: Auth server identifier (HTTPS URL)
-        aud: Resource identifier (HTTPS URL)
-        agent: Agent identifier (HTTPS URL)
+        aud: Resource identifier (HTTPS URL). When agent_is_resource=True, this should be the agent identifier.
+        agent: Agent identifier (HTTPS URL). Omitted from payload when agent_is_resource=True.
         cnf_jwk: Agent's public signing key (JWK format)
         scope: Space-separated scope values
         private_key: Auth server's Ed25519 private key for signing
@@ -163,6 +164,7 @@ def create_auth_token(
         exp: Expiration timestamp (Unix time). If None, defaults to 1 hour from now.
         sub: Optional user identifier
         agent_delegate: Optional agent delegate identifier
+        agent_is_resource: If True, omit 'agent' claim and set aud to agent identifier (Phase 5: agent is resource)
         
     Returns:
         Signed JWT string (auth+jwt)
@@ -184,13 +186,16 @@ def create_auth_token(
     payload = {
         "iss": iss,
         "aud": aud,
-        "agent": agent,
         "cnf": {
             "jwk": cnf_jwk
         },
         "scope": scope,
         "exp": exp
     }
+    
+    # Phase 5: When agent is resource, omit 'agent' claim per SPEC.md Section 7.3
+    if not agent_is_resource:
+        payload["agent"] = agent
     
     if sub:
         payload["sub"] = sub
@@ -207,6 +212,11 @@ def create_auth_token(
         print(f"DEBUG TOKEN:   Expiration: {exp} ({time.ctime(exp)})", file=sys.stderr, flush=True)
         print(f"DEBUG TOKEN:   Current time: {int(time.time())} ({time.ctime()})", file=sys.stderr, flush=True)
         print(f"DEBUG TOKEN:   Time until expiration: {exp - int(time.time())} seconds", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Agent is resource: {agent_is_resource}", file=sys.stderr, flush=True)
+        if agent_is_resource:
+            print(f"DEBUG TOKEN:   Agent claim omitted (aud={aud} is agent identifier)", file=sys.stderr, flush=True)
+        else:
+            print(f"DEBUG TOKEN:   Agent: {agent}", file=sys.stderr, flush=True)
         if sub:
             print(f"DEBUG TOKEN:   User (sub): {sub}", file=sys.stderr, flush=True)
         if agent_delegate:

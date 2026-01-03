@@ -346,6 +346,160 @@ class Agent:
         
         return result
     
+    async def request_self_authorization(self, scope: str, auth_server: str, redirect_uri: Optional[str] = None) -> Optional[str]:
+        """Request authorization directly from auth server (Phase 5: agent is resource).
+        
+        The agent requests authorization to itself, providing scope directly instead of a resource_token.
+        This enables SSO and API access with a unified auth token.
+        
+        Args:
+            scope: Space-separated scope values (e.g., "profile email")
+            auth_server: Auth server identifier (HTTPS URL)
+            redirect_uri: Optional redirect URI (defaults to {agent_id}/callback)
+            
+        Returns:
+            Auth token string, or None if request failed
+        """
+        debug = _is_debug_enabled()
+        http_debug = _is_http_debug_enabled()
+        
+        if redirect_uri is None:
+            redirect_uri = f"{self.agent_id}/callback"
+        
+        if debug:
+            print(f"DEBUG AGENT: Requesting self-authorization (Phase 5: agent is resource)", file=sys.stderr, flush=True)
+            print(f"DEBUG AGENT:   Auth server: {auth_server}", file=sys.stderr, flush=True)
+            print(f"DEBUG AGENT:   Scope: {scope}", file=sys.stderr, flush=True)
+            print(f"DEBUG AGENT:   Redirect URI: {redirect_uri}", file=sys.stderr, flush=True)
+        
+        # Fetch auth server metadata to get token endpoint
+        try:
+            metadata_url = f"{auth_server}/.well-known/aauth-issuer"
+            metadata = fetch_auth_metadata(metadata_url)
+            token_endpoint = metadata.get("agent_token_endpoint")
+            if debug:
+                print(f"DEBUG AGENT:   Token endpoint: {token_endpoint}", file=sys.stderr, flush=True)
+        except Exception as e:
+            if debug:
+                print(f"DEBUG AGENT:   Failed to fetch auth server metadata: {e}", file=sys.stderr, flush=True)
+            return None
+        
+        # Build request body with scope (no resource_token)
+        body_params = {
+            "request_type": "auth",
+            "scope": scope,
+            "redirect_uri": redirect_uri
+        }
+        body_text = "&".join([f"{k}={v}" for k, v in body_params.items()])
+        body_bytes = body_text.encode('utf-8')
+        
+        if debug:
+            print(f"DEBUG AGENT:   Request body: {body_text}", file=sys.stderr, flush=True)
+        
+        # Sign request with sig=jwks (agent server identity)
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        sig_headers = self.sign_request(
+            method="POST",
+            url=token_endpoint,
+            headers=headers,
+            body=body_bytes,
+            sig_scheme="jwks"
+        )
+        
+        request_headers = {**headers, **sig_headers}
+        
+        # Debug: Print HTTP request
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f">>> AGENT REQUEST to {token_endpoint}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"POST {token_endpoint} HTTP/1.1", file=sys.stderr)
+            for name, value in sorted(request_headers.items()):
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            print(f"\n[Body ({len(body_bytes)} bytes)]", file=sys.stderr)
+            print(body_text, file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        # Make request
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method="POST",
+                url=token_endpoint,
+                headers=request_headers,
+                content=body_bytes
+            )
+        
+        # Debug: Print HTTP response
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f"<<< AGENT RESPONSE from {token_endpoint}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"HTTP/1.1 {response.status_code} {response.reason_phrase}", file=sys.stderr)
+            for name, value in sorted(response.headers.items()):
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            if response.content:
+                print(f"\n[Body ({len(response.content)} bytes)]", file=sys.stderr)
+                try:
+                    print(response.text, file=sys.stderr)
+                except:
+                    print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        if response.status_code != 200:
+            if debug:
+                print(f"DEBUG AGENT:   Self-authorization request failed: {response.status_code}", file=sys.stderr, flush=True)
+                try:
+                    error_data = response.json()
+                    print(f"DEBUG AGENT:   Error: {json.dumps(error_data, indent=2)}", file=sys.stderr, flush=True)
+                except:
+                    print(f"DEBUG AGENT:   Error: {response.text}", file=sys.stderr, flush=True)
+            return None
+        
+        # Parse response
+        try:
+            response_data = response.json()
+            
+            # Check for request_token (user consent required)
+            request_token = response_data.get("request_token")
+            if request_token:
+                if debug:
+                    print(f"DEBUG AGENT:   Request token received: {request_token[:50]}...", file=sys.stderr, flush=True)
+                    print(f"DEBUG AGENT:   User consent required, handling request_token...", file=sys.stderr, flush=True)
+                
+                # Handle user consent flow
+                auth_token = await self._handle_request_token(request_token, auth_server, redirect_uri)
+                return auth_token
+            
+            # Direct grant (autonomous authorization)
+            auth_token = response_data.get("auth_token")
+            refresh_token = response_data.get("refresh_token")
+            
+            if debug:
+                print(f"DEBUG AGENT:   Auth token received: {auth_token[:100]}...", file=sys.stderr, flush=True)
+                if refresh_token:
+                    print(f"DEBUG AGENT:   Refresh token received: {refresh_token[:100]}...", file=sys.stderr, flush=True)
+            
+            # Store tokens
+            self.auth_token = auth_token
+            self.refresh_token = refresh_token
+            
+            if debug:
+                print(f"DEBUG AGENT:   Tokens stored successfully", file=sys.stderr, flush=True)
+            
+            return auth_token
+        except Exception as e:
+            if debug:
+                print(f"DEBUG AGENT:   Failed to parse response: {e}", file=sys.stderr, flush=True)
+            return None
+    
     async def _request_auth_token(self, resource_token: str, auth_server: str) -> Optional[str]:
         """Request auth token from auth server.
         
