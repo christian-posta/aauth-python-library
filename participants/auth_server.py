@@ -208,17 +208,108 @@ class AuthServer:
         
         # Extract agent identifier from signature
         agent_id = None
+        agent_delegate_sub = None  # Phase 6: agent delegation
+        agent_jwk = None  # Phase 6: delegate's key from agent token
+        
         if scheme == "jwks":
             agent_id = key_params.get("id")
         elif scheme == "jwt":
-            # For Phase 3, we expect sig=jwks from agent server
-            # sig=jwt with agent token will be Phase 4
-            if debug:
-                print(f"DEBUG AUTH:   sig=jwt not supported for Phase 3 (agent server should use sig=jwks)", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=401,
-                content={"error": "invalid_request", "error_description": "Agent must use sig=jwks or sig=hwk"}
-            )
+            # Phase 6: Agent delegation - validate agent token
+            jwt_token = key_params.get("jwt")
+            if not jwt_token:
+                if debug:
+                    print(f"DEBUG AUTH:   sig=jwt missing jwt parameter", file=sys.stderr, flush=True)
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "Missing jwt parameter in Signature-Key"}
+                )
+            
+            # Parse token header to determine type
+            try:
+                import jwt as jwt_lib
+                header = jwt_lib.get_unverified_header(jwt_token)
+                typ = header.get("typ")
+                
+                if debug:
+                    print(f"DEBUG AUTH:   JWT token type: {typ}", file=sys.stderr, flush=True)
+            except Exception as e:
+                if debug:
+                    print(f"DEBUG AUTH:   Failed to parse JWT header: {e}", file=sys.stderr, flush=True)
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": f"Invalid JWT token: {e}"}
+                )
+            
+            if typ == "agent+jwt":
+                # Phase 6: Agent token (delegated identity)
+                if debug:
+                    print(f"DEBUG AUTH:   Validating agent token (agent+jwt)", file=sys.stderr, flush=True)
+                
+                # Create JWKS fetcher for agent server
+                def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+                    """Fetch agent server JWKS."""
+                    try:
+                        from core.metadata import fetch_metadata
+                        import httpx
+                        metadata_url = f"{issuer_url}/.well-known/aauth-agent"
+                        metadata = fetch_metadata(metadata_url)
+                        jwks_uri = metadata.get("jwks_uri")
+                        if not jwks_uri:
+                            return None
+                        
+                        jwks_response = httpx.get(jwks_uri, timeout=10.0)
+                        jwks_response.raise_for_status()
+                        return jwks_response.json()
+                    except Exception as e:
+                        if debug:
+                            print(f"DEBUG AUTH:   Error fetching agent server JWKS: {e}", file=sys.stderr, flush=True)
+                        return None
+                
+                # Verify agent token
+                try:
+                    from core.tokens import verify_agent_token
+                    agent_claims = verify_agent_token(
+                        token=jwt_token,
+                        jwks_fetcher=agent_jwks_fetcher,
+                        expected_aud=None
+                    )
+                    
+                    # Extract agent identifier and delegate identifier
+                    agent_id = agent_claims.get("iss")  # Agent server identifier
+                    agent_delegate_sub = agent_claims.get("sub")  # Delegate identifier
+                    cnf = agent_claims.get("cnf", {})
+                    agent_jwk = cnf.get("jwk")  # Delegate's key for agent_jkt calculation
+                    
+                    if debug:
+                        print(f"DEBUG AUTH:   Agent token validated successfully", file=sys.stderr, flush=True)
+                        print(f"DEBUG AUTH:     Agent server (iss): {agent_id}", file=sys.stderr, flush=True)
+                        print(f"DEBUG AUTH:     Agent delegate (sub): {agent_delegate_sub}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    if debug:
+                        print(f"DEBUG AUTH:   Agent token validation failed: {e}", file=sys.stderr, flush=True)
+                        import traceback
+                        traceback.print_exc()
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "invalid_token", "error_description": f"Invalid agent token: {e}"}
+                    )
+            
+            elif typ == "auth+jwt":
+                # Phase 3/4/5: Auth token (for token exchange or refresh)
+                # This is handled elsewhere, but we shouldn't reach here for initial token requests
+                if debug:
+                    print(f"DEBUG AUTH:   sig=jwt with auth token - this should be handled by exchange/refresh endpoints", file=sys.stderr, flush=True)
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "Auth tokens should be used with request_type=exchange or request_type=refresh"}
+                )
+            else:
+                if debug:
+                    print(f"DEBUG AUTH:   Unsupported token type: {typ}", file=sys.stderr, flush=True)
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": f"Unsupported token type: {typ}"}
+                )
         
         if not agent_id:
             if debug:
@@ -230,11 +321,15 @@ class AuthServer:
         
         if debug:
             print(f"DEBUG AUTH:   Agent ID: {agent_id}", file=sys.stderr, flush=True)
+            if agent_delegate_sub:
+                print(f"DEBUG AUTH:   Agent delegate (sub): {agent_delegate_sub}", file=sys.stderr, flush=True)
         
         # Extract well-known parameter (optional, defaults to "aauth-agent" for AAuth agents)
         well_known = key_params.get("well-known", "aauth-agent") if scheme == "jwks" else None
         
         # Verify signature
+        # For agent tokens, we've already validated the JWT, but we still need to verify HTTPSig
+        # using the delegate's key from cnf.jwk
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
             """Fetch JWKS for agent and return the matching key.
             
@@ -524,8 +619,14 @@ class AuthServer:
             )
         
         # Get agent's current signing key for cnf.jwk
-        # We already extracted agent_jwk earlier, so we can reuse it
-        if scheme == "jwks":
+        # For agent tokens (Phase 6), use delegate's key from agent token
+        # For agent server (scheme=jwks), use agent server's key
+        if scheme == "jwt" and agent_jwk:
+            # Phase 6: Agent token - use delegate's key from agent token
+            agent_key = agent_jwk  # This is the delegate's key from cnf.jwk in agent token
+            if debug:
+                print(f"DEBUG AUTH:   Using delegate's JWK from agent token for cnf.jwk: {json.dumps(agent_key, indent=2)}", file=sys.stderr, flush=True)
+        elif scheme == "jwks":
             # Use the agent_jwk we already extracted for agent_jkt verification
             if not agent_jwk:
                 return JSONResponse(
@@ -540,7 +641,7 @@ class AuthServer:
             # For Phase 3, we expect sig=jwks
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_request", "error_description": "Agent must use sig=jwks"}
+                content={"error": "invalid_request", "error_description": "Agent must use sig=jwks or sig=jwt with agent token"}
             )
         
         # Issue auth token
@@ -550,6 +651,7 @@ class AuthServer:
             resource=resource_id,
             scope=scope,
             cnf_jwk=cnf_jwk,
+            agent_delegate=agent_delegate_sub,  # Phase 6: Include delegate identifier
             agent_is_resource=agent_is_resource
         )
         
@@ -950,6 +1052,8 @@ class AuthServer:
         
         agent_id = None
         agent_jwk = None
+        agent_delegate_sub = None  # Phase 6: agent delegation
+        
         if scheme == "jwks":
             agent_id = key_params.get("id")
             kid = key_params.get("kid")
@@ -979,9 +1083,87 @@ class AuthServer:
                     if debug:
                         print(f"DEBUG AUTH:   Error fetching agent JWK: {e}", file=sys.stderr, flush=True)
         elif scheme == "jwt":
-            # Extract agent from JWT
-            # (for Phase 4, we expect sig=jwks from agent server)
-            pass
+            # Phase 6: Agent delegation - validate agent token
+            jwt_token = key_params.get("jwt")
+            if not jwt_token:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "Missing jwt parameter in Signature-Key"}
+                )
+            
+            # Parse token header to determine type
+            try:
+                import jwt as jwt_lib
+                header = jwt_lib.get_unverified_header(jwt_token)
+                typ = header.get("typ")
+            except Exception as e:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": f"Invalid JWT token: {e}"}
+                )
+            
+            if typ == "agent+jwt":
+                # Phase 6: Agent token (delegated identity)
+                if debug:
+                    print(f"DEBUG AUTH:   Validating agent token for code exchange", file=sys.stderr, flush=True)
+                
+                # Create JWKS fetcher for agent server
+                def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+                    """Fetch agent server JWKS."""
+                    try:
+                        from core.metadata import fetch_metadata
+                        import httpx
+                        metadata_url = f"{issuer_url}/.well-known/aauth-agent"
+                        metadata = fetch_metadata(metadata_url)
+                        jwks_uri = metadata.get("jwks_uri")
+                        if not jwks_uri:
+                            return None
+                        
+                        jwks_response = httpx.get(jwks_uri, timeout=10.0)
+                        jwks_response.raise_for_status()
+                        return jwks_response.json()
+                    except Exception as e:
+                        if debug:
+                            print(f"DEBUG AUTH:   Error fetching agent server JWKS: {e}", file=sys.stderr, flush=True)
+                        return None
+                
+                # Verify agent token
+                try:
+                    from core.tokens import verify_agent_token
+                    agent_claims = verify_agent_token(
+                        token=jwt_token,
+                        jwks_fetcher=agent_jwks_fetcher,
+                        expected_aud=None
+                    )
+                    
+                    # Extract agent identifier and delegate identifier
+                    agent_id = agent_claims.get("iss")  # Agent server identifier
+                    agent_delegate_sub = agent_claims.get("sub")  # Delegate identifier
+                    cnf = agent_claims.get("cnf", {})
+                    agent_jwk = cnf.get("jwk")  # Delegate's key for cnf.jwk
+                    
+                    if debug:
+                        print(f"DEBUG AUTH:   Agent token validated for code exchange", file=sys.stderr, flush=True)
+                        print(f"DEBUG AUTH:     Agent server (iss): {agent_id}", file=sys.stderr, flush=True)
+                        print(f"DEBUG AUTH:     Agent delegate (sub): {agent_delegate_sub}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    if debug:
+                        print(f"DEBUG AUTH:   Agent token validation failed: {e}", file=sys.stderr, flush=True)
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "invalid_token", "error_description": f"Invalid agent token: {e}"}
+                    )
+            elif typ == "auth+jwt":
+                # Auth tokens shouldn't be used for code exchange
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "Auth tokens cannot be used for code exchange"}
+                )
+            else:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": f"Unsupported token type: {typ}"}
+                )
         
         if not agent_id:
             return JSONResponse(
@@ -1006,10 +1188,13 @@ class AuthServer:
         well_known = key_params.get("well-known", "aauth-agent") if scheme == "jwks" else None
         
         # Create JWKS fetcher for verify_signature
+        # For agent tokens (Phase 6), this fetches agent server's JWKS (to validate agent token JWT)
+        # For agent server (scheme=jwks), this fetches agent server's JWKS (to validate HTTPSig)
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
             """Fetch JWKS for agent and return the matching key.
             
             Uses well-known parameter from signature if present, otherwise fetches {id} directly as JWKS.
+            For agent tokens, this fetches the agent server's JWKS.
             """
             try:
                 import httpx
@@ -1021,7 +1206,16 @@ class AuthServer:
                     metadata = fetch_metadata(metadata_url)
                     jwks_uri = metadata.get("jwks_uri")
                 else:
-                    jwks_uri = agent_id_param
+                    # For agent tokens, agent_id_param is the agent server identifier
+                    # Try fetching metadata first
+                    try:
+                        from core.metadata import fetch_metadata
+                        metadata_url = f"{agent_id_param}/.well-known/aauth-agent"
+                        metadata = fetch_metadata(metadata_url)
+                        jwks_uri = metadata.get("jwks_uri")
+                    except:
+                        # Fall back to fetching {id} directly as JWKS
+                        jwks_uri = agent_id_param
                 
                 if not jwks_uri:
                     return None
@@ -1065,6 +1259,8 @@ class AuthServer:
         agent_is_resource = code_details.get("agent_is_resource", False)  # Phase 5: agent is resource
         
         # Use fetched agent_jwk, or fall back to stored one
+        # For agent tokens (Phase 6), agent_jwk is the delegate's key from agent token
+        # For agent server (scheme=jwks), agent_jwk is the agent server's key
         if not agent_jwk:
             agent_jwk = code_details.get("agent_jwk")
         
@@ -1077,12 +1273,14 @@ class AuthServer:
             )
         
         # Issue auth token with user identity
+        # Phase 6: Include agent_delegate if present (from agent token)
         auth_token = self._issue_auth_token(
             agent=agent_id,
             resource=resource_id,
             scope=scope,
             cnf_jwk=agent_jwk,
             sub=user_id,
+            agent_delegate=agent_delegate_sub,  # Phase 6: Include delegate identifier
             agent_is_resource=agent_is_resource
         )
         

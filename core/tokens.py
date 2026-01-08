@@ -243,6 +243,276 @@ def create_auth_token(
     return token
 
 
+def create_agent_token(
+    iss: str,
+    sub: str,
+    cnf_jwk: Dict[str, Any],
+    private_key: Ed25519PrivateKey,
+    kid: str,
+    exp: Optional[int] = None,
+    aud: Optional[str] = None
+) -> str:
+    """Create an agent token (agent+jwt) per AAuth spec Section 5.
+    
+    Args:
+        iss: Agent server identifier (HTTPS URL) - also the agent identifier
+        sub: Agent delegate identifier (persists across key rotations)
+        cnf_jwk: Agent delegate's public signing key (JWK format)
+        private_key: Agent server's Ed25519 private key for signing
+        kid: Key ID for agent server's signing key
+        exp: Expiration timestamp (Unix time). If None, defaults to 1 hour from now.
+        aud: Optional audience restriction (string or array of strings)
+        
+    Returns:
+        Signed JWT string (agent+jwt)
+    """
+    debug = _is_debug_enabled()
+    
+    # Set expiration (default 1 hour)
+    if exp is None:
+        exp = int(time.time()) + 3600  # 1 hour
+    
+    # Build header
+    header = {
+        "typ": "agent+jwt",
+        "alg": "EdDSA",
+        "kid": kid
+    }
+    
+    # Build payload
+    payload = {
+        "iss": iss,
+        "sub": sub,
+        "exp": exp,
+        "cnf": {
+            "jwk": cnf_jwk
+        }
+    }
+    
+    if aud:
+        payload["aud"] = aud
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN: Creating agent token:", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Header: {json.dumps(header, indent=2)}", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Payload: {json.dumps(payload, indent=2)}", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   cnf.jwk: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Expiration: {exp} ({time.ctime(exp)})", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Current time: {int(time.time())} ({time.ctime()})", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Time until expiration: {exp - int(time.time())} seconds", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Agent server (iss): {iss}", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Agent delegate (sub): {sub}", file=sys.stderr, flush=True)
+        if aud:
+            print(f"DEBUG TOKEN:   Audience: {aud}", file=sys.stderr, flush=True)
+    
+    # Sign token
+    # PyJWT supports EdDSA with cryptography Ed25519PrivateKey objects directly
+    token = jwt.encode(
+        payload,
+        private_key,
+        algorithm="EdDSA",
+        headers=header
+    )
+    
+    if debug:
+        import sys
+        # Decode to show signature (last part)
+        parts = token.split('.')
+        if len(parts) == 3:
+            signature_b64 = parts[2]
+            print(f"DEBUG TOKEN:   Signature (base64url): {signature_b64[:50]}...", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Full token: {token[:100]}...", file=sys.stderr, flush=True)
+    
+    return token
+
+
+def verify_agent_token(
+    token: str,
+    jwks_fetcher: Callable[[str], Optional[Dict[str, Any]]],
+    expected_aud: Optional[str] = None
+) -> Dict[str, Any]:
+    """Verify an agent token per AAuth spec Section 5.7.
+    
+    Args:
+        token: Agent token JWT string
+        jwks_fetcher: Function that takes agent server URL (iss) and returns JWKS dict
+        expected_aud: Optional expected audience (for recipient validation)
+        
+    Returns:
+        Dictionary with verified claims including 'cnf' with 'jwk'
+        
+    Raises:
+        jwt.InvalidTokenError: If token is invalid
+        ValueError: If claims don't match expectations
+    """
+    debug = _is_debug_enabled()
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN: Verifying agent token:", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Token (first 100 chars): {token[:100]}...", file=sys.stderr, flush=True)
+    
+    # Parse header and payload (unverified first)
+    header = jwt.get_unverified_header(token)
+    payload = jwt.decode(token, options={"verify_signature": False})
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Parsed header: {json.dumps(header, indent=2)}", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Parsed payload: {json.dumps(payload, indent=2)}", file=sys.stderr, flush=True)
+    
+    # Step 1-2: Check typ claim
+    typ = header.get("typ")
+    if typ != "agent+jwt":
+        if debug:
+            import sys
+            print(f"DEBUG TOKEN:   Typ check FAILED: expected=agent+jwt, got={typ}", file=sys.stderr, flush=True)
+        raise ValueError(f"Invalid token type: expected agent+jwt, got {typ}")
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Typ check PASSED: {typ}", file=sys.stderr, flush=True)
+    
+    # Step 3-4: Extract kid and iss
+    kid = header.get("kid")
+    if not kid:
+        raise ValueError("Token header missing 'kid'")
+    
+    iss = payload.get("iss")
+    if not iss:
+        raise ValueError("Token payload missing 'iss'")
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Key ID (kid): {kid}", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Agent server (iss): {iss}", file=sys.stderr, flush=True)
+    
+    # Step 5-6: Fetch agent server's JWKS and match key
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Fetching agent server JWKS from: {iss}", file=sys.stderr, flush=True)
+    
+    jwks = jwks_fetcher(iss)
+    if not jwks:
+        raise ValueError(f"Failed to fetch JWKS from {iss}")
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   JWKS received: {json.dumps(jwks, indent=2)}", file=sys.stderr, flush=True)
+    
+    # Find key by kid
+    keys = jwks.get("keys", [])
+    signing_key = None
+    for key in keys:
+        if key.get("kid") == kid:
+            signing_key = key
+            break
+    
+    if not signing_key:
+        if debug:
+            import sys
+            print(f"DEBUG TOKEN:   Key lookup FAILED: kid={kid} not found in JWKS", file=sys.stderr, flush=True)
+        raise ValueError(f"Signing key with kid={kid} not found in JWKS")
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Key found: {json.dumps(signing_key, indent=2)}", file=sys.stderr, flush=True)
+    
+    # Step 7: Verify JWT signature
+    from .crypto_utils import jwk_to_public_key
+    public_key = jwk_to_public_key(signing_key)
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Verifying JWT signature with agent server public key", file=sys.stderr, flush=True)
+    
+    try:
+        jwt.decode(
+            token,
+            public_key,
+            algorithms=["EdDSA"],
+            options={"verify_signature": True, "verify_exp": False, "verify_aud": False}  # We check exp and aud separately
+        )
+        if debug:
+            import sys
+            print(f"DEBUG TOKEN:   JWT signature verification PASSED", file=sys.stderr, flush=True)
+    except jwt.InvalidSignatureError as e:
+        if debug:
+            import sys
+            print(f"DEBUG TOKEN:   JWT signature verification FAILED: {e}", file=sys.stderr, flush=True)
+        raise
+    
+    # Step 8: Verify exp claim
+    exp = payload.get("exp")
+    if exp:
+        now = int(time.time())
+        if now >= exp:
+            if debug:
+                import sys
+                print(f"DEBUG TOKEN:   Exp check FAILED: exp={exp} ({time.ctime(exp)}), now={now} ({time.ctime()})", file=sys.stderr, flush=True)
+            raise jwt.ExpiredSignatureError("Token has expired")
+        if debug:
+            import sys
+            print(f"DEBUG TOKEN:   Exp check PASSED: exp={exp} ({time.ctime(exp)}), now={now} ({time.ctime()})", file=sys.stderr, flush=True)
+            print(f"DEBUG TOKEN:   Time until expiration: {exp - now} seconds", file=sys.stderr, flush=True)
+    else:
+        raise ValueError("Token missing 'exp' claim")
+    
+    # Step 9: Verify sub claim is present
+    sub = payload.get("sub")
+    if not sub:
+        if debug:
+            import sys
+            print(f"DEBUG TOKEN:   Sub check FAILED: missing sub claim", file=sys.stderr, flush=True)
+        raise ValueError("Token missing 'sub' claim (agent delegate identifier)")
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Sub check PASSED: {sub}", file=sys.stderr, flush=True)
+    
+    # Step 10: Verify aud claim if present
+    aud = payload.get("aud")
+    if aud and expected_aud:
+        # Handle both string and array audience (per JWT spec)
+        if isinstance(aud, list):
+            aud_matches = expected_aud in aud
+        else:
+            aud_matches = aud == expected_aud
+        
+        if not aud_matches:
+            if debug:
+                import sys
+                print(f"DEBUG TOKEN:   Aud check FAILED: expected={expected_aud!r}, got={aud!r}", file=sys.stderr, flush=True)
+            raise ValueError(f"Invalid audience: expected {expected_aud}, got {aud}")
+        elif debug:
+            import sys
+            print(f"DEBUG TOKEN:   Aud check PASSED: {aud}", file=sys.stderr, flush=True)
+    elif debug and aud:
+        import sys
+        print(f"DEBUG TOKEN:   Audience: {aud} (no expected_aud specified)", file=sys.stderr, flush=True)
+    
+    # Step 11: Extract cnf.jwk (already in payload)
+    cnf = payload.get("cnf")
+    if not cnf:
+        raise ValueError("Token missing 'cnf' claim")
+    
+    cnf_jwk = cnf.get("jwk")
+    if not cnf_jwk:
+        raise ValueError("Token missing 'cnf.jwk' claim")
+    
+    if debug:
+        import sys
+        print(f"DEBUG TOKEN:   Agent token verification SUCCESS", file=sys.stderr, flush=True)
+        print(f"DEBUG TOKEN:   Extracted claims:", file=sys.stderr, flush=True)
+        for key, value in payload.items():
+            if key == "cnf":
+                print(f"DEBUG TOKEN:     {key}: {json.dumps(value, indent=6)}", file=sys.stderr, flush=True)
+            else:
+                print(f"DEBUG TOKEN:     {key}: {value}", file=sys.stderr, flush=True)
+    
+    # Return verified claims (including cnf.jwk for HTTPSig verification)
+    return payload
+
+
 def parse_token_claims(token: str) -> Dict[str, Any]:
     """Parse token claims without verification (for inspection).
     

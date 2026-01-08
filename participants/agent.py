@@ -17,6 +17,7 @@ from core import _is_debug_enabled, _is_http_debug_enabled
 import json
 import re
 import threading
+import time
 
 
 class Agent:
@@ -49,6 +50,9 @@ class Agent:
         self._manual_consent_event = None  # threading.Event to wait for callback (cross-thread safe)
         self._manual_consent_result = None  # Store auth token result
         
+        # Phase 6: Agent delegation - track issued agent tokens
+        self.issued_agent_tokens: Dict[str, Dict[str, Any]] = {}  # sub -> token details
+        
         # Create FastAPI app
         self.app = FastAPI(title="AAuth Agent")
         
@@ -79,6 +83,21 @@ class Agent:
         async def callback(request: Request):
             """OAuth callback endpoint for Phase 4 user delegation flow."""
             return await self._handle_callback(request)
+        
+        @self.app.post("/delegate/token")
+        async def delegate_token(request: Request):
+            """Issue agent token to delegate (Phase 6: agent delegation).
+            
+            Request body (JSON):
+            {
+                "sub": "delegate-identifier",
+                "cnf_jwk": { ... },
+                "aud": "optional-audience"
+            }
+            
+            Returns agent token (agent+jwt).
+            """
+            return await self._handle_delegate_token_request(request)
         
         @self.app.post("/request")
         async def remote_request(request: Request):
@@ -1072,6 +1091,108 @@ class Agent:
             content="<html><body><h1>Error</h1><p>No code or error parameter</p></body></html>",
             status_code=400
         )
+    
+    async def _handle_delegate_token_request(self, request: Request):
+        """Handle request from delegate for agent token (Phase 6: agent delegation).
+        
+        For demo purposes, this accepts a simple JSON request with delegate's public key.
+        In production, this would require proper authentication/authorization.
+        """
+        from fastapi.responses import JSONResponse
+        import json
+        
+        debug = _is_debug_enabled()
+        http_debug = _is_http_debug_enabled()
+        
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(">>> AGENT SERVER REQUEST received (delegate token)", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"{request.method} {request.url.path} HTTP/1.1", file=sys.stderr)
+            for name, value in sorted(request.headers.items()):
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        try:
+            body_data = await request.json()
+        except Exception as e:
+            if debug:
+                print(f"DEBUG AGENT: Failed to parse request body: {e}", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": f"Failed to parse request body: {e}"}
+            )
+        
+        if debug:
+            print(f"DEBUG AGENT: Delegate token request: {json.dumps(body_data, indent=2)}", file=sys.stderr, flush=True)
+        
+        # Extract parameters
+        delegate_sub = body_data.get("sub")
+        cnf_jwk = body_data.get("cnf_jwk")
+        aud = body_data.get("aud")
+        
+        if not delegate_sub:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "Missing 'sub' parameter (delegate identifier)"}
+            )
+        
+        if not cnf_jwk:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "Missing 'cnf_jwk' parameter (delegate's public key)"}
+            )
+        
+        if debug:
+            print(f"DEBUG AGENT: Issuing agent token:", file=sys.stderr, flush=True)
+            print(f"DEBUG AGENT:   Delegate sub: {delegate_sub}", file=sys.stderr, flush=True)
+            print(f"DEBUG AGENT:   Delegate JWK: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
+            if aud:
+                print(f"DEBUG AGENT:   Audience: {aud}", file=sys.stderr, flush=True)
+        
+        # Issue agent token
+        from core.tokens import create_agent_token
+        
+        agent_token = create_agent_token(
+            iss=self.agent_id,
+            sub=delegate_sub,
+            cnf_jwk=cnf_jwk,
+            private_key=self.private_key,
+            kid=self.kid,
+            exp=None,  # Default 1 hour
+            aud=aud
+        )
+        
+        # Store token details for tracking
+        self.issued_agent_tokens[delegate_sub] = {
+            "sub": delegate_sub,
+            "cnf_jwk": cnf_jwk,
+            "issued_at": int(time.time()),
+            "aud": aud
+        }
+        
+        if debug:
+            print(f"DEBUG AGENT: Agent token issued: {agent_token[:100]}...", file=sys.stderr, flush=True)
+        
+        response_data = {
+            "agent_token": agent_token,
+            "expires_in": 3600  # 1 hour
+        }
+        
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print("<<< AGENT SERVER RESPONSE", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"HTTP/1.1 200 OK", file=sys.stderr)
+            print(f"Content-Type: application/json", file=sys.stderr)
+            print(f"\n[Body]", file=sys.stderr)
+            print(json.dumps(response_data, indent=2), file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        return JSONResponse(content=response_data)
     
     async def _handle_remote_request(self, request: Request):
         """Handle remote request endpoint - make signed request to resource using agent's keys."""

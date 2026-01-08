@@ -10,6 +10,7 @@ This project implements the AAuth protocol incrementally, phase by phase:
 - **Phase 3**: Autonomous authorization (full token flow)
 - **Phase 4**: User delegation (OAuth-like authorization code flow)
 - **Phase 5**: Agent is Resource (SSO and unified token flow)
+- **Phase 6**: Agent Delegation (agent tokens for distributed instances)
 
 ## Quick Start
 
@@ -80,6 +81,15 @@ python demo_phase5.py
 python demo_phase5.py --manual
 ```
 
+#### Phase 6: Agent Delegation
+
+Demonstrates agent delegation where agent servers issue agent tokens to delegates:
+
+**Automated mode**:
+```bash
+python demo_phase6.py
+```
+
 ## Testing
 
 Run all tests:
@@ -94,6 +104,7 @@ pytest tests/test_phase2.py -v
 pytest tests/test_phase3.py -v
 pytest tests/test_phase4.py -v
 pytest tests/test_phase5.py -v
+pytest tests/test_phase6.py -v
 ```
 
 ## Phase Overview
@@ -140,6 +151,16 @@ See [PHASE4.md](PHASE4.md) for detailed documentation.
 
 See [PHASE5.md](PHASE5.md) for detailed documentation.
 
+### Phase 6: Agent Delegation
+- Agent servers issue agent tokens (`agent+jwt`) to agent delegates
+- Delegates use `scheme=jwt` with agent tokens to sign requests
+- Resources and auth servers validate agent tokens per SPEC.md Section 5.7
+- Delegates share agent server's identity but use ephemeral keys
+- Delegate identifier (`sub`) persists across key rotations
+- Auth tokens include `agent_delegate` claim when issued to delegates
+
+See [PHASE6.md](PHASE6.md) for detailed documentation.
+
 ## Running Individual Participants
 
 ### Run Resource Server:
@@ -174,6 +195,7 @@ aauth/
 - [PHASE3.md](PHASE3.md) - Phase 3 implementation details
 - [PHASE4.md](PHASE4.md) - Phase 4 implementation details
 - [PHASE5.md](PHASE5.md) - Phase 5 implementation details
+- [PHASE6.md](PHASE6.md) - Phase 6 implementation details
 - [SPEC.md](SPEC.md) - AAuth protocol specification
 - [PLAN.md](PLAN.md) - Overall implementation plan
 

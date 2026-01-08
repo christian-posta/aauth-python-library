@@ -432,139 +432,188 @@ def verify_signature(
                 print(f"DEBUG VERIFY:   Failed to parse JWT: {e}", file=sys.stderr, flush=True)
             return False
         
-        # Check typ claim (must be auth+jwt for resource access)
+        # Check typ claim - support both agent+jwt and auth+jwt (Phase 6: agent delegation)
         typ = header.get("typ")
         if debug:
             print(f"DEBUG VERIFY:   Typ claim: {typ}", file=sys.stderr, flush=True)
         
-        if typ != "auth+jwt":
+        if typ not in ("agent+jwt", "auth+jwt"):
             if debug:
-                print(f"DEBUG VERIFY:   Typ check FAILED: expected=auth+jwt, got={typ}", file=sys.stderr, flush=True)
+                print(f"DEBUG VERIFY:   Typ check FAILED: expected=agent+jwt or auth+jwt, got={typ}", file=sys.stderr, flush=True)
             return False
         
         if debug:
             print(f"DEBUG VERIFY:   Typ check PASSED: {typ}", file=sys.stderr, flush=True)
         
-        # Extract cnf.jwk from payload
-        cnf = payload.get("cnf")
-        if not cnf:
+        # Phase 6: Route to appropriate validator based on token type
+        if typ == "agent+jwt":
+            # Validate as agent token (Phase 6: agent delegation)
             if debug:
-                print(f"DEBUG VERIFY:   Missing cnf claim in JWT payload", file=sys.stderr, flush=True)
-            return False
-        
-        cnf_jwk = cnf.get("jwk")
-        if not cnf_jwk:
-            if debug:
-                print(f"DEBUG VERIFY:   Missing cnf.jwk claim in JWT payload", file=sys.stderr, flush=True)
-            return False
-        
-        if debug:
-            import json
-            print(f"DEBUG VERIFY:   Extracted cnf.jwk: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
-        
-        # Verify JWT signature using auth server's JWKS
-        iss = payload.get("iss")
-        if not iss:
-            if debug:
-                print(f"DEBUG VERIFY:   Missing iss claim in JWT payload", file=sys.stderr, flush=True)
-            return False
-        
-        kid = header.get("kid")
-        if not kid:
-            if debug:
-                print(f"DEBUG VERIFY:   Missing kid in JWT header", file=sys.stderr, flush=True)
-            return False
-        
-        if debug:
-            print(f"DEBUG VERIFY:   Verifying JWT signature using auth server JWKS", file=sys.stderr, flush=True)
-            print(f"DEBUG VERIFY:     Issuer (auth server): {iss}", file=sys.stderr, flush=True)
-            print(f"DEBUG VERIFY:     Key ID: {kid}", file=sys.stderr, flush=True)
-        
-        # Fetch auth server JWKS
-        # jwks_fetcher interface: for jwt scheme, it should accept (issuer_url, None) or similar
-        # We'll try calling it with issuer URL
-        try:
-            # Try calling with issuer URL (for auth server JWKS)
-            auth_jwks = jwks_fetcher(iss, None) if callable(jwks_fetcher) else None
-            if not auth_jwks:
-                # Try alternative: jwks_fetcher might be a dict mapping issuer -> JWKS fetcher
-                # Or it might accept just the issuer URL
-                if debug:
-                    print(f"DEBUG VERIFY:   Attempting to fetch auth server JWKS from {iss}", file=sys.stderr, flush=True)
-                # For now, we'll need to handle this in the caller
-                # But let's try a simple approach: if jwks_fetcher is callable with one arg
-                try:
-                    auth_jwks = jwks_fetcher(iss) if callable(jwks_fetcher) else None
-                except:
-                    auth_jwks = None
+                print(f"DEBUG VERIFY:   Validating as agent token (agent+jwt)", file=sys.stderr, flush=True)
             
-            if not auth_jwks:
+            # Import agent token validator
+            from .tokens import verify_agent_token
+            
+            # jwks_fetcher for agent tokens should fetch agent server's JWKS
+            # The jwks_fetcher passed in might be for auth servers, so we need to handle both
+            # For agent tokens, we need to fetch from the agent server (iss claim)
+            try:
+                # Verify agent token
+                agent_claims = verify_agent_token(
+                    token=jwt_token,
+                    jwks_fetcher=jwks_fetcher,
+                    expected_aud=None  # Could be enhanced to check audience
+                )
+                
                 if debug:
-                    print(f"DEBUG VERIFY:   Failed to fetch auth server JWKS", file=sys.stderr, flush=True)
+                    print(f"DEBUG VERIFY:   Agent token validation PASSED", file=sys.stderr, flush=True)
+                    print(f"DEBUG VERIFY:   Agent server (iss): {agent_claims.get('iss')}", file=sys.stderr, flush=True)
+                    print(f"DEBUG VERIFY:   Agent delegate (sub): {agent_claims.get('sub')}", file=sys.stderr, flush=True)
+                
+                # Extract cnf.jwk from validated agent token
+                cnf = agent_claims.get("cnf")
+                if not cnf:
+                    if debug:
+                        print(f"DEBUG VERIFY:   Missing cnf claim in agent token", file=sys.stderr, flush=True)
+                    return False
+                
+                cnf_jwk = cnf.get("jwk")
+                if not cnf_jwk:
+                    if debug:
+                        print(f"DEBUG VERIFY:   Missing cnf.jwk claim in agent token", file=sys.stderr, flush=True)
+                    return False
+                
+                if debug:
+                    import json
+                    print(f"DEBUG VERIFY:   Extracted cnf.jwk from agent token: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
+                
+            except Exception as e:
+                if debug:
+                    print(f"DEBUG VERIFY:   Agent token validation FAILED: {e}", file=sys.stderr, flush=True)
+                    import traceback
+                    traceback.print_exc()
+                return False
+        
+        elif typ == "auth+jwt":
+            # Validate as auth token (Phase 3/4/5: existing logic)
+            if debug:
+                print(f"DEBUG VERIFY:   Validating as auth token (auth+jwt)", file=sys.stderr, flush=True)
+            
+            # Extract cnf.jwk from payload
+            cnf = payload.get("cnf")
+            if not cnf:
+                if debug:
+                    print(f"DEBUG VERIFY:   Missing cnf claim in JWT payload", file=sys.stderr, flush=True)
+                return False
+            
+            cnf_jwk = cnf.get("jwk")
+            if not cnf_jwk:
+                if debug:
+                    print(f"DEBUG VERIFY:   Missing cnf.jwk claim in JWT payload", file=sys.stderr, flush=True)
                 return False
             
             if debug:
                 import json
-                print(f"DEBUG VERIFY:   Auth server JWKS received: {json.dumps(auth_jwks, indent=2)}", file=sys.stderr, flush=True)
-        except Exception as e:
-            if debug:
-                print(f"DEBUG VERIFY:   Error fetching auth server JWKS: {e}", file=sys.stderr, flush=True)
-            return False
-        
-        # Find signing key by kid
-        keys = auth_jwks.get("keys", [])
-        signing_key = None
-        for key in keys:
-            if key.get("kid") == kid:
-                signing_key = key
-                break
-        
-        if not signing_key:
-            if debug:
-                print(f"DEBUG VERIFY:   Key with kid={kid} not found in auth server JWKS", file=sys.stderr, flush=True)
-            return False
-        
-        if debug:
-            import json
-            print(f"DEBUG VERIFY:   Found signing key: {json.dumps(signing_key, indent=2)}", file=sys.stderr, flush=True)
-        
-        # Verify JWT signature
-        from .crypto_utils import jwk_to_public_key
-        auth_public_key = jwk_to_public_key(signing_key)
-        
-        if debug:
-            print(f"DEBUG VERIFY:   Verifying JWT signature with auth server public key", file=sys.stderr, flush=True)
-        
-        try:
-            jwt.decode(
-                jwt_token,
-                auth_public_key,
-                algorithms=["EdDSA"],
-                options={"verify_signature": True, "verify_exp": False, "verify_aud": False}  # We'll check exp and aud separately
-            )
-            if debug:
-                print(f"DEBUG VERIFY:   JWT signature verification PASSED", file=sys.stderr, flush=True)
-        except jwt.ExpiredSignatureError:
-            if debug:
-                print(f"DEBUG VERIFY:   JWT has expired", file=sys.stderr, flush=True)
-            return False
-        except jwt.InvalidSignatureError as e:
-            if debug:
-                print(f"DEBUG VERIFY:   JWT signature verification FAILED: {e}", file=sys.stderr, flush=True)
-            return False
-        
-        # Check expiration
-        exp = payload.get("exp")
-        if exp:
-            now = int(time.time())
-            if now >= exp:
+                print(f"DEBUG VERIFY:   Extracted cnf.jwk: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
+            
+            # Verify JWT signature using auth server's JWKS
+            iss = payload.get("iss")
+            if not iss:
                 if debug:
-                    print(f"DEBUG VERIFY:   JWT expiration check FAILED: exp={exp}, now={now}", file=sys.stderr, flush=True)
+                    print(f"DEBUG VERIFY:   Missing iss claim in JWT payload", file=sys.stderr, flush=True)
                 return False
+            
+            kid = header.get("kid")
+            if not kid:
+                if debug:
+                    print(f"DEBUG VERIFY:   Missing kid in JWT header", file=sys.stderr, flush=True)
+                return False
+            
             if debug:
-                print(f"DEBUG VERIFY:   JWT expiration check PASSED: exp={exp}, now={now}, time until expiration: {exp - now} seconds", file=sys.stderr, flush=True)
+                print(f"DEBUG VERIFY:   Verifying JWT signature using auth server JWKS", file=sys.stderr, flush=True)
+                print(f"DEBUG VERIFY:     Issuer (auth server): {iss}", file=sys.stderr, flush=True)
+                print(f"DEBUG VERIFY:     Key ID: {kid}", file=sys.stderr, flush=True)
+            
+            # Fetch auth server JWKS
+            try:
+                # Try calling with issuer URL (for auth server JWKS)
+                auth_jwks = jwks_fetcher(iss, None) if callable(jwks_fetcher) else None
+                if not auth_jwks:
+                    # Try alternative: jwks_fetcher might accept just the issuer URL
+                    if debug:
+                        print(f"DEBUG VERIFY:   Attempting to fetch auth server JWKS from {iss}", file=sys.stderr, flush=True)
+                    try:
+                        auth_jwks = jwks_fetcher(iss) if callable(jwks_fetcher) else None
+                    except:
+                        auth_jwks = None
+                
+                if not auth_jwks:
+                    if debug:
+                        print(f"DEBUG VERIFY:   Failed to fetch auth server JWKS", file=sys.stderr, flush=True)
+                    return False
+                
+                if debug:
+                    import json
+                    print(f"DEBUG VERIFY:   Auth server JWKS received: {json.dumps(auth_jwks, indent=2)}", file=sys.stderr, flush=True)
+            except Exception as e:
+                if debug:
+                    print(f"DEBUG VERIFY:   Error fetching auth server JWKS: {e}", file=sys.stderr, flush=True)
+                return False
+            
+            # Find signing key by kid
+            keys = auth_jwks.get("keys", [])
+            signing_key = None
+            for key in keys:
+                if key.get("kid") == kid:
+                    signing_key = key
+                    break
+            
+            if not signing_key:
+                if debug:
+                    print(f"DEBUG VERIFY:   Key with kid={kid} not found in auth server JWKS", file=sys.stderr, flush=True)
+                return False
+            
+            if debug:
+                import json
+                print(f"DEBUG VERIFY:   Found signing key: {json.dumps(signing_key, indent=2)}", file=sys.stderr, flush=True)
+            
+            # Verify JWT signature
+            from .crypto_utils import jwk_to_public_key
+            auth_public_key = jwk_to_public_key(signing_key)
+            
+            if debug:
+                print(f"DEBUG VERIFY:   Verifying JWT signature with auth server public key", file=sys.stderr, flush=True)
+            
+            try:
+                jwt.decode(
+                    jwt_token,
+                    auth_public_key,
+                    algorithms=["EdDSA"],
+                    options={"verify_signature": True, "verify_exp": False, "verify_aud": False}  # We'll check exp and aud separately
+                )
+                if debug:
+                    print(f"DEBUG VERIFY:   JWT signature verification PASSED", file=sys.stderr, flush=True)
+            except jwt.ExpiredSignatureError:
+                if debug:
+                    print(f"DEBUG VERIFY:   JWT has expired", file=sys.stderr, flush=True)
+                return False
+            except jwt.InvalidSignatureError as e:
+                if debug:
+                    print(f"DEBUG VERIFY:   JWT signature verification FAILED: {e}", file=sys.stderr, flush=True)
+                return False
+            
+            # Check expiration
+            exp = payload.get("exp")
+            if exp:
+                now = int(time.time())
+                if now >= exp:
+                    if debug:
+                        print(f"DEBUG VERIFY:   JWT expiration check FAILED: exp={exp}, now={now}", file=sys.stderr, flush=True)
+                    return False
+                if debug:
+                    print(f"DEBUG VERIFY:   JWT expiration check PASSED: exp={exp}, now={now}, time until expiration: {exp - now} seconds", file=sys.stderr, flush=True)
         
-        # Convert cnf.jwk to public key for HTTPSig verification
+        # Convert cnf.jwk to public key for HTTPSig verification (common for both token types)
         if debug:
             print(f"DEBUG VERIFY:   Converting cnf.jwk to public key for HTTPSig verification", file=sys.stderr, flush=True)
         

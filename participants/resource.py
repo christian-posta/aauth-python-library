@@ -219,33 +219,93 @@ class Resource:
                 return await self._issue_resource_token_challenge(request, method, scheme, params)
         else:
             # Verify scheme matches required scheme (for backward compatibility)
+            # Phase 6: When identity is required (required_scheme == "jwks"), also accept scheme=jwt with agent token
             if required_scheme and scheme != required_scheme:
-                if _is_debug_enabled():
-                    print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme}", file=sys.stderr, flush=True)
-                
-                # Build appropriate Agent-Auth challenge based on required scheme
-                # Per SPEC.md Section 4:
-                # - httpsig = any scheme (pseudonymous)
-                # - httpsig; identity=?1 = requires identity (jwks, x509, or jwt with agent token)
-                # - httpsig; auth-token = requires authorization (jwt with auth token)
-                if required_scheme == "jwks":
-                    agent_auth_value = "httpsig; identity=?1"
-                elif required_scheme == "jwt":
-                    # This shouldn't happen here (handled by require_auth_token above)
-                    # But if it does, we'd need resource_token and auth_server
-                    agent_auth_value = "httpsig; identity=?1"  # Fallback to identity requirement
+                # Phase 6: Check if scheme=jwt contains an agent token (acceptable for identity requirement)
+                if required_scheme == "jwks" and scheme == "jwt":
+                    jwt_token = params.get("jwt")
+                    if jwt_token:
+                        # Parse token header to check if it's an agent token
+                        try:
+                            import jwt as jwt_lib
+                            header = jwt_lib.get_unverified_header(jwt_token)
+                            typ = header.get("typ")
+                            
+                            if typ == "agent+jwt":
+                                # Phase 6: Agent token is acceptable for identity requirement (SPEC.md Section 4.2)
+                                if _is_debug_enabled():
+                                    print(f"DEBUG RESOURCE: scheme=jwt with agent token is acceptable for identity requirement", file=sys.stderr, flush=True)
+                                # Continue with validation (don't reject)
+                            else:
+                                # Not an agent token, reject
+                                if _is_debug_enabled():
+                                    print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme} (not agent token)", file=sys.stderr, flush=True)
+                                
+                                agent_auth_value = "httpsig; identity=?1"
+                                response = Response(
+                                    status_code=401,
+                                    headers={"Agent-Auth": agent_auth_value},
+                                    content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
+                                )
+                                if _is_http_debug_enabled():
+                                    self._print_response_debug(response)
+                                return response
+                        except Exception as e:
+                            # Failed to parse token, reject
+                            if _is_debug_enabled():
+                                print(f"DEBUG RESOURCE: Failed to parse JWT token: {e}", file=sys.stderr, flush=True)
+                            
+                            agent_auth_value = "httpsig; identity=?1"
+                            response = Response(
+                                status_code=401,
+                                headers={"Agent-Auth": agent_auth_value},
+                                content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
+                            )
+                            if _is_http_debug_enabled():
+                                self._print_response_debug(response)
+                            return response
+                    else:
+                        # No jwt parameter, reject
+                        if _is_debug_enabled():
+                            print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme} (no jwt parameter)", file=sys.stderr, flush=True)
+                        
+                        agent_auth_value = "httpsig; identity=?1"
+                        response = Response(
+                            status_code=401,
+                            headers={"Agent-Auth": agent_auth_value},
+                            content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
+                        )
+                        if _is_http_debug_enabled():
+                            self._print_response_debug(response)
+                        return response
                 else:
-                    # required_scheme == "hwk" or None - any signature is fine
-                    agent_auth_value = "httpsig"
-                
-                response = Response(
-                    status_code=401,
-                    headers={"Agent-Auth": agent_auth_value},
-                    content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
-                )
-                if _is_http_debug_enabled():
-                    self._print_response_debug(response)
-                return response
+                    # Not the special case, reject normally
+                    if _is_debug_enabled():
+                        print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme}", file=sys.stderr, flush=True)
+                    
+                    # Build appropriate Agent-Auth challenge based on required scheme
+                    # Per SPEC.md Section 4:
+                    # - httpsig = any scheme (pseudonymous)
+                    # - httpsig; identity=?1 = requires identity (jwks, x509, or jwt with agent token)
+                    # - httpsig; auth-token = requires authorization (jwt with auth token)
+                    if required_scheme == "jwks":
+                        agent_auth_value = "httpsig; identity=?1"
+                    elif required_scheme == "jwt":
+                        # This shouldn't happen here (handled by require_auth_token above)
+                        # But if it does, we'd need resource_token and auth_server
+                        agent_auth_value = "httpsig; identity=?1"  # Fallback to identity requirement
+                    else:
+                        # required_scheme == "hwk" or None - any signature is fine
+                        agent_auth_value = "httpsig"
+                    
+                    response = Response(
+                        status_code=401,
+                        headers={"Agent-Auth": agent_auth_value},
+                        content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
+                    )
+                    if _is_http_debug_enabled():
+                        self._print_response_debug(response)
+                    return response
         
         # Build target URI
         target_uri = str(request.url)
@@ -413,46 +473,117 @@ class Resource:
             return response
         
         elif scheme == "jwt":
-            # Auth token verification
+            # JWT token verification (Phase 6: supports both agent tokens and auth tokens)
             if _is_debug_enabled():
-                print(f"DEBUG RESOURCE: sig=jwt - validating auth token", file=sys.stderr, flush=True)
+                print(f"DEBUG RESOURCE: sig=jwt - validating JWT token", file=sys.stderr, flush=True)
             
             jwt_token = params.get("jwt")
             if not jwt_token:
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig; auth-token"},
+                    headers={"Agent-Auth": "httpsig; identity=?1"},
                     content="Missing jwt parameter in Signature-Key for sig=jwt"
                 )
                 if _is_http_debug_enabled():
                     self._print_response_debug(response)
                 return response
             
-            # Validate auth token
-            auth_token_valid, auth_claims = await self._verify_auth_token(jwt_token, method, target_uri, headers_dict, body, signature_input_header, signature_header, signature_key_header)
-            
-            if not auth_token_valid:
+            # Parse token header to determine type
+            try:
+                import jwt as jwt_lib
+                header = jwt_lib.get_unverified_header(jwt_token)
+                typ = header.get("typ")
+                
+                if _is_debug_enabled():
+                    print(f"DEBUG RESOURCE:   Token type: {typ}", file=sys.stderr, flush=True)
+            except Exception as e:
+                if _is_debug_enabled():
+                    print(f"DEBUG RESOURCE:   Failed to parse token header: {e}", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig; auth-token"},
-                    content="Invalid or expired auth token"
+                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    content="Invalid JWT token"
                 )
                 if _is_http_debug_enabled():
                     self._print_response_debug(response)
                 return response
             
-            # Auth token valid - return data
-            response = JSONResponse({
-                "message": "Access granted",
-                "data": "This is protected data (authorized)",
-                "scheme": "jwt",
-                "method": method,
-                "agent": auth_claims.get("agent"),
-                "scope": auth_claims.get("scope")
-            })
-            if _is_http_debug_enabled():
-                self._print_response_debug(response)
-            return response
+            # Route to appropriate validator based on token type
+            if typ == "agent+jwt":
+                # Phase 6: Agent token (delegated identity)
+                if _is_debug_enabled():
+                    print(f"DEBUG RESOURCE:   Validating as agent token (agent+jwt)", file=sys.stderr, flush=True)
+                
+                # Verify agent token and HTTPSig signature
+                agent_token_valid, agent_claims = await self._verify_agent_token(jwt_token, method, target_uri, headers_dict, body, signature_input_header, signature_header, signature_key_header)
+                
+                if not agent_token_valid:
+                    response = Response(
+                        status_code=401,
+                        headers={"Agent-Auth": "httpsig; identity=?1"},
+                        content="Invalid or expired agent token"
+                    )
+                    if _is_http_debug_enabled():
+                        self._print_response_debug(response)
+                    return response
+                
+                # Agent token valid - return data (identified request)
+                response = JSONResponse({
+                    "message": "Access granted",
+                    "data": "This is protected data (identified via agent token)",
+                    "scheme": "jwt",
+                    "token_type": "agent+jwt",
+                    "method": method,
+                    "agent": agent_claims.get("iss"),  # Agent server identifier
+                    "agent_delegate": agent_claims.get("sub")  # Delegate identifier
+                })
+                if _is_http_debug_enabled():
+                    self._print_response_debug(response)
+                return response
+            
+            elif typ == "auth+jwt":
+                # Phase 3/4/5: Auth token (authorized request)
+                if _is_debug_enabled():
+                    print(f"DEBUG RESOURCE:   Validating as auth token (auth+jwt)", file=sys.stderr, flush=True)
+                
+                # Validate auth token
+                auth_token_valid, auth_claims = await self._verify_auth_token(jwt_token, method, target_uri, headers_dict, body, signature_input_header, signature_header, signature_key_header)
+                
+                if not auth_token_valid:
+                    response = Response(
+                        status_code=401,
+                        headers={"Agent-Auth": "httpsig; auth-token"},
+                        content="Invalid or expired auth token"
+                    )
+                    if _is_http_debug_enabled():
+                        self._print_response_debug(response)
+                    return response
+                
+                # Auth token valid - return data
+                response = JSONResponse({
+                    "message": "Access granted",
+                    "data": "This is protected data (authorized)",
+                    "scheme": "jwt",
+                    "token_type": "auth+jwt",
+                    "method": method,
+                    "agent": auth_claims.get("agent"),
+                    "agent_delegate": auth_claims.get("agent_delegate"),
+                    "scope": auth_claims.get("scope")
+                })
+                if _is_http_debug_enabled():
+                    self._print_response_debug(response)
+                return response
+            
+            else:
+                # Unknown token type
+                response = Response(
+                    status_code=401,
+                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    content=f"Unsupported token type: {typ}"
+                )
+                if _is_http_debug_enabled():
+                    self._print_response_debug(response)
+                return response
         
         else:
             response = Response(
@@ -708,6 +839,126 @@ class Resource:
         if _is_debug_enabled():
             print(f"DEBUG RESOURCE:   HTTPSig signature verification PASSED", file=sys.stderr, flush=True)
             print(f"DEBUG RESOURCE:   Auth token validation SUCCESS", file=sys.stderr, flush=True)
+        
+        return True, claims
+    
+    async def _verify_agent_token(
+        self,
+        jwt_token: str,
+        method: str,
+        target_uri: str,
+        headers_dict: Dict[str, str],
+        body: bytes,
+        signature_input_header: str,
+        signature_header: str,
+        signature_key_header: str
+    ) -> tuple[bool, Optional[Dict[str, Any]]]:
+        """Verify agent token and HTTPSig signature (Phase 6: agent delegation).
+        
+        Args:
+            jwt_token: Agent token JWT string
+            method: HTTP method
+            target_uri: Target URI
+            headers_dict: Request headers
+            body: Request body
+            signature_input_header: Signature-Input header
+            signature_header: Signature header
+            signature_key_header: Signature-Key header
+            
+        Returns:
+            Tuple of (is_valid, claims_dict)
+        """
+        import sys
+        
+        if _is_debug_enabled():
+            print(f"DEBUG RESOURCE: Verifying agent token:", file=sys.stderr, flush=True)
+            print(f"DEBUG RESOURCE:   Token (first 100 chars): {jwt_token[:100]}...", file=sys.stderr, flush=True)
+        
+        # Create JWKS fetcher for agent server
+        def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+            """Fetch agent server JWKS."""
+            try:
+                # Fetch agent server metadata
+                metadata_url = f"{issuer_url}/.well-known/aauth-agent"
+                metadata = fetch_metadata(metadata_url)
+                jwks_uri = metadata.get("jwks_uri")
+                if not jwks_uri:
+                    return None
+                
+                # Fetch JWKS
+                jwks_response = httpx.get(jwks_uri, timeout=10.0)
+                jwks_response.raise_for_status()
+                return jwks_response.json()
+            except Exception as e:
+                if _is_debug_enabled():
+                    print(f"DEBUG RESOURCE:   Error fetching agent server JWKS: {e}", file=sys.stderr, flush=True)
+                return None
+        
+        # Step 1: Verify agent token JWT signature
+        try:
+            from core.tokens import verify_agent_token
+            claims = verify_agent_token(
+                token=jwt_token,
+                jwks_fetcher=agent_jwks_fetcher,
+                expected_aud=None  # Could be enhanced to check audience
+            )
+            
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE:   Agent token JWT verification PASSED", file=sys.stderr, flush=True)
+                print(f"DEBUG RESOURCE:   Agent server (iss): {claims.get('iss')}", file=sys.stderr, flush=True)
+                print(f"DEBUG RESOURCE:   Agent delegate (sub): {claims.get('sub')}", file=sys.stderr, flush=True)
+        except Exception as e:
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE:   Agent token verification FAILED: {e}", file=sys.stderr, flush=True)
+                import traceback
+                traceback.print_exc()
+            return False, None
+        
+        # Step 2: Extract delegate's public key from cnf.jwk
+        cnf = claims.get("cnf", {})
+        cnf_jwk = cnf.get("jwk")
+        if not cnf_jwk:
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE:   Missing cnf.jwk in agent token", file=sys.stderr, flush=True)
+            return False, None
+        
+        if _is_debug_enabled():
+            import json
+            print(f"DEBUG RESOURCE:   Delegate's public key (cnf.jwk): {json.dumps(cnf_jwk)}", file=sys.stderr, flush=True)
+        
+        # Step 3: Convert JWK to public key
+        try:
+            from core.crypto_utils import jwk_to_public_key
+            delegate_public_key = jwk_to_public_key(cnf_jwk)
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE:   Converted cnf.jwk to public key", file=sys.stderr, flush=True)
+        except Exception as e:
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE:   Failed to convert cnf.jwk to public key: {e}", file=sys.stderr, flush=True)
+            return False, None
+        
+        # Step 4: Verify HTTPSig signature using delegate's public key
+        from core.httpsig import _verify_signature_manual
+        
+        is_valid = _verify_signature_manual(
+            method=method,
+            target_uri=target_uri,
+            headers=headers_dict,
+            body=body,
+            signature_input_header=signature_input_header,
+            signature_header=signature_header,
+            signature_key_header=signature_key_header,
+            public_key=delegate_public_key,
+            jwks_fetcher=None
+        )
+        
+        if not is_valid:
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE:   HTTPSig signature verification FAILED", file=sys.stderr, flush=True)
+            return False, None
+        
+        if _is_debug_enabled():
+            print(f"DEBUG RESOURCE:   HTTPSig signature verification PASSED", file=sys.stderr, flush=True)
         
         return True, claims
     
