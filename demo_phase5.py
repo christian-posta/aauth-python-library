@@ -38,25 +38,29 @@ async def main():
     if args.manual:
         print("\nMODE: Manual Browser Testing", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
-        print("This demo shows the agent-is-resource flow with manual browser interaction:", file=sys.stderr)
-        print("1. Agent requests self-authorization with scope (no resource_token)", file=sys.stderr)
-        print("2. Auth server returns request_token", file=sys.stderr)
-        print("3. **YOU WILL BE PROMPTED TO OPEN A URL IN YOUR BROWSER**", file=sys.stderr)
-        print("4. Authenticate and grant consent in the browser", file=sys.stderr)
-        print("5. Agent exchanges authorization code for auth token", file=sys.stderr)
-        print("6. Verify auth token claims (aud=agent, agent omitted, sub present)", file=sys.stderr)
+        print("This demo shows the agent-is-resource SSO flow with manual browser interaction:", file=sys.stderr)
+        print("1. User visits agent's website (simulated)", file=sys.stderr)
+        print("2. Agent detects user needs authentication and initiates SSO flow", file=sys.stderr)
+        print("3. Agent requests self-authorization with scope (no resource_token)", file=sys.stderr)
+        print("4. Auth server returns request_token", file=sys.stderr)
+        print("5. **YOU WILL BE PROMPTED TO OPEN A URL IN YOUR BROWSER**", file=sys.stderr)
+        print("6. Authenticate and grant consent in the browser", file=sys.stderr)
+        print("7. Agent exchanges authorization code for auth token", file=sys.stderr)
+        print("8. Verify auth token claims (aud=agent, agent omitted, sub present)", file=sys.stderr)
         print("\nDemo Credentials:", file=sys.stderr)
         print("  Username: testuser", file=sys.stderr)
         print("  Password: testpass", file=sys.stderr)
     else:
         print("\nMODE: Automated (with User Simulator)", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
-        print("This demo shows the complete agent-is-resource flow:", file=sys.stderr)
-        print("1. Agent requests self-authorization with scope (no resource_token)", file=sys.stderr)
-        print("2. Auth server returns request_token", file=sys.stderr)
-        print("3. User simulator completes consent flow automatically", file=sys.stderr)
-        print("4. Agent exchanges authorization code for auth token", file=sys.stderr)
-        print("5. Verify auth token claims (aud=agent, agent omitted, sub present)", file=sys.stderr)
+        print("This demo shows the complete agent-is-resource SSO flow:", file=sys.stderr)
+        print("1. User visits agent's website (simulated)", file=sys.stderr)
+        print("2. Agent detects user needs authentication and initiates SSO flow", file=sys.stderr)
+        print("3. Agent requests self-authorization with scope (no resource_token)", file=sys.stderr)
+        print("4. Auth server returns request_token", file=sys.stderr)
+        print("5. User simulator completes consent flow automatically", file=sys.stderr)
+        print("6. Agent exchanges authorization code for auth token", file=sys.stderr)
+        print("7. Verify auth token claims (aud=agent, agent omitted, sub present)", file=sys.stderr)
     
     print("\nDebug output is enabled by default.", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
@@ -95,26 +99,36 @@ async def main():
     # Track test results
     test_results = []
     
-    # Test 1: Agent requests self-authorization
+    # Test 1: User-initiated SSO flow (Agent is Resource)
     print("\n" + "=" * 80, file=sys.stderr)
     if args.manual:
         print("TEST 1: Agent is Resource Flow (Manual Browser Testing)", file=sys.stderr)
     else:
         print("TEST 1: Agent is Resource Flow (Automated)", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
-    print("Description: Agent requests self-authorization with scope, user grants consent,", file=sys.stderr)
-    print("             agent receives auth token with aud=agent and agent claim omitted.", file=sys.stderr)
+    print("Description: User visits agent's website, agent initiates SSO flow,", file=sys.stderr)
+    print("             user grants consent, agent receives auth token with", file=sys.stderr)
+    print("             aud=agent and agent claim omitted.", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
     
     test1_passed = False
     test1_error = None
     
     try:
-        # Request self-authorization
+        # Simulate user visiting agent's website
+        print("📱 User visits agent's website...", file=sys.stderr, flush=True)
+        await asyncio.sleep(0.5)
+        
+        # Agent detects user needs authentication (no session/token)
+        print("🔐 Agent detects user needs authentication", file=sys.stderr, flush=True)
+        print("   → Initiating SSO flow with auth server...", file=sys.stderr, flush=True)
+        await asyncio.sleep(0.5)
+        
+        # Request self-authorization (triggered by user's visit)
         scope = "profile email"
         redirect_uri = f"{agent_id}/callback"
         
-        print(f"Requesting self-authorization with scope: {scope}", file=sys.stderr, flush=True)
+        print(f"📤 Agent requests self-authorization with scope: {scope}", file=sys.stderr, flush=True)
         auth_token = await agent.request_self_authorization(
             scope=scope,
             auth_server=auth_id,

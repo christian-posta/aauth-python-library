@@ -9,6 +9,7 @@ This project implements the AAuth protocol incrementally, phase by phase:
 - **Phase 2**: Agent identity (JWKS-based identity verification)
 - **Phase 3**: Autonomous authorization (full token flow)
 - **Phase 4**: User delegation (OAuth-like authorization code flow)
+- **Phase 5**: Agent is Resource (SSO and unified token flow)
 
 ## Quick Start
 
@@ -65,6 +66,20 @@ python demo_phase4.py
 python demo_phase4.py --manual
 ```
 
+#### Phase 5: Agent is Resource
+
+Demonstrates agent authenticating users to itself for SSO and API access:
+
+**Automated mode** (uses user simulator):
+```bash
+python demo_phase5.py
+```
+
+**Manual mode** (browser-based testing):
+```bash
+python demo_phase5.py --manual
+```
+
 ## Testing
 
 Run all tests:
@@ -78,6 +93,7 @@ pytest tests/test_phase1.py -v
 pytest tests/test_phase2.py -v
 pytest tests/test_phase3.py -v
 pytest tests/test_phase4.py -v
+pytest tests/test_phase5.py -v
 ```
 
 ## Phase Overview
@@ -115,6 +131,15 @@ See [PHASE3.md](PHASE3.md) for detailed documentation.
 
 See [PHASE4.md](PHASE4.md) for detailed documentation.
 
+### Phase 5: Agent is Resource
+- Agent requests authorization directly with `scope` (no `resource_token`)
+- Agent identifier matches resource identifier (agent authenticates users to itself)
+- Auth token has `aud` = agent identifier and `agent` claim omitted
+- Unified token serves both SSO (user identity) and API access purposes
+- Solves OIDC limitation where ID tokens and access tokens are separate
+
+See [PHASE5.md](PHASE5.md) for detailed documentation.
+
 ## Running Individual Participants
 
 ### Run Resource Server:
@@ -148,6 +173,7 @@ aauth/
 - [PHASE2.md](PHASE2.md) - Phase 2 implementation details
 - [PHASE3.md](PHASE3.md) - Phase 3 implementation details
 - [PHASE4.md](PHASE4.md) - Phase 4 implementation details
+- [PHASE5.md](PHASE5.md) - Phase 5 implementation details
 - [SPEC.md](SPEC.md) - AAuth protocol specification
 - [PLAN.md](PLAN.md) - Overall implementation plan
 
