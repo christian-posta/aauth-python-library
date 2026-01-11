@@ -1249,6 +1249,310 @@ class Resource:
             pass
         print("=" * 80 + "\n", file=sys.stderr)
     
+    async def call_downstream_resource(
+        self,
+        downstream_url: str,
+        method: str = "GET",
+        upstream_auth_token: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+        body: Optional[bytes] = None
+    ) -> httpx.Response:
+        """Act as agent to call a downstream resource (Phase 7: Token Exchange).
+        
+        When this resource needs to call a downstream resource to fulfill a request,
+        it uses the upstream auth token to obtain a new token via token exchange.
+        
+        Args:
+            downstream_url: URL of the downstream resource
+            method: HTTP method
+            upstream_auth_token: Auth token from the upstream request
+            headers: Optional request headers
+            body: Optional request body
+            
+        Returns:
+            Response from downstream resource
+        """
+        debug = _is_debug_enabled()
+        http_debug = _is_http_debug_enabled()
+        
+        if headers is None:
+            headers = {}
+        
+        if body is None:
+            body = b""
+        
+        if debug:
+            print(f"DEBUG RESOURCE: Acting as agent to call downstream resource", file=sys.stderr, flush=True)
+            print(f"DEBUG RESOURCE:   Downstream URL: {downstream_url}", file=sys.stderr, flush=True)
+            print(f"DEBUG RESOURCE:   Method: {method}", file=sys.stderr, flush=True)
+            if upstream_auth_token:
+                print(f"DEBUG RESOURCE:   Upstream auth token: {upstream_auth_token[:100]}...", file=sys.stderr, flush=True)
+        
+        # Step 1: Send signed request with identity (scheme=jwks) to trigger resource_token challenge
+        from core.httpsig import sign_request
+        
+        # Sign the initial request with this resource's identity (scheme=jwks)
+        # Note: "well-known" uses hyphen as the kwarg key (Python allows this with **kwargs)
+        sig_headers = sign_request(
+            method=method,
+            target_uri=downstream_url,
+            headers=dict(headers),
+            body=body,
+            private_key=self.private_key,
+            sig_scheme="jwks",
+            id=self.resource_id,
+            kid=self.kid,
+            **{"well-known": "aauth-resource"}  # Resource uses aauth-resource metadata
+        )
+        
+        initial_headers = {**headers, **sig_headers}
+        
+        if debug:
+            print(f"DEBUG RESOURCE:   Sending initial request with scheme=jwks", file=sys.stderr, flush=True)
+        
+        async with httpx.AsyncClient() as client:
+            initial_response = await client.request(
+                method=method,
+                url=downstream_url,
+                headers=initial_headers,
+                content=body
+            )
+        
+        if initial_response.status_code != 401:
+            # Either access granted or error (not auth challenge)
+            if debug:
+                print(f"DEBUG RESOURCE:   Downstream resource returned {initial_response.status_code}", file=sys.stderr, flush=True)
+            return initial_response
+        
+        # Parse Agent-Auth challenge from response
+        agent_auth_header = initial_response.headers.get("Agent-Auth", "")
+        if debug:
+            print(f"DEBUG RESOURCE:   Received Agent-Auth challenge: {agent_auth_header}", file=sys.stderr, flush=True)
+        
+        # Extract resource_token and auth_server from challenge
+        # Format: httpsig; auth-token; resource_token="..."; auth_server="..."
+        import re
+        resource_token_match = re.search(r'resource_token="([^"]+)"', agent_auth_header)
+        auth_server_match = re.search(r'auth_server="([^"]+)"', agent_auth_header)
+        
+        if not resource_token_match:
+            if debug:
+                print(f"DEBUG RESOURCE:   No resource_token in challenge (may be identity challenge)", file=sys.stderr, flush=True)
+            return initial_response
+        
+        resource_token = resource_token_match.group(1)
+        auth_server = auth_server_match.group(1) if auth_server_match else None
+        
+        if debug:
+            print(f"DEBUG RESOURCE:   Resource token: {resource_token[:100]}...", file=sys.stderr, flush=True)
+            print(f"DEBUG RESOURCE:   Auth server: {auth_server}", file=sys.stderr, flush=True)
+        
+        if not auth_server:
+            if debug:
+                print(f"DEBUG RESOURCE:   No auth_server in challenge", file=sys.stderr, flush=True)
+            return initial_response
+        
+        if not upstream_auth_token:
+            if debug:
+                print(f"DEBUG RESOURCE:   No upstream auth token available for exchange", file=sys.stderr, flush=True)
+            return initial_response
+        
+        # Step 2: Exchange upstream token for downstream token
+        exchange_token = await self._exchange_token(
+            auth_server=auth_server,
+            resource_token=resource_token,
+            upstream_auth_token=upstream_auth_token
+        )
+        
+        if not exchange_token:
+            if debug:
+                print(f"DEBUG RESOURCE:   Token exchange failed", file=sys.stderr, flush=True)
+            return initial_response
+        
+        if debug:
+            print(f"DEBUG RESOURCE:   Token exchange successful: {exchange_token[:100]}...", file=sys.stderr, flush=True)
+        
+        # Step 3: Access downstream resource with new token
+        from core.httpsig import sign_request
+        
+        # Sign request with scheme=jwt using the exchanged token
+        sig_headers = sign_request(
+            method=method,
+            target_uri=downstream_url,
+            headers=dict(headers),
+            body=body,
+            private_key=self.private_key,
+            sig_scheme="jwt",
+            jwt=exchange_token
+        )
+        
+        # Add signature headers to request
+        request_headers = {**headers, **sig_headers}
+        
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f">>> RESOURCE (as agent) REQUEST to {downstream_url}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"{method} {downstream_url} HTTP/1.1", file=sys.stderr)
+            for name, value in sorted(request_headers.items()):
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            if body:
+                print(f"\n[Body ({len(body)} bytes)]", file=sys.stderr)
+                try:
+                    print(body.decode('utf-8'), file=sys.stderr)
+                except:
+                    print(f"[Binary body: {len(body)} bytes]", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        # Make final request with auth token
+        async with httpx.AsyncClient() as client:
+            final_response = await client.request(
+                method=method,
+                url=downstream_url,
+                headers=request_headers,
+                content=body
+            )
+        
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f"<<< DOWNSTREAM RESPONSE from {downstream_url}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"HTTP/1.1 {final_response.status_code} {final_response.reason_phrase}", file=sys.stderr)
+            for name, value in sorted(final_response.headers.items()):
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            if final_response.content:
+                print(f"\n[Body ({len(final_response.content)} bytes)]", file=sys.stderr)
+                try:
+                    print(final_response.text, file=sys.stderr)
+                except:
+                    print(f"[Binary body: {len(final_response.content)} bytes]", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        return final_response
+    
+    async def _exchange_token(
+        self,
+        auth_server: str,
+        resource_token: str,
+        upstream_auth_token: str
+    ) -> Optional[str]:
+        """Exchange upstream auth token for downstream auth token (Phase 7).
+        
+        Args:
+            auth_server: Downstream auth server URL
+            resource_token: Resource token from downstream resource's challenge
+            upstream_auth_token: Auth token from upstream request
+            
+        Returns:
+            Downstream auth token, or None if exchange failed
+        """
+        debug = _is_debug_enabled()
+        http_debug = _is_http_debug_enabled()
+        
+        if debug:
+            print(f"DEBUG RESOURCE: Exchanging token", file=sys.stderr, flush=True)
+            print(f"DEBUG RESOURCE:   Auth server: {auth_server}", file=sys.stderr, flush=True)
+        
+        # Build exchange request
+        token_endpoint = f"{auth_server}/agent/token"
+        request_body = f"request_type=exchange&resource_token={resource_token}"
+        request_body_bytes = request_body.encode('utf-8')
+        
+        from core.httpsig import sign_request
+        
+        # Build base headers - sign_request will add Content-Digest to this dict
+        base_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        
+        # Sign request with scheme=jwt using upstream auth token
+        # Note: sign_request modifies base_headers to add Content-Digest
+        sig_headers = sign_request(
+            method="POST",
+            target_uri=token_endpoint,
+            headers=base_headers,
+            body=request_body_bytes,
+            private_key=self.private_key,
+            sig_scheme="jwt",
+            jwt=upstream_auth_token
+        )
+        
+        # Combine base headers (now includes Content-Digest) with signature headers
+        request_headers = {
+            **base_headers,
+            **sig_headers
+        }
+        
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f">>> TOKEN EXCHANGE REQUEST to {token_endpoint}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"POST {token_endpoint} HTTP/1.1", file=sys.stderr)
+            for name, value in sorted(request_headers.items()):
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            print(f"\n[Body ({len(request_body_bytes)} bytes)]", file=sys.stderr)
+            print(request_body, file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        # Make exchange request
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                token_endpoint,
+                headers=request_headers,
+                content=request_body_bytes
+            )
+        
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print(f"<<< TOKEN EXCHANGE RESPONSE from {token_endpoint}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"HTTP/1.1 {response.status_code} {response.reason_phrase}", file=sys.stderr)
+            for name, value in sorted(response.headers.items()):
+                display_value = value
+                if len(display_value) > 100:
+                    display_value = display_value[:97] + "..."
+                print(f"{name}: {display_value}", file=sys.stderr)
+            if response.content:
+                print(f"\n[Body ({len(response.content)} bytes)]", file=sys.stderr)
+                try:
+                    print(response.text, file=sys.stderr)
+                except:
+                    print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        if response.status_code != 200:
+            if debug:
+                print(f"DEBUG RESOURCE:   Token exchange failed: {response.status_code}", file=sys.stderr, flush=True)
+                try:
+                    error_data = response.json()
+                    print(f"DEBUG RESOURCE:   Error: {json.dumps(error_data, indent=2)}", file=sys.stderr, flush=True)
+                except:
+                    print(f"DEBUG RESOURCE:   Error: {response.text}", file=sys.stderr, flush=True)
+            return None
+        
+        # Parse response
+        try:
+            response_data = response.json()
+            auth_token = response_data.get("auth_token")
+            
+            if debug:
+                print(f"DEBUG RESOURCE:   Token exchange successful", file=sys.stderr, flush=True)
+                if auth_token:
+                    print(f"DEBUG RESOURCE:   Auth token: {auth_token[:100]}...", file=sys.stderr, flush=True)
+            
+            return auth_token
+        except Exception as e:
+            if debug:
+                print(f"DEBUG RESOURCE:   Failed to parse response: {e}", file=sys.stderr, flush=True)
+            return None
+    
     def run(self):
         """Run the resource server."""
         import uvicorn

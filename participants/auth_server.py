@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import sys
 import os
 import json
@@ -22,12 +22,13 @@ from core import _is_debug_enabled, _is_http_debug_enabled
 class AuthServer:
     """Auth server that issues auth tokens for autonomous authorization."""
     
-    def __init__(self, auth_id: str, port: int = 8003, require_user_consent: bool = False):
+    def __init__(self, auth_id: str, port: int = 8003, require_user_consent: bool = False, trusted_auth_servers: Optional[List[str]] = None):
         """Initialize auth server.
         
         Args:
             auth_id: Auth server identifier (HTTPS URL)
             port: Port to run auth server on
+            trusted_auth_servers: List of trusted auth server identifiers for token exchange (Phase 7)
             require_user_consent: If True, require user consent for all requests (Phase 4 demo mode)
         """
         self.auth_id = auth_id
@@ -44,6 +45,10 @@ class AuthServer:
         self.users: Dict[str, Dict[str, str]] = {  # Simple in-memory user database
             "testuser": {"password": "testpass", "name": "Test User", "email": "testuser@example.com"}
         }
+        
+        # Phase 7: Federation trust - list of trusted auth servers for token exchange
+        # In production, this would be configured via policy or discovered via metadata
+        self.trusted_auth_servers: List[str] = trusted_auth_servers if trusted_auth_servers else []
         
         # Create FastAPI app
         self.app = FastAPI(title="AAuth Auth Server")
@@ -158,6 +163,10 @@ class AuthServer:
         # Phase 4: Handle authorization code exchange
         if request_type == "code":
             return await self._handle_code_exchange(request, params_dict, body_bytes)
+        
+        # Phase 7: Handle token exchange
+        if request_type == "exchange":
+            return await self._handle_token_exchange(request, params_dict, body_bytes)
         
         # Phase 3/4: Handle auth request (autonomous or user consent)
         if request_type != "auth":
@@ -828,7 +837,8 @@ class AuthServer:
         cnf_jwk: Dict[str, Any],
         sub: Optional[str] = None,
         agent_delegate: Optional[str] = None,
-        agent_is_resource: bool = False
+        agent_is_resource: bool = False,
+        act: Optional[Dict[str, Any]] = None
     ) -> str:
         """Issue auth token per AAuth spec Section 7.
         
@@ -840,6 +850,7 @@ class AuthServer:
             sub: Optional user identifier
             agent_delegate: Optional agent delegate identifier
             agent_is_resource: If True, omit 'agent' claim and set aud to agent identifier (Phase 5)
+            act: Optional actor claim for token exchange delegation chain (Phase 7)
             
         Returns:
             Signed auth token JWT string
@@ -857,6 +868,8 @@ class AuthServer:
                 print(f"DEBUG AUTH:   User (sub): {sub}", file=sys.stderr, flush=True)
             if agent_delegate:
                 print(f"DEBUG AUTH:   Agent delegate: {agent_delegate}", file=sys.stderr, flush=True)
+            if act:
+                print(f"DEBUG AUTH:   Actor (act): {json.dumps(act, indent=2)}", file=sys.stderr, flush=True)
         
         # Create auth token
         token = create_auth_token(
@@ -870,7 +883,8 @@ class AuthServer:
             exp=None,  # Default 1 hour
             sub=sub,
             agent_delegate=agent_delegate,
-            agent_is_resource=agent_is_resource
+            agent_is_resource=agent_is_resource,
+            act=act
         )
         
         if debug:
@@ -1300,6 +1314,441 @@ class AuthServer:
         if http_debug:
             print("\n" + "=" * 80, file=sys.stderr)
             print("<<< AUTH SERVER RESPONSE", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            print(f"HTTP/1.1 200 OK", file=sys.stderr)
+            print(f"Content-Type: application/json", file=sys.stderr)
+            print(f"\n[Body]", file=sys.stderr)
+            print(json.dumps(response_data, indent=2), file=sys.stderr)
+            print("=" * 80 + "\n", file=sys.stderr)
+        
+        return JSONResponse(content=response_data)
+    
+    async def _handle_token_exchange(
+        self,
+        request: Request,
+        params_dict: Dict[str, str],
+        body_bytes: bytes
+    ) -> Response:
+        """Handle token exchange (request_type=exchange) per AAuth spec Section 9.10.
+        
+        Enables multi-hop resource access. When a resource needs to call a downstream
+        resource, it exchanges the upstream auth token for a new token bound to its own key.
+        
+        The upstream auth token MUST be presented via scheme=jwt in the Signature-Key header.
+        """
+        debug = _is_debug_enabled()
+        http_debug = _is_http_debug_enabled()
+        
+        if debug:
+            print(f"DEBUG AUTH: Handling token exchange (request_type=exchange)", file=sys.stderr, flush=True)
+        
+        # Extract request parameters
+        resource_token = params_dict.get("resource_token")
+        
+        if not resource_token:
+            if debug:
+                print(f"DEBUG AUTH:   Missing resource_token parameter", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "Missing resource_token parameter"}
+            )
+        
+        if debug:
+            print(f"DEBUG AUTH:   Resource token: {resource_token[:100]}...", file=sys.stderr, flush=True)
+        
+        # Extract and parse signature headers
+        headers_dict = dict(request.headers)
+        method = request.method
+        target_uri = str(request.url)
+        
+        signature_input_header = headers_dict.get("signature-input", "")
+        signature_header = headers_dict.get("signature", "")
+        signature_key_header = headers_dict.get("signature-key", "")
+        
+        if not signature_input_header or not signature_header or not signature_key_header:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_request", "error_description": "Missing signature headers"}
+            )
+        
+        # Parse Signature-Key header
+        try:
+            parsed_key = parse_signature_key(signature_key_header)
+            scheme = parsed_key["scheme"]
+            key_params = parsed_key["params"]
+        except Exception as e:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_request", "error_description": f"Invalid Signature-Key: {e}"}
+            )
+        
+        if debug:
+            print(f"DEBUG AUTH:   Signature scheme: {scheme}", file=sys.stderr, flush=True)
+        
+        # Token exchange MUST use scheme=jwt with auth token
+        if scheme != "jwt":
+            if debug:
+                print(f"DEBUG AUTH:   Token exchange requires scheme=jwt, got {scheme}", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_request", "error_description": "Token exchange requires scheme=jwt with upstream auth token"}
+            )
+        
+        # Extract upstream auth token from Signature-Key
+        upstream_token = key_params.get("jwt")
+        if not upstream_token:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_request", "error_description": "Missing jwt parameter in Signature-Key"}
+            )
+        
+        if debug:
+            print(f"DEBUG AUTH:   Upstream token: {upstream_token[:100]}...", file=sys.stderr, flush=True)
+        
+        # Parse upstream token header to verify it's an auth token
+        try:
+            import jwt as jwt_lib
+            upstream_header = jwt_lib.get_unverified_header(upstream_token)
+            upstream_typ = upstream_header.get("typ")
+            
+            if debug:
+                print(f"DEBUG AUTH:   Upstream token type: {upstream_typ}", file=sys.stderr, flush=True)
+        except Exception as e:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "error_description": f"Invalid upstream token: {e}"}
+            )
+        
+        if upstream_typ != "auth+jwt":
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "error_description": f"Token exchange requires auth+jwt, got {upstream_typ}"}
+            )
+        
+        # Parse upstream token claims (without verification first)
+        try:
+            import jwt as jwt_lib
+            upstream_payload = jwt_lib.decode(upstream_token, options={"verify_signature": False})
+            upstream_iss = upstream_payload.get("iss")  # Upstream auth server
+            upstream_aud = upstream_payload.get("aud")  # Should be the requesting resource
+            upstream_agent = upstream_payload.get("agent")  # Original agent
+            upstream_agent_delegate = upstream_payload.get("agent_delegate")  # Original delegate
+            upstream_sub = upstream_payload.get("sub")  # User identifier
+            upstream_cnf = upstream_payload.get("cnf", {})
+            upstream_cnf_jwk = upstream_cnf.get("jwk")
+            
+            if debug:
+                print(f"DEBUG AUTH:   Upstream token claims:", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:     iss (upstream auth server): {upstream_iss}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:     aud (requesting resource): {upstream_aud}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:     agent (original agent): {upstream_agent}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:     sub (user): {upstream_sub}", file=sys.stderr, flush=True)
+                if upstream_agent_delegate:
+                    print(f"DEBUG AUTH:     agent_delegate: {upstream_agent_delegate}", file=sys.stderr, flush=True)
+        except Exception as e:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "error_description": f"Failed to parse upstream token: {e}"}
+            )
+        
+        # Validate upstream auth server is trusted (federation trust)
+        if upstream_iss not in self.trusted_auth_servers:
+            if debug:
+                print(f"DEBUG AUTH:   Upstream auth server not trusted: {upstream_iss}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Trusted auth servers: {self.trusted_auth_servers}", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "error_description": f"Upstream auth server not trusted: {upstream_iss}"}
+            )
+        
+        if debug:
+            print(f"DEBUG AUTH:   Upstream auth server trusted: {upstream_iss}", file=sys.stderr, flush=True)
+        
+        # Verify upstream token signature using upstream auth server's JWKS
+        try:
+            from core.metadata import fetch_metadata
+            import httpx
+            
+            # Fetch upstream auth server metadata
+            metadata_url = f"{upstream_iss}/.well-known/aauth-issuer"
+            if debug:
+                print(f"DEBUG AUTH:   Fetching upstream auth server metadata from {metadata_url}", file=sys.stderr, flush=True)
+            
+            metadata = fetch_metadata(metadata_url)
+            jwks_uri = metadata.get("jwks_uri")
+            
+            if not jwks_uri:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_token", "error_description": "Upstream auth server metadata missing jwks_uri"}
+                )
+            
+            # Fetch JWKS
+            if debug:
+                print(f"DEBUG AUTH:   Fetching upstream auth server JWKS from {jwks_uri}", file=sys.stderr, flush=True)
+            
+            jwks_response = httpx.get(jwks_uri, timeout=10.0)
+            jwks_response.raise_for_status()
+            upstream_jwks = jwks_response.json()
+            
+            # Find signing key
+            upstream_kid = upstream_header.get("kid")
+            signing_key = None
+            for key in upstream_jwks.get("keys", []):
+                if key.get("kid") == upstream_kid:
+                    signing_key = key
+                    break
+            
+            if not signing_key:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_token", "error_description": f"Key {upstream_kid} not found in upstream auth server JWKS"}
+                )
+            
+            # Verify signature
+            from core.crypto_utils import jwk_to_public_key
+            upstream_public_key = jwk_to_public_key(signing_key)
+            
+            import jwt as jwt_lib
+            jwt_lib.decode(
+                upstream_token,
+                upstream_public_key,
+                algorithms=["EdDSA"],
+                options={"verify_signature": True, "verify_exp": True, "verify_aud": False}
+            )
+            
+            if debug:
+                print(f"DEBUG AUTH:   Upstream token signature verified", file=sys.stderr, flush=True)
+                
+        except jwt_lib.ExpiredSignatureError:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "error_description": "Upstream token has expired"}
+            )
+        except Exception as e:
+            if debug:
+                print(f"DEBUG AUTH:   Failed to verify upstream token: {e}", file=sys.stderr, flush=True)
+                import traceback
+                traceback.print_exc()
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "error_description": f"Failed to verify upstream token: {e}"}
+            )
+        
+        # Verify upstream token audience matches the requesting resource
+        # The requesting resource is identified by the Signature-Key (its identity)
+        # For now, we'll extract it from the resource token's agent claim
+        
+        # Parse resource token to get requesting resource identity and scope
+        try:
+            from core.tokens import verify_token
+            
+            # Create JWKS fetcher for resource
+            def resource_jwks_fetcher(issuer_url: str, kid_param: str = None):
+                try:
+                    from core.metadata import fetch_metadata
+                    import httpx
+                    metadata_url = f"{issuer_url}/.well-known/aauth-resource"
+                    metadata = fetch_metadata(metadata_url)
+                    jwks_uri = metadata.get("jwks_uri")
+                    if not jwks_uri:
+                        return None
+                    response = httpx.get(jwks_uri, timeout=10.0)
+                    response.raise_for_status()
+                    jwks_doc = response.json()
+                    if kid_param:
+                        for key in jwks_doc.get("keys", []):
+                            if key.get("kid") == kid_param:
+                                return key
+                        return None
+                    return jwks_doc
+                except Exception as e:
+                    if debug:
+                        print(f"DEBUG AUTH:   Error fetching resource JWKS: {e}", file=sys.stderr, flush=True)
+                    return None
+            
+            # Verify resource token
+            resource_claims = verify_token(
+                resource_token,
+                resource_jwks_fetcher,
+                expected_typ="resource+jwt",
+                expected_aud=self.auth_id
+            )
+            
+            downstream_resource = resource_claims.get("iss")  # Downstream resource
+            requesting_agent = resource_claims.get("agent")  # The resource acting as agent
+            scope = resource_claims.get("scope", "")
+            
+            if debug:
+                print(f"DEBUG AUTH:   Resource token verified:", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:     Downstream resource (iss): {downstream_resource}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:     Requesting agent (agent): {requesting_agent}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:     Scope: {scope}", file=sys.stderr, flush=True)
+                
+        except Exception as e:
+            if debug:
+                print(f"DEBUG AUTH:   Resource token validation failed: {e}", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_resource_token", "error_description": str(e)}
+            )
+        
+        # Verify upstream token audience matches requesting agent
+        if upstream_aud != requesting_agent:
+            if debug:
+                print(f"DEBUG AUTH:   Upstream token audience mismatch: {upstream_aud} != {requesting_agent}", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "error_description": f"Upstream token audience mismatch: expected {requesting_agent}"}
+            )
+        
+        if debug:
+            print(f"DEBUG AUTH:   Upstream token audience verified: {upstream_aud}", file=sys.stderr, flush=True)
+        
+        # Verify HTTPSig signature using requesting resource's key
+        # The requesting resource signs with its own key (identified by agent_jkt in resource_token)
+        # We need to fetch the requesting resource's JWKS to verify the signature
+        from core.httpsig import _verify_signature_manual
+        
+        # Extract the agent_jkt from resource token for verification
+        resource_agent_jkt = resource_claims.get("agent_jkt")
+        
+        if debug:
+            print(f"DEBUG AUTH:   Verifying HTTPSig using requesting resource's key", file=sys.stderr, flush=True)
+            print(f"DEBUG AUTH:     Resource token agent_jkt: {resource_agent_jkt}", file=sys.stderr, flush=True)
+        
+        # Fetch the requesting resource's JWKS
+        try:
+            from core.metadata import fetch_metadata
+            import httpx
+            
+            # Fetch resource metadata
+            metadata_url = f"{requesting_agent}/.well-known/aauth-resource"
+            if debug:
+                print(f"DEBUG AUTH:   Fetching requesting resource metadata from {metadata_url}", file=sys.stderr, flush=True)
+            
+            metadata = fetch_metadata(metadata_url)
+            jwks_uri = metadata.get("jwks_uri")
+            if not jwks_uri:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "No jwks_uri in requesting resource metadata"}
+                )
+            
+            # Fetch JWKS
+            jwks_response = httpx.get(jwks_uri, timeout=10.0)
+            jwks_response.raise_for_status()
+            jwks_doc = jwks_response.json()
+            
+            # Find the key by agent_jkt (JWK Thumbprint)
+            resource_jwk_for_cnf = None
+            for key in jwks_doc.get("keys", []):
+                key_jkt = calculate_jwk_thumbprint(key)
+                if key_jkt == resource_agent_jkt:
+                    resource_jwk_for_cnf = key
+                    break
+            
+            if not resource_jwk_for_cnf:
+                if debug:
+                    print(f"DEBUG AUTH:   No key matching agent_jkt in requesting resource's JWKS", file=sys.stderr, flush=True)
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "Signing key not found in requesting resource's JWKS"}
+                )
+            
+            if debug:
+                print(f"DEBUG AUTH:   Found requesting resource's key: kid={resource_jwk_for_cnf.get('kid')}", file=sys.stderr, flush=True)
+                
+        except Exception as e:
+            if debug:
+                print(f"DEBUG AUTH:   Error fetching requesting resource JWKS: {e}", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_request", "error_description": f"Could not fetch requesting resource's JWKS: {e}"}
+            )
+        
+        # Convert JWK to public key for signature verification
+        from core.crypto_utils import jwk_to_public_key
+        requesting_resource_public_key = jwk_to_public_key(resource_jwk_for_cnf)
+        
+        is_valid = _verify_signature_manual(
+            method=method,
+            target_uri=target_uri,
+            headers=headers_dict,
+            body=body_bytes,
+            signature_input_header=signature_input_header,
+            signature_header=signature_header,
+            signature_key_header=signature_key_header,
+            public_key=requesting_resource_public_key,
+            jwks_fetcher=None
+        )
+        
+        if not is_valid:
+            if debug:
+                print(f"DEBUG AUTH:   HTTPSig signature verification failed", file=sys.stderr, flush=True)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_signature", "error_description": "HTTPSig signature verification failed"}
+            )
+        
+        if debug:
+            print(f"DEBUG AUTH:   HTTPSig signature verified", file=sys.stderr, flush=True)
+        
+        # Evaluate policy for the exchange
+        policy_result = self._evaluate_policy(requesting_agent, downstream_resource, scope)
+        
+        if not policy_result.get("allowed"):
+            return JSONResponse(
+                status_code=403,
+                content={"error": "access_denied", "error_description": policy_result.get("reason", "Access denied")}
+            )
+        
+        if debug:
+            print(f"DEBUG AUTH:   Policy evaluation passed", file=sys.stderr, flush=True)
+        
+        # Build actor (act) claim for delegation chain
+        act_claim = {
+            "agent": upstream_agent  # Required: the upstream agent
+        }
+        if upstream_agent_delegate:
+            act_claim["agent_delegate"] = upstream_agent_delegate
+        if upstream_sub:
+            act_claim["sub"] = upstream_sub
+        
+        # Check for nested act claim (multi-hop chains)
+        upstream_act = upstream_payload.get("act")
+        if upstream_act:
+            act_claim["act"] = upstream_act
+        
+        if debug:
+            print(f"DEBUG AUTH:   Actor claim: {json.dumps(act_claim, indent=2)}", file=sys.stderr, flush=True)
+        
+        # Issue auth token for downstream resource
+        # Bound to requesting resource's key (from requesting resource's JWKS)
+        if debug:
+            print(f"DEBUG AUTH:   Issuing token with cnf.jwk from requesting resource's JWKS", file=sys.stderr, flush=True)
+        
+        auth_token = self._issue_auth_token(
+            agent=requesting_agent,
+            resource=downstream_resource,
+            scope=scope,
+            cnf_jwk=resource_jwk_for_cnf,
+            sub=upstream_sub,  # Maintain user context through the chain
+            act=act_claim
+        )
+        
+        if debug:
+            print(f"DEBUG AUTH:   Token exchange successful, auth token issued", file=sys.stderr, flush=True)
+        
+        # Build response
+        response_data = {
+            "auth_token": auth_token,
+            "expires_in": 3600
+        }
+        
+        if http_debug:
+            print("\n" + "=" * 80, file=sys.stderr)
+            print("<<< AUTH SERVER RESPONSE (Token Exchange)", file=sys.stderr)
             print("=" * 80, file=sys.stderr)
             print(f"HTTP/1.1 200 OK", file=sys.stderr)
             print(f"Content-Type: application/json", file=sys.stderr)

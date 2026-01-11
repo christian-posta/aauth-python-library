@@ -11,6 +11,7 @@ This project implements the AAuth protocol incrementally, phase by phase:
 - **Phase 4**: User delegation (OAuth-like authorization code flow)
 - **Phase 5**: Agent is Resource (SSO and unified token flow)
 - **Phase 6**: Agent Delegation (agent tokens for distributed instances)
+- **Phase 7**: Token Exchange (multi-hop resource access with delegation chain)
 
 ## Quick Start
 
@@ -90,6 +91,15 @@ Demonstrates agent delegation where agent servers issue agent tokens to delegate
 python demo_phase6.py
 ```
 
+#### Phase 7: Token Exchange
+
+Demonstrates multi-hop resource access where a resource exchanges an upstream auth token to access a downstream resource:
+
+**Automated mode**:
+```bash
+python demo_phase7.py
+```
+
 ## Testing
 
 Run all tests:
@@ -105,6 +115,7 @@ pytest tests/test_phase3.py -v
 pytest tests/test_phase4.py -v
 pytest tests/test_phase5.py -v
 pytest tests/test_phase6.py -v
+pytest tests/test_phase7.py -v
 ```
 
 ## Phase Overview
@@ -161,6 +172,16 @@ See [PHASE5.md](PHASE5.md) for detailed documentation.
 
 See [PHASE6.md](PHASE6.md) for detailed documentation.
 
+### Phase 7: Token Exchange
+- Resources can act as agents to access downstream resources
+- Upstream auth tokens are exchanged for downstream auth tokens
+- Downstream auth server validates upstream token and federation trust
+- Exchanged tokens include `act` claim showing the delegation chain
+- User context (`sub`) is preserved through the chain
+- Enables autonomous multi-hop resource access
+
+See [PHASE7.md](PHASE7.md) for detailed documentation.
+
 ## Running Individual Participants
 
 ### Run Resource Server:
@@ -196,6 +217,7 @@ aauth/
 - [PHASE4.md](PHASE4.md) - Phase 4 implementation details
 - [PHASE5.md](PHASE5.md) - Phase 5 implementation details
 - [PHASE6.md](PHASE6.md) - Phase 6 implementation details
+- [PHASE7.md](PHASE7.md) - Phase 7 implementation details
 - [SPEC.md](SPEC.md) - AAuth protocol specification
 - [PLAN.md](PLAN.md) - Overall implementation plan
 

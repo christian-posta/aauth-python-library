@@ -149,7 +149,8 @@ def create_auth_token(
     exp: Optional[int] = None,
     sub: Optional[str] = None,
     agent_delegate: Optional[str] = None,
-    agent_is_resource: bool = False
+    agent_is_resource: bool = False,
+    act: Optional[Dict[str, Any]] = None
 ) -> str:
     """Create an auth token (auth+jwt) per AAuth spec Section 7.
     
@@ -165,6 +166,8 @@ def create_auth_token(
         sub: Optional user identifier
         agent_delegate: Optional agent delegate identifier
         agent_is_resource: If True, omit 'agent' claim and set aud to agent identifier (Phase 5: agent is resource)
+        act: Optional actor claim for token exchange delegation chain (Phase 7).
+             Contains: agent (REQUIRED), agent_delegate (OPTIONAL), sub (OPTIONAL), act (OPTIONAL for nested chains)
         
     Returns:
         Signed JWT string (auth+jwt)
@@ -203,6 +206,10 @@ def create_auth_token(
     if agent_delegate:
         payload["agent_delegate"] = agent_delegate
     
+    # Phase 7: Token exchange - add actor claim for delegation chain
+    if act:
+        payload["act"] = act
+    
     if debug:
         import sys
         print(f"DEBUG TOKEN: Creating auth token:", file=sys.stderr, flush=True)
@@ -221,6 +228,8 @@ def create_auth_token(
             print(f"DEBUG TOKEN:   User (sub): {sub}", file=sys.stderr, flush=True)
         if agent_delegate:
             print(f"DEBUG TOKEN:   Agent delegate: {agent_delegate}", file=sys.stderr, flush=True)
+        if act:
+            print(f"DEBUG TOKEN:   Actor (act): {json.dumps(act, indent=2)}", file=sys.stderr, flush=True)
     
     # Sign token
     # PyJWT supports EdDSA with cryptography Ed25519PrivateKey objects directly
