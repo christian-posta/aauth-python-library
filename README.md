@@ -4,7 +4,11 @@ A Python implementation of the AAuth protocol for learning and understanding the
 
 ## Library Installation
 
-This project includes a reusable `aauth` Python library that can be installed and used in other projects:
+This project includes a reusable `aauth` Python library that can be installed and used in other projects.
+
+### Installing in the Current Project
+
+If you're working within this project:
 
 ```bash
 # Install in editable mode (recommended for development)
@@ -13,6 +17,52 @@ pip install -e .
 # Or install normally
 pip install .
 ```
+
+### Installing in Other Projects on the Same Computer
+
+To use this library in other projects on the same computer:
+
+1. **Navigate to your other project directory:**
+   ```bash
+   cd /path/to/your/other/project
+   ```
+
+2. **Activate your project's virtual environment:**
+   ```bash
+   # If using venv
+   source .venv/bin/activate  # or venv/bin/activate
+   
+   # If using conda
+   conda activate your-env-name
+   ```
+
+3. **Install the library in editable mode using the absolute path:**
+   ```bash
+   pip install -e /Users/christian.posta/dev/code/aauth
+   ```
+   
+   Or if you're in a different location, use the full path to this project:
+   ```bash
+   pip install -e /full/path/to/aauth/project
+   ```
+
+4. **Verify the installation:**
+   ```bash
+   pip list | grep aauth
+   python -c "import aauth; print(aauth.__file__)"
+   ```
+
+   The `__file__` should point to the source directory, confirming editable mode.
+
+5. **Use the library in your code:**
+   ```python
+   import aauth
+   
+   # Now you can use all the library functions
+   private_key, public_key = aauth.generate_ed25519_keypair()
+   ```
+
+**Note:** Editable mode (`-e`) means changes to the library source code will be immediately available in your other projects without reinstalling. This is ideal for development.
 
 Once installed, you can import and use the library:
 
