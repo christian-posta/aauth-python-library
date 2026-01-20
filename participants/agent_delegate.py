@@ -12,9 +12,11 @@ import time
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk, generate_jwks
-from core.httpsig import sign_request
-from core.tokens import verify_agent_token, parse_token_claims
+from aauth.keys.keypair import generate_ed25519_keypair
+from aauth.keys.jwk import public_key_to_jwk, generate_jwks
+from aauth.signing.signer import sign_request
+from aauth.tokens.agent_token import verify_agent_token
+from aauth.tokens.auth_token import parse_token_claims
 from core import _is_debug_enabled, _is_http_debug_enabled
 
 

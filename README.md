@@ -2,6 +2,49 @@
 
 A Python implementation of the AAuth protocol for learning and understanding the protocol through hands-on coding.
 
+## Library Installation
+
+This project includes a reusable `aauth` Python library that can be installed and used in other projects:
+
+```bash
+# Install in editable mode (recommended for development)
+pip install -e .
+
+# Or install normally
+pip install .
+```
+
+Once installed, you can import and use the library:
+
+```python
+import aauth
+
+# Generate a key pair
+private_key, public_key = aauth.generate_ed25519_keypair()
+
+# Sign a request
+signed_headers = aauth.sign_request(
+    method="GET",
+    target_uri="https://resource.example/api/data",
+    headers={},
+    body=None,
+    private_key=private_key
+)
+
+# Verify a signature
+is_valid = aauth.verify_signature(
+    method="GET",
+    target_uri="https://resource.example/api/data",
+    headers=signed_headers,
+    body=None,
+    signature_input_header=signed_headers["Signature-Input"],
+    signature_header=signed_headers["Signature"],
+    signature_key_header=signed_headers["Signature-Key"]
+)
+```
+
+See the [Library Usage](#library-usage) section below for more examples.
+
 ## Overview
 
 This project implements the AAuth protocol incrementally, phase by phase:
@@ -199,14 +242,227 @@ python -m participants.agent
 python -m participants.auth_server
 ```
 
+## Library Usage
+
+The `aauth` library provides a framework-agnostic implementation of the AAuth protocol. Here are some common usage patterns:
+
+### Key Generation
+
+```python
+import aauth
+
+# Generate Ed25519 key pair
+private_key, public_key = aauth.generate_ed25519_keypair()
+
+# Convert to JWK format
+jwk = aauth.public_key_to_jwk(public_key, kid="key-1")
+
+# Calculate JWK thumbprint
+thumbprint = aauth.calculate_jwk_thumbprint(jwk)
+```
+
+### HTTP Message Signing
+
+```python
+import aauth
+
+# Sign a request with hwk scheme (pseudonymous)
+signed_headers = aauth.sign_request(
+    method="GET",
+    target_uri="https://resource.example/api/data",
+    headers={"Host": "resource.example"},
+    body=None,
+    private_key=private_key,
+    sig_scheme="hwk"
+)
+
+# Sign with jwks scheme (agent identity)
+signed_headers = aauth.sign_request(
+    method="POST",
+    target_uri="https://resource.example/api/data",
+    headers={"Content-Type": "application/json"},
+    body=b'{"key": "value"}',
+    private_key=private_key,
+    sig_scheme="jwks",
+    id="https://agent.example",
+    kid="key-1"
+)
+
+# Sign with jwt scheme (using auth token)
+signed_headers = aauth.sign_request(
+    method="GET",
+    target_uri="https://resource.example/api/data",
+    headers={},
+    body=None,
+    private_key=private_key,
+    sig_scheme="jwt",
+    jwt=auth_token
+)
+```
+
+### Signature Verification
+
+```python
+import aauth
+
+# Verify a signature
+is_valid = aauth.verify_signature(
+    method=request.method,
+    target_uri=str(request.url),
+    headers=dict(request.headers),
+    body=request_body,
+    signature_input_header=request.headers.get("Signature-Input"),
+    signature_header=request.headers.get("Signature"),
+    signature_key_header=request.headers.get("Signature-Key"),
+    jwks_fetcher=my_jwks_fetcher  # Required for jwks/jwt schemes
+)
+```
+
+### Token Creation and Validation
+
+```python
+import aauth
+
+# Create a resource token
+resource_token = aauth.create_resource_token(
+    iss="https://resource.example",
+    aud="https://auth.example",
+    agent="https://agent.example",
+    agent_jkt=agent_thumbprint,
+    scope="data.read data.write",
+    private_key=resource_private_key,
+    kid="resource-key-1"
+)
+
+# Create an auth token
+auth_token = aauth.create_auth_token(
+    iss="https://auth.example",
+    aud="https://resource.example",
+    agent="https://agent.example",
+    cnf_jwk=agent_jwk,
+    scope="data.read",
+    private_key=auth_private_key,
+    kid="auth-key-1"
+)
+
+# Verify an agent token
+claims = aauth.verify_agent_token(
+    token=agent_token,
+    jwks_fetcher=my_jwks_fetcher,
+    expected_aud="https://resource.example"
+)
+
+# Parse token claims (without verification)
+claims = aauth.parse_token_claims(token)
+```
+
+### Agent-Auth Header Parsing
+
+```python
+import aauth
+
+# Parse Agent-Auth challenge header
+challenge = aauth.parse_agent_auth_header(
+    "httpsig; identity=?1; auth-token; resource_token=\"...\"; auth_server=\"https://auth.example\""
+)
+
+# Build Agent-Auth challenge
+challenge_header = aauth.build_agent_auth_challenge(
+    require_signature=True,
+    require_identity=True,
+    require_auth_token=True,
+    resource_token=resource_token,
+    auth_server="https://auth.example"
+)
+```
+
+### High-Level Agent and Resource APIs
+
+```python
+import aauth
+
+# Agent request signer
+signer = aauth.AgentRequestSigner(
+    private_key=private_key,
+    agent_id="https://agent.example",
+    agent_token=agent_token
+)
+
+signed_headers = signer.sign_request(
+    method="GET",
+    target_uri="https://resource.example/api/data",
+    headers={},
+    body=None,
+    sig_scheme="jwt"
+)
+
+# Resource request verifier
+verifier = aauth.RequestVerifier(
+    canonical_authorities=["resource.example:443"],
+    jwks_fetcher=my_jwks_fetcher
+)
+
+result = verifier.verify_request(
+    method="GET",
+    target_uri="https://resource.example/api/data",
+    headers=request_headers,
+    body=request_body,
+    require_identity=True,
+    require_auth_token=True
+)
+
+if result["valid"]:
+    print(f"Agent ID: {result['agent_id']}")
+    print(f"Scopes: {result['scopes']}")
+```
+
+### Framework Integration
+
+The library is framework-agnostic. Here's an example for FastAPI:
+
+```python
+from fastapi import FastAPI, Request
+from aauth import RequestVerifier, AAuthRequest
+
+app = FastAPI()
+verifier = RequestVerifier(canonical_authorities=["api.example.com"])
+
+@app.get("/protected")
+async def protected_endpoint(request: Request):
+    # Convert FastAPI request to AAuthRequest
+    aauth_req = AAuthRequest.from_fastapi_request(request)
+    
+    # Verify signature
+    result = verifier.verify_request(
+        method=aauth_req.method,
+        target_uri=str(request.url),
+        headers=dict(request.headers),
+        body=await request.body()
+    )
+    
+    if not result["valid"]:
+        return {"error": result["error"]}, 401
+    
+    return {"data": "protected resource", "agent": result["agent_id"]}
+```
+
 ## Project Structure
 
 ```
 aauth/
-├── core/              # Core utilities (HTTPSig, tokens, crypto)
-├── participants/      # Protocol participants (agent, resource, auth_server)
-├── flows/            # Flow implementations
-└── tests/            # Test suite
+├── aauth/             # Main library package (installable)
+│   ├── signing/      # HTTP Message Signing (RFC 9421)
+│   ├── keys/         # Key management and JWK operations
+│   ├── tokens/       # JWT token handling
+│   ├── headers/      # HTTP header parsing/building
+│   ├── metadata/     # Metadata discovery
+│   ├── http/         # HTTP abstraction layer
+│   ├── agent/        # Agent role implementation
+│   └── resource/     # Resource role implementation
+├── core/             # Legacy core utilities (deprecated, use aauth.*)
+├── participants/     # Protocol participants (demo implementations)
+├── flows/           # Flow implementations
+└── tests/           # Test suite
 ```
 
 ## Documentation

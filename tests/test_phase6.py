@@ -8,7 +8,9 @@ from participants.agent import Agent
 from participants.agent_delegate import AgentDelegate
 from participants.resource import Resource
 from participants.auth_server import AuthServer
-from core.tokens import parse_token_claims, verify_agent_token
+from aauth.tokens.auth_token import parse_token_claims
+from aauth.tokens.agent_token import verify_agent_token
+from core import _is_debug_enabled
 
 
 def run_server(server):
@@ -114,19 +116,51 @@ async def test_agent_token_validation(agent_server, delegate, agent_server_id, d
         assert agent_token is not None
         
         # Create JWKS fetcher
+        # Map any issuer URL to local server for testing
         def jwks_fetcher(issuer_url: str):
             import httpx
-            from core.metadata import fetch_metadata
+            from aauth.metadata.auth_server import fetch_metadata
             try:
+                # For testing: always try local server first, then fall back to metadata discovery
+                # Map common test URLs to local server
+                local_url = None
+                if issuer_url == agent_server_id:
+                    local_url = agent_server_id
+                elif "agent.example.com" in issuer_url or issuer_url.startswith("https://agent"):
+                    # Map example.com URLs to local server for testing
+                    local_url = agent_server_id
+                
+                if local_url:
+                    # Fetch directly from local server
+                    jwks_uri = f"{local_url}/jwks.json"
+                    try:
+                        response = httpx.get(jwks_uri, timeout=10.0)
+                        response.raise_for_status()
+                        return response.json()
+                    except:
+                        # Fall through to metadata discovery
+                        pass
+                
+                # Use metadata discovery
                 metadata_url = f"{issuer_url}/.well-known/aauth-agent"
+                # For testing, try local URL if metadata URL contains example.com
+                if "agent.example.com" in metadata_url:
+                    metadata_url = f"{agent_server_id}/.well-known/aauth-agent"
+                
                 metadata = fetch_metadata(metadata_url)
                 jwks_uri = metadata.get("jwks_uri")
                 if not jwks_uri:
                     return None
+                # Map jwks_uri to local if needed
+                if "agent.example.com" in jwks_uri:
+                    jwks_uri = f"{agent_server_id}/jwks.json"
                 response = httpx.get(jwks_uri, timeout=10.0)
                 response.raise_for_status()
                 return response.json()
-            except:
+            except Exception as e:
+                if _is_debug_enabled():
+                    import sys
+                    print(f"DEBUG TEST: JWKS fetch failed for {issuer_url}: {e}", file=sys.stderr, flush=True)
                 return None
         
         # Verify agent token

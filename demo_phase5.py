@@ -7,7 +7,7 @@ import json
 from participants.agent import Agent
 from participants.auth_server import AuthServer
 from participants.user_simulator import UserSimulator
-from core.tokens import parse_token_claims
+from aauth.tokens.auth_token import parse_token_claims
 
 
 def run_server(server, name):

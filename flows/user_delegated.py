@@ -11,7 +11,7 @@ from participants.resource import Resource
 from participants.auth_server import AuthServer
 from participants.user_simulator import UserSimulator
 from core import _is_debug_enabled, _is_jwt_token_debug_enabled
-from core.tokens import parse_token_claims
+from aauth.tokens.auth_token import parse_token_claims
 
 
 async def run_user_delegated_flow(

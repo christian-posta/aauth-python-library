@@ -8,8 +8,9 @@ import json
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
-from core.tokens import parse_token_claims, create_auth_token
-from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk
+from aauth.tokens.auth_token import parse_token_claims, create_auth_token
+from aauth.keys.keypair import generate_ed25519_keypair
+from aauth.keys.jwk import public_key_to_jwk
 
 
 def run_server(server):
@@ -251,7 +252,7 @@ async def test_token_exchange_returns_act_claim(
 ):
     """Test that token exchange returns token with act claim."""
     from flows.autonomous import run_autonomous_flow
-    from core.httpsig import sign_request
+    from aauth.signing.signer import sign_request
     
     # Start all servers
     threads = [
@@ -341,7 +342,7 @@ async def test_untrusted_auth_server_rejected(
 ):
     """Test that token exchange fails when upstream auth server is not trusted."""
     from flows.autonomous import run_autonomous_flow
-    from core.httpsig import sign_request
+    from aauth.signing.signer import sign_request
     
     # Create Auth Server 2 WITHOUT trusting Auth Server 1
     auth_server2_untrusted = AuthServer(

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aauth"
+version = "0.1.0"
+description = "AAuth protocol implementation for Python"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "cryptography>=41.0.0",
+    "PyJWT>=2.8.0",
+    "httpx>=0.25.0",
+    "http-message-signatures>=1.0.0",
+    "http-sfv>=0.9.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dateutil>=2.8.0",
+    "python-multipart>=0.0.6",
+]
+
+[tool.setuptools]
+packages = ["aauth"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.txt"]
+

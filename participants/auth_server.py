@@ -12,10 +12,12 @@ from urllib.parse import urlparse
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.httpsig import verify_signature, parse_signature_key
-from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk, generate_jwks, jwk_to_public_key
-from core.metadata import generate_auth_metadata, fetch_resource_metadata
-from core.tokens import verify_token, create_auth_token, calculate_jwk_thumbprint
+from aauth.signing.verifier import verify_signature
+from aauth.headers.signature_key import parse_signature_key
+from aauth.keys.keypair import generate_ed25519_keypair
+from aauth.keys.jwk import public_key_to_jwk, generate_jwks, jwk_to_public_key, calculate_jwk_thumbprint
+from aauth.metadata.auth_server import generate_auth_metadata, fetch_metadata as fetch_resource_metadata
+from aauth.tokens.auth_token import verify_token, create_auth_token
 from core import _is_debug_enabled, _is_http_debug_enabled
 
 
@@ -258,7 +260,7 @@ class AuthServer:
                 def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
                     """Fetch agent server JWKS."""
                     try:
-                        from core.metadata import fetch_metadata
+                        from aauth.metadata.auth_server import fetch_metadata
                         import httpx
                         metadata_url = f"{issuer_url}/.well-known/aauth-agent"
                         metadata = fetch_metadata(metadata_url)
@@ -276,7 +278,7 @@ class AuthServer:
                 
                 # Verify agent token
                 try:
-                    from core.tokens import verify_agent_token
+                    from aauth.tokens.agent_token import verify_agent_token
                     agent_claims = verify_agent_token(
                         token=jwt_token,
                         jwks_fetcher=agent_jwks_fetcher,
@@ -340,9 +342,9 @@ class AuthServer:
         # For agent tokens, we've already validated the JWT, but we still need to verify HTTPSig
         # using the delegate's key from cnf.jwk
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
-            """Fetch JWKS for agent and return the matching key.
+            """Fetch JWKS for agent and return full JWKS document.
             
-            Returns a single JWK matching the kid, not the full JWKS document.
+            Returns full JWKS document (with "keys" array) for verify_signature.
             Uses well-known parameter from signature if present, otherwise fetches {id} directly as JWKS.
             """
             if debug:
@@ -353,7 +355,7 @@ class AuthServer:
                 
                 if well_known:
                     # Fetch metadata from {id}/.well-known/{well-known}
-                    from core.metadata import fetch_metadata
+                    from aauth.metadata.auth_server import fetch_metadata
                     metadata_url = f"{agent_id_param}/.well-known/{well_known}"
                     if debug:
                         print(f"DEBUG AUTH:   Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
@@ -378,23 +380,23 @@ class AuthServer:
                 if debug:
                     print(f"DEBUG AUTH:   JWKS received: {json.dumps(jwks_doc, indent=2)}", file=sys.stderr, flush=True)
                 
-                # Extract the matching key by kid
+                # Verify key exists if kid is provided (but return full JWKS document for verifier)
                 if kid_param:
                     keys = jwks_doc.get("keys", [])
+                    key_found = False
                     for key in keys:
                         if key.get("kid") == kid_param:
+                            key_found = True
                             if debug:
                                 print(f"DEBUG AUTH:   Found matching key with kid={kid_param}", file=sys.stderr, flush=True)
-                            return key
-                    if debug:
-                        print(f"DEBUG AUTH:   Key with kid={kid_param} not found in JWKS", file=sys.stderr, flush=True)
-                    return None
-                else:
-                    # If no kid specified, return first key (shouldn't happen for sig=jwks)
-                    keys = jwks_doc.get("keys", [])
-                    if keys:
-                        return keys[0]
-                    return None
+                            break
+                    if not key_found:
+                        if debug:
+                            print(f"DEBUG AUTH:   Key with kid={kid_param} not found in JWKS", file=sys.stderr, flush=True)
+                        return None
+                
+                # Return full JWKS document (verifier will extract the key it needs)
+                return jwks_doc
             except Exception as e:
                 if debug:
                     print(f"DEBUG AUTH:   Error fetching JWKS: {e}", file=sys.stderr, flush=True)
@@ -491,7 +493,7 @@ class AuthServer:
                     jwks_uri = None
                     
                     if well_known:
-                        from core.metadata import fetch_metadata
+                        from aauth.metadata.auth_server import fetch_metadata
                         metadata_url = f"{agent_id}/.well-known/{well_known}"
                         if debug:
                             print(f"DEBUG AUTH:   Fetching agent metadata from {metadata_url} for agent_jkt verification", file=sys.stderr, flush=True)
@@ -764,7 +766,7 @@ class AuthServer:
                 raise ValueError("Cannot verify agent_jkt: agent signing key not available")
             
             # Calculate thumbprint of agent's current signing key
-            from core.tokens import calculate_jwk_thumbprint
+            from aauth.keys.jwk import calculate_jwk_thumbprint
             calculated_jkt = calculate_jwk_thumbprint(agent_jwk)
             
             if debug:
@@ -1075,7 +1077,7 @@ class AuthServer:
             # Fetch agent JWK for cnf.jwk
             if agent_id and kid:
                 try:
-                    from core.metadata import fetch_metadata
+                    from aauth.metadata.auth_server import fetch_metadata
                     metadata_url = f"{agent_id}/.well-known/aauth-agent"
                     metadata = fetch_metadata(metadata_url)
                     jwks_uri = metadata.get("jwks_uri")
@@ -1125,7 +1127,7 @@ class AuthServer:
                 def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
                     """Fetch agent server JWKS."""
                     try:
-                        from core.metadata import fetch_metadata
+                        from aauth.metadata.auth_server import fetch_metadata
                         import httpx
                         metadata_url = f"{issuer_url}/.well-known/aauth-agent"
                         metadata = fetch_metadata(metadata_url)
@@ -1143,7 +1145,7 @@ class AuthServer:
                 
                 # Verify agent token
                 try:
-                    from core.tokens import verify_agent_token
+                    from aauth.tokens.agent_token import verify_agent_token
                     agent_claims = verify_agent_token(
                         token=jwt_token,
                         jwks_fetcher=agent_jwks_fetcher,
@@ -1205,17 +1207,18 @@ class AuthServer:
         # For agent tokens (Phase 6), this fetches agent server's JWKS (to validate agent token JWT)
         # For agent server (scheme=jwks), this fetches agent server's JWKS (to validate HTTPSig)
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
-            """Fetch JWKS for agent and return the matching key.
+            """Fetch JWKS for agent and return full JWKS document.
             
             Uses well-known parameter from signature if present, otherwise fetches {id} directly as JWKS.
             For agent tokens, this fetches the agent server's JWKS.
+            Returns full JWKS document (with "keys" array) for verify_signature.
             """
             try:
                 import httpx
                 jwks_uri = None
                 
                 if well_known:
-                    from core.metadata import fetch_metadata
+                    from aauth.metadata.auth_server import fetch_metadata
                     metadata_url = f"{agent_id_param}/.well-known/{well_known}"
                     metadata = fetch_metadata(metadata_url)
                     jwks_uri = metadata.get("jwks_uri")
@@ -1223,7 +1226,7 @@ class AuthServer:
                     # For agent tokens, agent_id_param is the agent server identifier
                     # Try fetching metadata first
                     try:
-                        from core.metadata import fetch_metadata
+                        from aauth.metadata.auth_server import fetch_metadata
                         metadata_url = f"{agent_id_param}/.well-known/aauth-agent"
                         metadata = fetch_metadata(metadata_url)
                         jwks_uri = metadata.get("jwks_uri")
@@ -1237,11 +1240,22 @@ class AuthServer:
                 response = httpx.get(jwks_uri, timeout=10.0)
                 response.raise_for_status()
                 jwks_doc = response.json()
+                
+                # Verify key exists if kid is provided (but return full JWKS document for verifier)
                 if kid_param:
-                    for key in jwks_doc.get("keys", []):
+                    keys = jwks_doc.get("keys", [])
+                    key_found = False
+                    for key in keys:
                         if key.get("kid") == kid_param:
-                            return key
-                return None
+                            key_found = True
+                            break
+                    if not key_found:
+                        if debug:
+                            print(f"DEBUG AUTH:   Key with kid={kid_param} not found in JWKS", file=sys.stderr, flush=True)
+                        return None
+                
+                # Return full JWKS document (verifier will extract the key it needs)
+                return jwks_doc
             except Exception as e:
                 if debug:
                     print(f"DEBUG AUTH:   Error fetching JWKS: {e}", file=sys.stderr, flush=True)
@@ -1506,7 +1520,7 @@ class AuthServer:
                 )
             
             # Verify signature
-            from core.crypto_utils import jwk_to_public_key
+            from aauth.keys.jwk import jwk_to_public_key
             upstream_public_key = jwk_to_public_key(signing_key)
             
             import jwt as jwt_lib
@@ -1541,7 +1555,7 @@ class AuthServer:
         
         # Parse resource token to get requesting resource identity and scope
         try:
-            from core.tokens import verify_token
+            from aauth.tokens.auth_token import verify_token
             
             # Create JWKS fetcher for resource
             def resource_jwks_fetcher(issuer_url: str, kid_param: str = None):
@@ -1608,7 +1622,7 @@ class AuthServer:
         # Verify HTTPSig signature using requesting resource's key
         # The requesting resource signs with its own key (identified by agent_jkt in resource_token)
         # We need to fetch the requesting resource's JWKS to verify the signature
-        from core.httpsig import _verify_signature_manual
+        from aauth.signing.verifier import verify_signature
         
         # Extract the agent_jkt from resource token for verification
         resource_agent_jkt = resource_claims.get("agent_jkt")
@@ -1667,28 +1681,77 @@ class AuthServer:
                 content={"error": "invalid_request", "error_description": f"Could not fetch requesting resource's JWKS: {e}"}
             )
         
-        # Convert JWK to public key for signature verification
-        from core.crypto_utils import jwk_to_public_key
-        requesting_resource_public_key = jwk_to_public_key(resource_jwk_for_cnf)
-        
-        is_valid = _verify_signature_manual(
-            method=method,
-            target_uri=target_uri,
-            headers=headers_dict,
-            body=body_bytes,
-            signature_input_header=signature_input_header,
-            signature_header=signature_header,
-            signature_key_header=signature_key_header,
-            public_key=requesting_resource_public_key,
-            jwks_fetcher=None
-        )
+        # For scheme=jwt in token exchange, the requesting resource signs HTTPSig with its own key,
+        # not the key from cnf.jwk in the upstream token. However, verify_signature for scheme=jwt
+        # will try to verify HTTPSig using cnf.jwk from the upstream token.
+        # We need to verify HTTPSig separately using the resource's key.
+        # Verify HTTPSig manually using the resource's public key.
+        if debug:
+            print(f"DEBUG AUTH:   Starting HTTPSig verification for token exchange", file=sys.stderr, flush=True)
+            print(f"DEBUG AUTH:     Resource agent_jkt from token: {resource_agent_jkt}", file=sys.stderr, flush=True)
+            print(f"DEBUG AUTH:     Resource JWK kid: {resource_jwk_for_cnf.get('kid') if resource_jwk_for_cnf else 'N/A'}", file=sys.stderr, flush=True)
+        try:
+            from aauth.signing.signature_base import build_signature_base
+            from aauth.headers.signature_input import parse_signature_input
+            from aauth.headers.signature import parse_signature
+            from urllib.parse import urlparse
+            
+            # Parse signature input to get covered components
+            components, params = parse_signature_input(signature_input_header)
+            
+            # Reconstruct signature base
+            parsed_uri = urlparse(target_uri)
+            authority = parsed_uri.netloc
+            path = parsed_uri.path or "/"
+            query_string = parsed_uri.query if parsed_uri.query else None
+            
+            signature_base = build_signature_base(
+                method=method,
+                authority=authority,
+                path=path,
+                query=query_string,
+                headers=headers_dict,
+                body=body_bytes,
+                signature_key_header=signature_key_header,
+                covered_components=components
+            )
+            
+            # Parse signature
+            signature_bytes = parse_signature(signature_header, label="sig1")
+            
+            # Verify HTTPSig using requesting resource's public key
+            from aauth.keys.jwk import jwk_to_public_key
+            requesting_resource_public_key = jwk_to_public_key(resource_jwk_for_cnf)
+            
+            requesting_resource_public_key.verify(signature_bytes, signature_base.encode('utf-8'))
+            is_valid = True
+            
+        except Exception as e:
+            error_msg = str(e)
+            if debug:
+                print(f"DEBUG AUTH:   HTTPSig signature verification error: {error_msg}", file=sys.stderr, flush=True)
+                import traceback
+                traceback.print_exc()
+                if 'signature_base' in locals():
+                    print(f"DEBUG AUTH:   Signature base (first 200 chars): {signature_base[:200]}", file=sys.stderr, flush=True)
+                if 'signature_bytes' in locals():
+                    print(f"DEBUG AUTH:   Signature bytes length: {len(signature_bytes)}", file=sys.stderr, flush=True)
+                if resource_jwk_for_cnf:
+                    print(f"DEBUG AUTH:   Resource JWK kid: {resource_jwk_for_cnf.get('kid')}", file=sys.stderr, flush=True)
+            is_valid = False
+            verification_error = error_msg
+        else:
+            verification_error = None
         
         if not is_valid:
             if debug:
                 print(f"DEBUG AUTH:   HTTPSig signature verification failed", file=sys.stderr, flush=True)
+            error_description = "HTTPSig signature verification failed"
+            if verification_error:
+                error_description += f": {verification_error}"
             return JSONResponse(
                 status_code=401,
-                content={"error": "invalid_signature", "error_description": "HTTPSig signature verification failed"}
+                content={"error": "invalid_signature", "error_description": error_description}
             )
         
         if debug:

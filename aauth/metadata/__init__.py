@@ -1,0 +1,2 @@
+"""Metadata discovery for AAuth."""
+

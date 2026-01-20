@@ -5,9 +5,14 @@ import asyncio
 import httpx
 from participants.agent import Agent
 from participants.resource import Resource
-from core.metadata import generate_agent_metadata, fetch_metadata
-from core.httpsig import sign_request, verify_signature, build_signature_key_header
-from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk, generate_jwks, jwk_to_public_key
+from aauth.metadata.agent import generate_agent_metadata
+from aauth.metadata.auth_server import fetch_metadata
+from aauth.signing.signer import sign_request
+from aauth.signing.verifier import verify_signature
+from aauth.headers.signature_key import build_signature_key_header
+from aauth.keys.keypair import generate_ed25519_keypair
+from aauth.keys.jwk import public_key_to_jwk, generate_jwks, jwk_to_public_key
+from aauth.errors import SignatureError
 
 
 class TestMetadata:
@@ -176,10 +181,11 @@ class TestSignatureVerification:
             kid=kid
         )
         
-        # Create jwks_fetcher that returns our public key
-        def jwks_fetcher(agent_id_param, kid_param):
-            if agent_id_param == agent_id and kid_param == kid:
-                return public_key_to_jwk(public_key, kid=kid)
+        # Create jwks_fetcher that returns JWKS document
+        def jwks_fetcher(agent_id_param, kid_param=None):
+            if agent_id_param == agent_id:
+                jwk = public_key_to_jwk(public_key, kid=kid)
+                return {"keys": [jwk]}
             return None
         
         # Verify signature
@@ -215,7 +221,7 @@ class TestSignatureVerification:
         )
         
         # Try to verify without jwks_fetcher
-        with pytest.raises(ValueError, match="jwks_fetcher"):
+        with pytest.raises((ValueError, SignatureError), match="jwks_fetcher"):
             verify_signature(
                 method="GET",
                 target_uri="https://resource.example.com/data-jwks",
@@ -327,8 +333,8 @@ class TestIntegration:
         # Wait for server to start
         await asyncio.sleep(1)
         
-        # Start agent server
-        agent = Agent("https://agent.example.com", port=8001)
+        # Start agent server with local URL
+        agent = Agent("http://127.0.0.1:8001", port=8001)
         
         # Start agent server in background
         agent_thread = threading.Thread(
@@ -341,9 +347,6 @@ class TestIntegration:
         await asyncio.sleep(1)
         
         try:
-            # Update agent_id to point to local server
-            agent.agent_id = "http://127.0.0.1:8001"
-            
             # Request /data-jwks with sig=jwks
             response = await agent.request_resource(
                 "http://127.0.0.1:8002/data-jwks",
@@ -375,8 +378,8 @@ class TestIntegration:
         # Wait for server to start
         await asyncio.sleep(1)
         
-        # Start agent server
-        agent = Agent("https://agent.example.com", port=8001)
+        # Start agent server with local URL
+        agent = Agent("http://127.0.0.1:8001", port=8001)
         
         # Start agent server in background
         agent_thread = threading.Thread(
@@ -389,9 +392,6 @@ class TestIntegration:
         await asyncio.sleep(1)
         
         try:
-            # Update agent_id to point to local server
-            agent.agent_id = "http://127.0.0.1:8001"
-            
             # Test /data-hwk with sig=hwk
             response_hwk = await agent.request_resource(
                 "http://127.0.0.1:8002/data-hwk",

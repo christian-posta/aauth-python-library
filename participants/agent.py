@@ -10,9 +10,11 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk, generate_jwks
-from core.httpsig import sign_request
-from core.metadata import generate_agent_metadata, fetch_auth_metadata
+from aauth.keys.keypair import generate_ed25519_keypair
+from aauth.keys.jwk import public_key_to_jwk, generate_jwks
+from aauth.signing.signer import sign_request
+from aauth.metadata.agent import generate_agent_metadata
+from aauth.metadata.auth_server import fetch_auth_metadata
 from core import _is_debug_enabled, _is_http_debug_enabled
 import json
 import re
@@ -394,7 +396,7 @@ class Agent:
         # Fetch auth server metadata to get token endpoint
         try:
             metadata_url = f"{auth_server}/.well-known/aauth-issuer"
-            metadata = fetch_auth_metadata(metadata_url)
+            metadata = await fetch_auth_metadata(metadata_url)
             token_endpoint = metadata.get("agent_token_endpoint")
             if debug:
                 print(f"DEBUG AGENT:   Token endpoint: {token_endpoint}", file=sys.stderr, flush=True)
@@ -540,7 +542,7 @@ class Agent:
         # Fetch auth server metadata to get token endpoint
         try:
             metadata_url = f"{auth_server}/.well-known/aauth-issuer"
-            metadata = fetch_auth_metadata(metadata_url)
+            metadata = await fetch_auth_metadata(metadata_url)
             token_endpoint = metadata.get("agent_token_endpoint")
             if debug:
                 print(f"DEBUG AGENT:   Token endpoint: {token_endpoint}", file=sys.stderr, flush=True)
@@ -697,7 +699,7 @@ class Agent:
         
         # Fetch auth server metadata to get agent_auth_endpoint
         try:
-            metadata = fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
+            metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
             auth_endpoint = metadata.get("agent_auth_endpoint")
             
             if not auth_endpoint:
@@ -822,7 +824,7 @@ class Agent:
         
         # Fetch token endpoint from metadata
         try:
-            metadata = fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
+            metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
             token_endpoint = metadata.get("agent_token_endpoint")
             
             if not token_endpoint:
@@ -1154,7 +1156,7 @@ class Agent:
                 print(f"DEBUG AGENT:   Audience: {aud}", file=sys.stderr, flush=True)
         
         # Issue agent token
-        from core.tokens import create_agent_token
+        from aauth.tokens.agent_token import create_agent_token
         
         agent_token = create_agent_token(
             iss=self.agent_id,

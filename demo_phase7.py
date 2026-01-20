@@ -10,7 +10,7 @@ import uvicorn
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
-from core.tokens import parse_token_claims
+from aauth.tokens.auth_token import parse_token_claims
 from flows.autonomous import run_autonomous_flow
 
 # Global list to track server instances for cleanup

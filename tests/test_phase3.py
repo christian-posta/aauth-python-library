@@ -8,12 +8,13 @@ import json
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
-from core.tokens import (
-    create_resource_token, create_auth_token, verify_token,
-    calculate_jwk_thumbprint, parse_token_claims
-)
-from core.crypto_utils import generate_ed25519_keypair, public_key_to_jwk
-from core.metadata import generate_resource_metadata, generate_auth_metadata
+from aauth.tokens.resource_token import create_resource_token
+from aauth.tokens.auth_token import create_auth_token, verify_token, parse_token_claims
+from aauth.keys.jwk import calculate_jwk_thumbprint
+from aauth.keys.keypair import generate_ed25519_keypair
+from aauth.keys.jwk import public_key_to_jwk
+from aauth.metadata.resource import generate_resource_metadata
+from aauth.metadata.auth_server import generate_auth_metadata
 
 
 class TestTokenGeneration:
@@ -150,7 +151,8 @@ class TestTokenVerification:
         
         # JWKS fetcher for resource
         def resource_jwks_fetcher(resource_id: str):
-            return {"keys": [resource_jwk]}
+            resource_jwk_with_kid = public_key_to_jwk(resource_public, kid="resource-key-1")
+            return {"keys": [resource_jwk_with_kid]}
         
         # Verify token
         claims = verify_token(
@@ -189,7 +191,8 @@ class TestTokenVerification:
         
         # JWKS fetcher for auth server
         def auth_jwks_fetcher(auth_id: str):
-            return {"keys": [auth_jwk]}
+            auth_jwk_with_kid = public_key_to_jwk(auth_public, kid="auth-key-1")
+            return {"keys": [auth_jwk_with_kid]}
         
         # Verify token
         claims = verify_token(
@@ -208,9 +211,10 @@ class TestTokenVerification:
     
     def test_verify_expired_token(self):
         """Test that expired tokens are rejected."""
-        private_key, public_key = generate_ed25519_keypair()
-        jwk = public_key_to_jwk(public_key)
-        agent_jkt = calculate_jwk_thumbprint(jwk)
+        resource_private, resource_public = generate_ed25519_keypair()
+        agent_private, agent_public = generate_ed25519_keypair()
+        agent_jwk = public_key_to_jwk(agent_public)
+        agent_jkt = calculate_jwk_thumbprint(agent_jwk)
         
         # Create token with expiration in the past
         token = create_resource_token(
@@ -219,13 +223,14 @@ class TestTokenVerification:
             agent="https://agent.example",
             agent_jkt=agent_jkt,
             scope="data.read",
-            private_key=private_key,
+            private_key=resource_private,
             kid="resource-key-1",
             exp=int(time.time()) - 100  # Expired 100 seconds ago
         )
         
         def jwks_fetcher(resource_id: str):
-            return {"keys": [jwk]}
+            resource_jwk_with_kid = public_key_to_jwk(resource_public, kid="resource-key-1")
+            return {"keys": [resource_jwk_with_kid]}
         
         # Verify token should fail
         with pytest.raises(Exception):  # jwt.ExpiredSignatureError
