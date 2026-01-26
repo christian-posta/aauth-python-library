@@ -54,12 +54,21 @@ def sign_request(
     # Add Signature-Key to headers (needed for signature-key component)
     headers["Signature-Key"] = signature_key_header
     
-    # Add Content-Digest if body exists (RFC 9530)
+    # Handle Content-Digest if body exists (RFC 9530)
+    content_digest_header = None
     if body:
-        digest = hashlib.sha256(body).digest()
-        digest_b64 = base64.b64encode(digest).decode('ascii')
-        headers["Content-Digest"] = f"sha-256=:{digest_b64}:"
-        
+        # Check if Content-Digest is already provided
+        existing_digest = headers.get("Content-Digest")
+        if existing_digest:
+            # Use caller's provided digest
+            content_digest_header = existing_digest
+        else:
+            # Compute our own digest
+            digest = hashlib.sha256(body).digest()
+            digest_b64 = base64.b64encode(digest).decode('ascii')
+            content_digest_header = f"sha-256=:{digest_b64}:"
+            headers["Content-Digest"] = content_digest_header
+
         # Add content-type if not present
         if "Content-Type" not in headers:
             headers["Content-Type"] = "application/octet-stream"
@@ -123,13 +132,19 @@ def _sign_request_manual(
     components.append(("@path", path))
     
     if query_string:
-        components.append(("@query", query_string))
+        # RFC 9421 Section 2.2.8: @query value MUST include leading ?
+        components.append(("@query", f"?{query_string}"))
     
     if body:
-        digest = hashlib.sha256(body).digest()
-        digest_b64 = base64.b64encode(digest).decode('ascii')
-        content_digest = f"sha-256=:{digest_b64}:"
-        headers["Content-Digest"] = content_digest
+        # Use existing Content-Digest if provided, otherwise use computed one
+        content_digest = headers.get("Content-Digest")
+        if not content_digest:
+            # Compute digest if not already done in sign_request()
+            digest = hashlib.sha256(body).digest()
+            digest_b64 = base64.b64encode(digest).decode('ascii')
+            content_digest = f"sha-256=:{digest_b64}:"
+            headers["Content-Digest"] = content_digest
+
         if "Content-Type" not in headers:
             headers["Content-Type"] = "application/octet-stream"
         components.append(("content-type", headers["Content-Type"]))
@@ -137,7 +152,7 @@ def _sign_request_manual(
     
     components.append(("signature-key", signature_key_header))
     
-    # Build signature base (RFC 9421 Section 2.3)
+    # Build signature base (RFC 9421 Section 2.5)
     signature_base_parts = []
     for component_name, component_value in components:
         if component_name.startswith("@"):
@@ -146,7 +161,15 @@ def _sign_request_manual(
             header_name = component_name.lower()
             signature_base_parts.append(f'"{header_name}": {component_value}')
     
-    signature_base = "\n".join(signature_base_parts) + "\n"
+    # RFC 9421 Section 2.5: @signature-params MUST be the final line
+    # Build component list for @signature-params (same format as Signature-Input)
+    created = int(time.time())
+    component_list = ' '.join([f'"{c[0]}"' if c[0].startswith('@') else f'"{c[0].lower()}"' for c in components])
+    signature_params_line = f'"@signature-params": ({component_list});created={created}'
+    signature_base_parts.append(signature_params_line)
+    
+    # RFC 9421: Join with LF, no trailing newline after @signature-params
+    signature_base = "\n".join(signature_base_parts)
     
     # Debug output
     import os
@@ -159,19 +182,26 @@ def _sign_request_manual(
     signature_bytes = private_key.sign(signature_base.encode('utf-8'))
     signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode('utf-8').rstrip('=')
     
-    # Build Signature-Input header
-    created = int(time.time())
-    component_list = ' '.join([f'"{c[0]}"' if c[0].startswith('@') else f'"{c[0].lower()}"' for c in components])
+    # Build Signature-Input header (reuse created timestamp from signature base)
     signature_input_header = f'sig1=({component_list});created={created}'
     
     # Build Signature header
     signature_header = f'sig1=:{signature_b64}:'
     
-    return {
+    # Prepare return headers including Content-Digest and Content-Type if they were set
+    sig_headers = {
         "Signature-Input": signature_input_header,
         "Signature": signature_header,
         "Signature-Key": signature_key_header
     }
+
+    # Include Content-Digest and Content-Type in returned headers if they were computed/set
+    if body and content_digest:
+        sig_headers["Content-Digest"] = content_digest
+    if body and "Content-Type" in headers:
+        sig_headers["Content-Type"] = headers["Content-Type"]
+
+    return sig_headers
 
 
 def build_signature_key_header(
@@ -745,7 +775,8 @@ def _verify_signature_manual(
                 signature_base_parts.append(f'"@path": {path}')
             elif component == "@query":
                 if query_string:
-                    signature_base_parts.append(f'"@query": {query_string}')
+                    # RFC 9421 Section 2.2.8: @query value MUST include leading ?
+                    signature_base_parts.append(f'"@query": ?{query_string}')
                 else:
                     return False
             elif component == "content-type":
@@ -779,7 +810,15 @@ def _verify_signature_manual(
                     print(f"DEBUG VERIFY: Unknown component: {component}")
                 return False
         
-        signature_base = "\n".join(signature_base_parts) + "\n"
+        # RFC 9421 Section 2.5: @signature-params MUST be the final line
+        # Reconstruct @signature-params from Signature-Input header
+        component_list = ' '.join([f'"{c}"' for c in components])
+        created = sig_params.get("created", str(int(time.time())))
+        signature_params_line = f'"@signature-params": ({component_list});created={created}'
+        signature_base_parts.append(signature_params_line)
+        
+        # RFC 9421: Join with LF, no trailing newline after @signature-params
+        signature_base = "\n".join(signature_base_parts)
         
         # Debug output
         import os

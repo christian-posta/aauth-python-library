@@ -14,7 +14,8 @@ def build_signature_base(
     headers: Dict[str, str],
     body: Optional[bytes],
     signature_key_header: str,
-    covered_components: Optional[List[str]] = None
+    covered_components: Optional[List[str]] = None,
+    signature_params: Optional[str] = None
 ) -> str:
     """Build signature base string per RFC 9421 Section 2.5.
     
@@ -27,6 +28,7 @@ def build_signature_base(
         body: Request body bytes (None if no body)
         signature_key_header: Signature-Key header value
         covered_components: Optional list of components to cover (auto-detected if None)
+        signature_params: Signature-Input header value (required for @signature-params line)
         
     Returns:
         Signature base string
@@ -73,7 +75,7 @@ def build_signature_base(
         else:
             raise ValueError(f"Unknown component: {component_name}")
     
-    # Build signature base (RFC 9421 Section 2.3)
+    # Build signature base (RFC 9421 Section 2.5)
     signature_base_parts = []
     for component_name, component_value in components:
         if component_name.startswith("@"):
@@ -82,7 +84,12 @@ def build_signature_base(
             header_name = component_name.lower()
             signature_base_parts.append(f'"{header_name}": {component_value}')
     
-    signature_base = "\n".join(signature_base_parts) + "\n"
+    # Add @signature-params as the FINAL line (RFC 9421 Section 2.5 requirement)
+    # The @signature-params line contains the Signature-Input header value (without the label prefix)
+    if signature_params:
+        signature_base_parts.append(f'"@signature-params": {signature_params}')
+    
+    signature_base = "\n".join(signature_base_parts)
     
     return signature_base
 

@@ -28,7 +28,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["aauth"]
+packages = {find = {}}
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]

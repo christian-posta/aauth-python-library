@@ -56,10 +56,12 @@ def sign_request(
         # Add Signature-Key to headers (needed for signature-key component)
         headers["Signature-Key"] = signature_key_header
         
-        # Add Content-Digest if body exists (RFC 9530)
+        # Add Content-Digest if body exists and not already present (RFC 9530)
         if body:
-            content_digest = calculate_content_digest(body)
-            headers["Content-Digest"] = content_digest
+            # Only calculate Content-Digest if not already provided
+            if "Content-Digest" not in headers:
+                content_digest = calculate_content_digest(body)
+                headers["Content-Digest"] = content_digest
             
             # Add content-type if not present
             if "Content-Type" not in headers:
@@ -69,7 +71,17 @@ def sign_request(
         from ..signing.signature_base import _determine_covered_components
         covered_components = _determine_covered_components(query_string, body)
         
-        # Build signature base
+        # Build Signature-Input header FIRST (needed for @signature-params in signature base)
+        signature_input_header = build_signature_input_header(
+            covered_components=covered_components,
+            label="sig1"
+        )
+        
+        # Extract signature params (the part after "sig1=")
+        # Signature-Input format: sig1=("@method" "@authority" ...);created=...
+        signature_params = signature_input_header[5:] if signature_input_header.startswith("sig1=") else signature_input_header
+        
+        # Build signature base (now includes @signature-params per RFC 9421)
         signature_base = build_signature_base(
             method=method,
             authority=authority,
@@ -78,17 +90,23 @@ def sign_request(
             headers=headers,
             body=body,
             signature_key_header=signature_key_header,
-            covered_components=covered_components
+            covered_components=covered_components,
+            signature_params=signature_params
         )
+        
+        # DEBUG: Print the signature base for debugging
+        import logging
+        logger = logging.getLogger("aauth.signing")
+        logger.info(f"🔐 AAUTH LIBRARY SIGNATURE BASE:")
+        logger.info(f"🔐 Signature base length: {len(signature_base)} bytes")
+        logger.info(f"🔐 Signature base hex (first 200): {signature_base.encode('utf-8').hex()[:200]}...")
+        for i, line in enumerate(signature_base.split('\n')):
+            logger.info(f"🔐   Line {i}: {repr(line)}")
         
         # Sign the signature base
         signature_bytes = private_key.sign(signature_base.encode('utf-8'))
         
-        # Build headers
-        signature_input_header = build_signature_input_header(
-            covered_components=covered_components,
-            label="sig1"
-        )
+        # Build Signature header
         signature_header = build_signature_header(signature_bytes, label="sig1")
         
         return {
