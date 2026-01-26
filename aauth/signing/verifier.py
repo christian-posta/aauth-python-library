@@ -219,6 +219,13 @@ def verify_signature(
         path = parsed_uri.path or "/"
         query_string = parsed_uri.query if parsed_uri.query else None
         
+        # Extract signature params (the part after "sig1=") for @signature-params line
+        # Signature-Input format: sig1=("@method" "@authority" ...);created=...
+        # RFC 9421 Section 2.5: @signature-params is required
+        signature_params = signature_input_header[5:] if signature_input_header.startswith("sig1=") else signature_input_header
+        if not signature_params:
+            return False  # Invalid - signature_params required
+        
         signature_base = build_signature_base(
             method=method,
             authority=authority,
@@ -227,7 +234,8 @@ def verify_signature(
             headers=headers,
             body=body,
             signature_key_header=signature_key_header,
-            covered_components=components
+            covered_components=components,
+            signature_params=signature_params
         )
         
         # Parse signature

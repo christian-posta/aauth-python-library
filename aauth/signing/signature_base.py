@@ -35,7 +35,7 @@ def build_signature_base(
     """
     # Auto-detect covered components if not provided
     if covered_components is None:
-        covered_components = _determine_covered_components(query, body)
+        covered_components = _determine_covered_components(query, body, additional_components=None)
     
     # Build component list
     components: List[Tuple[str, str]] = []
@@ -49,7 +49,8 @@ def build_signature_base(
             components.append(("@path", path))
         elif component_name == "@query":
             if query:
-                components.append(("@query", query))
+                # RFC 9421 Section 2.2.7: @query value MUST include leading ?
+                components.append(("@query", f"?{query}"))
             else:
                 raise ValueError("@query component specified but no query string present")
         elif component_name == "content-type":
@@ -72,6 +73,12 @@ def build_signature_base(
                 raise ValueError("content-digest component specified but no body present")
         elif component_name == "signature-key":
             components.append(("signature-key", signature_key_header))
+        elif component_name == "nonce":
+            nonce_value = _get_header(headers, "nonce")
+            if nonce_value:
+                components.append(("nonce", nonce_value))
+            else:
+                raise ValueError("nonce component required but Nonce header missing")
         else:
             raise ValueError(f"Unknown component: {component_name}")
     
@@ -86,25 +93,32 @@ def build_signature_base(
     
     # Add @signature-params as the FINAL line (RFC 9421 Section 2.5 requirement)
     # The @signature-params line contains the Signature-Input header value (without the label prefix)
-    if signature_params:
-        signature_base_parts.append(f'"@signature-params": {signature_params}')
+    # RFC 9421 Section 2.5: @signature-params MUST be present
+    if not signature_params:
+        raise ValueError("signature_params is required for valid signature base")
+    signature_base_parts.append(f'"@signature-params": {signature_params}')
     
     signature_base = "\n".join(signature_base_parts)
     
     return signature_base
 
 
-def _determine_covered_components(query: Optional[str], body: Optional[bytes]) -> List[str]:
+def _determine_covered_components(
+    query: Optional[str], 
+    body: Optional[bytes],
+    additional_components: Optional[List[str]] = None
+) -> List[str]:
     """Determine covered components based on request structure.
     
     Per AAuth spec Section 10.3:
     - Always: @method, @authority, @path, signature-key
     - If query present: @query
-    - If body present: content-type, content-digest
+    - Body components (content-type, content-digest) are opt-in via additional_components
     
     Args:
         query: Query string (None if no query)
         body: Request body (None if no body)
+        additional_components: Optional list of additional components to include (e.g., ["content-type", "content-digest", "nonce"])
         
     Returns:
         List of component names
@@ -114,9 +128,10 @@ def _determine_covered_components(query: Optional[str], body: Optional[bytes]) -
     if query:
         components.append("@query")
     
-    if body:
-        components.append("content-type")
-        components.append("content-digest")
+    # Body components are opt-in via additional_components
+    # Only add if explicitly requested
+    if additional_components:
+        components.extend(additional_components)
     
     # signature-key MUST always be included
     components.append("signature-key")
@@ -141,12 +156,34 @@ def _get_header(headers: Dict[str, str], name: str) -> Optional[str]:
     return None
 
 
+def build_signature_params(
+    covered_components: List[str],
+    created: int,
+    keyid: Optional[str] = None
+) -> str:
+    """Build the Signature-Input value (the part after the label).
+    
+    Args:
+        covered_components: List of component names
+        created: Creation timestamp (Unix time)
+        keyid: Optional key identifier
+        
+    Returns:
+        Signature params string: ("@method" "@authority" ...);created=1234567890
+    """
+    components_str = " ".join(f'"{c}"' for c in covered_components)
+    params = f"({components_str});created={created}"
+    if keyid:
+        params += f';keyid="{keyid}"'
+    return params
+
+
 def calculate_content_digest(body: bytes) -> str:
     """Calculate Content-Digest header value per RFC 9530.
     
     Args:
         body: Request body bytes
-        
+    
     Returns:
         Content-Digest header value (e.g., "sha-256=:...:")
     """

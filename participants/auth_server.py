@@ -1705,6 +1705,10 @@ class AuthServer:
             path = parsed_uri.path or "/"
             query_string = parsed_uri.query if parsed_uri.query else None
             
+            # Extract signature params (the part after "sig1=") for @signature-params line
+            # Signature-Input format: sig1=("@method" "@authority" ...);created=...
+            signature_params = signature_input_header[5:] if signature_input_header.startswith("sig1=") else signature_input_header
+            
             signature_base = build_signature_base(
                 method=method,
                 authority=authority,
@@ -1713,7 +1717,8 @@ class AuthServer:
                 headers=headers_dict,
                 body=body_bytes,
                 signature_key_header=signature_key_header,
-                covered_components=components
+                covered_components=components,
+                signature_params=signature_params
             )
             
             # Parse signature

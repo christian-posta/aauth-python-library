@@ -1,11 +1,12 @@
 """HTTP request signing for AAuth."""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
+import time
 from ..headers.signature_key import build_signature_key_header
 from ..headers.signature_input import build_signature_input_header
 from ..headers.signature import build_signature_header
-from ..signing.signature_base import build_signature_base, calculate_content_digest
+from ..signing.signature_base import build_signature_base, calculate_content_digest, build_signature_params
 from ..errors import SignatureError
 
 
@@ -16,6 +17,7 @@ def sign_request(
     body: Optional[bytes],
     private_key,
     sig_scheme: str = "hwk",
+    additional_signature_components: Optional[List[str]] = None,
     **kwargs
 ) -> Dict[str, str]:
     """Sign an HTTP request using HTTP Message Signatures (RFC 9421).
@@ -56,30 +58,48 @@ def sign_request(
         # Add Signature-Key to headers (needed for signature-key component)
         headers["Signature-Key"] = signature_key_header
         
-        # Add Content-Digest if body exists and not already present (RFC 9530)
-        if body:
-            # Only calculate Content-Digest if not already provided
-            if "Content-Digest" not in headers:
+        # Determine body components to include (opt-in only, per SPEC_NOTES.md)
+        # Body components are NOT automatic - only included if explicitly requested
+        # via additional_signature_components parameter (typically from server metadata)
+        body_components = []
+        if body and additional_signature_components:
+            # Only add if explicitly requested via additional_signature_components
+            for comp in additional_signature_components:
+                if comp in ("content-type", "content-digest"):
+                    body_components.append(comp)
+            
+            # Add Content-Digest header if needed and not already present (RFC 9530)
+            # Only calculate Content-Digest if it's in body_components but not in headers
+            if "content-digest" in body_components and "Content-Digest" not in headers:
                 content_digest = calculate_content_digest(body)
                 headers["Content-Digest"] = content_digest
             
-            # Add content-type if not present
-            if "Content-Type" not in headers:
+            # Add content-type header if needed and not already present
+            if "content-type" in body_components and "Content-Type" not in headers:
                 headers["Content-Type"] = "application/octet-stream"
+        
+        # Check for Nonce header (per SPEC.md Section 10.5)
+        # Nonce MUST be included if present, regardless of body or additional_signature_components
+        if "Nonce" in headers:
+            body_components.append("nonce")
         
         # Determine covered components
         from ..signing.signature_base import _determine_covered_components
-        covered_components = _determine_covered_components(query_string, body)
-        
-        # Build Signature-Input header FIRST (needed for @signature-params in signature base)
-        signature_input_header = build_signature_input_header(
-            covered_components=covered_components,
-            label="sig1"
+        covered_components = _determine_covered_components(
+            query_string, 
+            body,
+            additional_components=body_components
         )
         
-        # Extract signature params (the part after "sig1=")
-        # Signature-Input format: sig1=("@method" "@authority" ...);created=...
-        signature_params = signature_input_header[5:] if signature_input_header.startswith("sig1=") else signature_input_header
+        # Build signature params using new function
+        created = int(time.time())
+        signature_params = build_signature_params(
+            covered_components=covered_components,
+            created=created
+        )
+        
+        # Build Signature-Input header (needed for @signature-params in signature base)
+        signature_input_header = f"sig1={signature_params}"
         
         # Build signature base (now includes @signature-params per RFC 9421)
         signature_base = build_signature_base(

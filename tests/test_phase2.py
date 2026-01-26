@@ -158,6 +158,102 @@ class TestSignatureGeneration:
         assert 'scheme=jwks' in sig_key
         assert f'id="{agent_id}"' in sig_key
         assert f'kid="{kid}"' in sig_key
+    
+    def test_sign_request_with_query_includes_leading_question_mark(self):
+        """Test that @query component includes leading ? per RFC 9421 Section 2.2.7."""
+        from aauth.signing.signature_base import build_signature_base, build_signature_params
+        
+        private_key, _ = generate_ed25519_keypair()
+        signature_key_header = build_signature_key_header(
+            "hwk",
+            private_key,
+            label="sig1"
+        )
+        
+        # Build signature base with query
+        covered_components = ["@method", "@authority", "@path", "@query", "signature-key"]
+        signature_params = build_signature_params(covered_components, created=1234567890)
+        
+        signature_base = build_signature_base(
+            method="GET",
+            authority="example.com",
+            path="/data",
+            query="param=value",
+            headers={},
+            body=None,
+            signature_key_header=signature_key_header,
+            covered_components=covered_components,
+            signature_params=signature_params
+        )
+        
+        # Verify @query includes leading ?
+        assert '"@query": ?param=value' in signature_base
+    
+    def test_sign_request_with_nonce(self):
+        """Test signing request with Nonce header (per SPEC.md Section 10.5)."""
+        private_key, _ = generate_ed25519_keypair()
+        
+        # Sign request with Nonce header
+        headers = sign_request(
+            method="POST",
+            target_uri="https://resource.example.com/data",
+            headers={"Nonce": "Y3VyaW91c2x5Y3VyaW91cw", "Content-Type": "application/json"},
+            body=b'{"action": "test"}',
+            private_key=private_key,
+            sig_scheme="hwk"
+        )
+        
+        # Verify nonce is in Signature-Input
+        assert "nonce" in headers["Signature-Input"]
+        assert "Nonce" in headers  # Header should be preserved
+    
+    def test_body_components_opt_in(self):
+        """Test that body components are opt-in, not automatic."""
+        from aauth.signing.signature_base import _determine_covered_components
+        
+        # Without body, should not include body components
+        components = _determine_covered_components(None, None)
+        assert "content-type" not in components
+        assert "content-digest" not in components
+        
+        # With body but no additional_components, should not include body components
+        components = _determine_covered_components(None, b"test")
+        assert "content-type" not in components
+        assert "content-digest" not in components
+        
+        # With body and explicit additional_components, should include them
+        components = _determine_covered_components(
+            None, 
+            b"test",
+            additional_components=["content-type", "content-digest"]
+        )
+        assert "content-type" in components
+        assert "content-digest" in components
+    
+    def test_signature_params_required(self):
+        """Test that @signature-params is required in signature base."""
+        from aauth.signing.signature_base import build_signature_base
+        
+        private_key, _ = generate_ed25519_keypair()
+        signature_key_header = build_signature_key_header(
+            "hwk",
+            private_key,
+            label="sig1"
+        )
+        
+        # Should raise ValueError if signature_params is missing
+        with pytest.raises(ValueError, match="signature_params is required"):
+            build_signature_base(
+                method="GET",
+                authority="example.com",
+                path="/data",
+                query=None,
+                headers={},
+                body=None,
+                signature_key_header=signature_key_header,
+                covered_components=["@method", "@authority", "@path", "signature-key"],
+                signature_params=None
+            )
 
 
 class TestSignatureVerification:
