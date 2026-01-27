@@ -44,6 +44,19 @@ def verify_signature(
     Raises:
         SignatureError: If verification fails due to invalid format
     """
+    import os
+    import logging
+    logger = logging.getLogger("aauth.signing")
+    debug_enabled = os.getenv("DEBUG", "false").lower() == "true" or os.getenv("LOG_LEVEL", "INFO").upper() == "DEBUG"
+    
+    # ALWAYS log that verifier was called (to confirm code changes are picked up)
+    logger.info(f"🔐 VERIFIER: verify_signature() called")
+    logger.info(f"🔐 VERIFIER: method={method}, target_uri={target_uri}")
+    logger.info(f"🔐 VERIFIER: signature_input_header={signature_input_header}")
+    
+    if debug_enabled:
+        logger.info(f"🔐 VERIFIER: DEBUG mode enabled")
+    
     try:
         # Parse Signature-Input
         components, sig_params = parse_signature_input(signature_input_header)
@@ -188,23 +201,69 @@ def verify_signature(
                             break
                     
                     if not signing_key:
+                        if debug_enabled:
+                            logger.info(f"🔐 VERIFIER: Signing key not found in JWKS (kid={kid_header})")
                         return False
                     
-                    auth_public_key = jwk_to_public_key(signing_key)
+                    if debug_enabled:
+                        logger.info(f"🔐 VERIFIER: Found signing key in JWKS: {signing_key}")
+                    
+                    # Get algorithm from JWT header
+                    alg = header.get("alg")
+                    if not alg:
+                        logger.info(f"🔐 VERIFIER: JWT header missing 'alg' field")
+                        return False
+                    
+                    # Map algorithm to PyJWT algorithm names
+                    # RS256 -> RS256, EdDSA -> EdDSA, etc.
+                    algorithms = [alg]
+                    
+                    logger.info(f"🔐 VERIFIER: Verifying JWT with algorithm: {alg}")
+                    logger.info(f"🔐 VERIFIER: JWT token (first 100 chars): {jwt_token[:100]}...")
+                    
+                    # Handle different key types
+                    # For RSA keys (RS256, etc.), convert JWK to public key using PyJWT's RSA algorithm
+                    # For Ed25519 keys, we need to convert using jwk_to_public_key
+                    key_type = signing_key.get("kty")
+                    if key_type == "RSA":
+                        # Convert RSA JWK to public key object using PyJWT's RSA algorithm
+                        from jwt.algorithms import RSAAlgorithm
+                        auth_public_key = RSAAlgorithm.from_jwk(signing_key)
+                        logger.info(f"🔐 VERIFIER: Converted RSA JWK to public key using RSAAlgorithm.from_jwk()")
+                    elif key_type == "OKP" and signing_key.get("crv") == "Ed25519":
+                        # Convert Ed25519 JWK to public key
+                        auth_public_key = jwk_to_public_key(signing_key)
+                        logger.info(f"🔐 VERIFIER: Converted Ed25519 JWK to public key")
+                    else:
+                        logger.info(f"🔐 VERIFIER: Unsupported key type: {key_type}")
+                        return False
+                    
+                    logger.info(f"🔐 VERIFIER: Auth public key type: {type(auth_public_key)}")
                     
                     # Verify JWT signature
-                    jwt.decode(
-                        jwt_token,
-                        auth_public_key,
-                        algorithms=["EdDSA"],
-                        options={"verify_signature": True, "verify_exp": False, "verify_aud": False}
-                    )
+                    try:
+                        jwt.decode(
+                            jwt_token,
+                            auth_public_key,
+                            algorithms=algorithms,
+                            options={"verify_signature": True, "verify_exp": False, "verify_aud": False}
+                        )
+                        logger.info(f"🔐 VERIFIER: JWT signature verification PASSED")
+                    except Exception as jwt_error:
+                        logger.info(f"🔐 VERIFIER: JWT decode failed: {jwt_error}")
+                        import traceback
+                        logger.info(f"🔐 VERIFIER: JWT decode traceback: {traceback.format_exc()}")
+                        raise
                     
                     # Check expiration
                     exp = payload.get("exp")
                     if exp and int(time.time()) >= exp:
+                        logger.info(f"🔐 VERIFIER: JWT expired (exp={exp}, now={int(time.time())})")
                         return False
-                except Exception:
+                except Exception as e:
+                    logger.info(f"🔐 VERIFIER: JWT verification failed with exception: {e}")
+                    import traceback
+                    logger.info(f"🔐 VERIFIER: Exception traceback: {traceback.format_exc()}")
                     return False
             
             # Convert cnf.jwk to public key for HTTPSig verification
@@ -226,6 +285,15 @@ def verify_signature(
         if not signature_params:
             return False  # Invalid - signature_params required
         
+        # DEBUG: Log what we're building
+        if debug_enabled:
+            logger.info(f"🔐 VERIFIER: Building signature base")
+            logger.info(f"🔐 VERIFIER: method={method}, authority={authority}, path={path}")
+            logger.info(f"🔐 VERIFIER: covered_components={components}")
+            logger.info(f"🔐 VERIFIER: signature_params={signature_params}")
+            logger.info(f"🔐 VERIFIER: signature_key_header={signature_key_header[:100]}...")
+            logger.info(f"🔐 VERIFIER: body is None: {body is None}")
+        
         signature_base = build_signature_base(
             method=method,
             authority=authority,
@@ -238,14 +306,28 @@ def verify_signature(
             signature_params=signature_params
         )
         
+        # DEBUG: Log the constructed signature base (matching signer format)
+        if debug_enabled:
+            logger.info(f"🔐 VERIFIER SIGNATURE BASE:")
+            logger.info(f"🔐 Signature base length: {len(signature_base)} bytes")
+            logger.info(f"🔐 Signature base hex (first 200): {signature_base.encode('utf-8').hex()[:200]}...")
+            for i, line in enumerate(signature_base.split('\n')):
+                logger.info(f"🔐   Line {i}: {repr(line)}")
+        
         # Parse signature
         signature_bytes = parse_signature(signature_header, label=label)
         
         # Verify signature
         try:
             public_key.verify(signature_bytes, signature_base.encode('utf-8'))
+            if debug_enabled:
+                logger.info(f"🔐 VERIFIER: ✅ Signature verification PASSED")
             return True
-        except Exception:
+        except Exception as e:
+            if debug_enabled:
+                logger.info(f"🔐 VERIFIER: ❌ Signature verification FAILED: {e}")
+                import traceback
+                logger.info(f"🔐 VERIFIER: Exception traceback: {traceback.format_exc()}")
             return False
     
     except SignatureError:
