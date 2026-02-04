@@ -114,14 +114,13 @@ def sign_request(
             signature_params=signature_params
         )
         
-        # DEBUG: Print the signature base for debugging
         import logging
         logger = logging.getLogger("aauth.signing")
-        logger.info(f"🔐 AAUTH LIBRARY SIGNATURE BASE:")
-        logger.info(f"🔐 Signature base length: {len(signature_base)} bytes")
-        logger.info(f"🔐 Signature base hex (first 200): {signature_base.encode('utf-8').hex()[:200]}...")
+        logger.debug(f"🔐 AAUTH LIBRARY SIGNATURE BASE:")
+        logger.debug(f"🔐 Signature base length: {len(signature_base)} bytes")
+        logger.debug(f"🔐 Signature base hex (first 200): {signature_base.encode('utf-8').hex()[:200]}...")
         for i, line in enumerate(signature_base.split('\n')):
-            logger.info(f"🔐   Line {i}: {repr(line)}")
+            logger.debug(f"🔐   Line {i}: {repr(line)}")
         
         # Sign the signature base
         signature_bytes = private_key.sign(signature_base.encode('utf-8'))
