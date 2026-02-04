@@ -139,6 +139,7 @@ This gives you curl-like visibility into the HTTP traffic between agent and reso
 
 ## Output
 
+```bash
 ❯ python demo_phase1.py
 ============================================================
 Phase 1 Demo: Pseudonymous Flow (sig=hwk)
@@ -305,3 +306,4 @@ server: uvicorn
 ============================================================
 Phase 1 Demo Complete!
 ============================================================
+```

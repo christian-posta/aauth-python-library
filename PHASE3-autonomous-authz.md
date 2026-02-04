@@ -438,6 +438,7 @@ DEBUG AGENT: Requesting auth token from auth server
 
 ## Output
 
+```bash
 ❯ python demo_phase3.py
 
 ================================================================================
@@ -733,3 +734,4 @@ Total: 1 | Passed: 1 | Failed: 0
 ================================================================================
 
 Servers are still running. Press Ctrl+C to stop.
+```

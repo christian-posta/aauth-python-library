@@ -208,6 +208,7 @@ Unlike OIDC where ID tokens and access tokens are separate, AAuth provides a sin
 
 ## Output
 
+```bash
 ❯ python demo_phase5.py --manual
 
 ================================================================================
@@ -446,3 +447,4 @@ To test manually:
 ================================================================================
 
 Servers are still running. Press Ctrl+C to stop.
+```

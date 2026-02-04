@@ -183,6 +183,7 @@ pytest tests/test_phase4.py -v
    - Unit tests for policy evaluation
    - Integration test for complete flow
 
+```bash
 ❯ python demo_phase4.py --manual
 
 ================================================================================
@@ -639,3 +640,4 @@ Example authorization URL:
 ================================================================================
 
 Servers are still running. Press Ctrl+C to stop.
+```

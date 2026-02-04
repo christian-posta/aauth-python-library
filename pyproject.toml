@@ -8,12 +8,26 @@ version = "0.1.0"
 description = "AAuth protocol implementation for Python"
 readme = "README.md"
 requires-python = ">=3.9"
+license = {file = "LICENSE"}
 dependencies = [
     "cryptography>=41.0.0",
     "PyJWT>=2.8.0",
     "httpx>=0.25.0",
     "http-message-signatures>=1.0.0",
     "http-sfv>=0.9.8",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
 ]
 
 [project.optional-dependencies]
@@ -28,7 +42,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = {find = {}}
+packages = ["aauth"]
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]

@@ -218,6 +218,7 @@ Token exchange requests do not return refresh tokens. Resources must re-exchange
 
 ## Output
 
+```bash
 ❯ python demo_phase7.py
 
 ================================================================================
@@ -863,3 +864,4 @@ INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
 INFO:     Finished server process [95877]
 All servers terminated.
+```

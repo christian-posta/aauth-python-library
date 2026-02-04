@@ -320,6 +320,7 @@ Phase 2 maintains full backward compatibility with Phase 1:
 
 ## Output
 
+```bash
 ❯ python demo_phase2.py
 ================================================================================
 Phase 2 Demo: Agent Identity via JWKS
@@ -675,3 +676,4 @@ Summary:
 - Both endpoints work independently
 
 Servers are still running. Press Ctrl+C to stop.
+```

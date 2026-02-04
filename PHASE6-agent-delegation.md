@@ -218,6 +218,7 @@ Desktop and CLI tools use agent delegation:
 
 ## Output
 
+```bash
 ❯ python demo_phase6.py
 
 ================================================================================
@@ -448,3 +449,4 @@ Total: 3 | Passed: 3 | Failed: 0
 ================================================================================
 
 Servers are still running. Press Ctrl+C to stop.
+```
