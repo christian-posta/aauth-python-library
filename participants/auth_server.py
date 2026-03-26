@@ -1563,9 +1563,22 @@ class AuthServer:
         if debug:
             print(f"DEBUG AUTH:   HTTPSig signature verified", file=sys.stderr, flush=True)
         
-        # Evaluate policy for the exchange
+        # Evaluate policy for the exchange.
+        # For interaction chaining, consent-required policy must return deferred 202
+        # so upstream Resource 1 can bubble interaction to the original agent.
         policy_result = self._evaluate_policy(requesting_agent, downstream_resource, scope)
-        
+        if policy_result.get("requires_user_consent"):
+            return self._create_pending_request(
+                agent_id=requesting_agent,
+                resource_id=downstream_resource,
+                scope=scope,
+                agent_jwk=resource_jwk_for_cnf,
+                purpose="Downstream access via interaction chaining",
+                agent_is_resource=True,
+                txn=resource_claims.get("txn"),
+                clarification_supported=False,
+            )
+
         if not policy_result.get("allowed"):
             return JSONResponse(
                 status_code=403,

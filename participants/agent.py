@@ -30,6 +30,7 @@ import json
 import re
 import threading
 import time
+import asyncio
 
 logger = logging.getLogger("aauth.agent")
 
@@ -330,7 +331,73 @@ class Agent:
                                 sig_scheme="jwt",
                             )
 
+        # Handle deferred response directly from a resource (interaction chaining via Resource 1).
+        if response.status_code == 202:
+            pending_url = response.headers.get("location")
+            try:
+                pending_url = pending_url or response.json().get("location")
+            except Exception:
+                pass
+            if pending_url:
+                return await self._poll_resource_pending(response)
+
         return response
+
+    async def _poll_resource_pending(self, initial_response: httpx.Response) -> httpx.Response:
+        """Poll a resource-owned pending URL until terminal status."""
+        debug = _is_debug_enabled()
+        body = initial_response.json()
+        pending_url = body.get("location") or initial_response.headers.get("location")
+        interaction_endpoint = body.get("interaction_endpoint")
+        code = body.get("code")
+        interacted = False
+
+        # Handle user interaction once when requested.
+        if interaction_endpoint and code:
+            interaction_url = f"{interaction_endpoint}?code={code}"
+            if self.use_user_simulator:
+                from participants.user_simulator import UserSimulator
+                user_sim = UserSimulator()
+                interacted = await user_sim.complete_interaction(interaction_url)
+            else:
+                interacted = True
+            if not interacted:
+                return httpx.Response(
+                    status_code=500,
+                    json={"error": "interaction_failed", "error_description": "User interaction did not complete"},
+                )
+            if debug:
+                logger.debug(f"Completed chained interaction at {interaction_url}")
+
+        async with httpx.AsyncClient() as client:
+            for _ in range(60):
+                sig_headers = self.sign_request(method="GET", url=pending_url, sig_scheme="jwks_uri")
+                poll_response = await client.get(pending_url, headers=sig_headers)
+                if poll_response.status_code != 202:
+                    return poll_response
+
+                poll_body = poll_response.json()
+                if not interacted and poll_body.get("require") == "interaction":
+                    poll_code = poll_body.get("code")
+                    poll_interaction_endpoint = poll_body.get("interaction_endpoint") or interaction_endpoint
+                    if poll_code and poll_interaction_endpoint and self.use_user_simulator:
+                        from participants.user_simulator import UserSimulator
+                        user_sim = UserSimulator()
+                        interacted = await user_sim.complete_interaction(f"{poll_interaction_endpoint}?code={poll_code}")
+                        if not interacted:
+                            return httpx.Response(
+                                status_code=500,
+                                json={"error": "interaction_failed", "error_description": "User interaction did not complete"},
+                            )
+
+                retry_after = poll_response.headers.get("retry-after") or poll_response.headers.get("Retry-After")
+                try:
+                    wait_seconds = int(retry_after) if retry_after else 2
+                except (TypeError, ValueError):
+                    wait_seconds = 2
+                await asyncio.sleep(max(wait_seconds, 0))
+
+        return initial_response
     
     # NOTE: _handle_auth_challenge removed. AAuth header parsing now uses
     # parse_aauth_header() directly in request_resource().

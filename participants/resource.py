@@ -1,7 +1,7 @@
 """Resource participant - protected API that validates signatures."""
 
 from fastapi import FastAPI, Request, Response, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from typing import Optional, Dict, Any
 import sys
 import os
@@ -10,6 +10,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aauth.signing.verifier import verify_signature
+from aauth.signing.signer import sign_request
 from aauth.headers.signature_key import parse_signature_key
 from aauth.headers.signature_input import parse_signature_input
 from aauth.keys.jwk import jwk_to_public_key, public_key_to_jwk, generate_jwks, calculate_jwk_thumbprint
@@ -19,6 +20,12 @@ from aauth.metadata.auth_server import fetch_metadata
 from aauth.tokens.resource_token import create_resource_token
 from aauth.tokens.auth_token import parse_token_claims, verify_token
 from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
+from aauth.http.deferred import (
+    generate_pending_id,
+    generate_interaction_code,
+    build_pending_response_body,
+    build_pending_response_headers,
+)
 import httpx
 from typing import Optional
 import time
@@ -29,7 +36,14 @@ import uuid
 class Resource:
     """Resource server that validates signatures."""
     
-    def __init__(self, resource_id: str, port: int = 8002, auth_server: Optional[str] = None, enable_txn: bool = False):
+    def __init__(
+        self,
+        resource_id: str,
+        port: int = 8002,
+        auth_server: Optional[str] = None,
+        enable_txn: bool = False,
+        downstream_resource_url: Optional[str] = None,
+    ):
         """Initialize resource.
 
         Args:
@@ -42,6 +56,8 @@ class Resource:
         self.port = port
         self.auth_server = auth_server
         self.enable_txn = enable_txn
+        self.downstream_resource_url = downstream_resource_url
+        self.chained_pending_requests: Dict[str, Dict[str, Any]] = {}
         
         # Generate key pair for resource token signing
         self.private_key, self.public_key = generate_ed25519_keypair()
@@ -121,6 +137,11 @@ class Resource:
                     status_code=500,
                     content={"error": "internal_error", "error_description": str(e)}
                 )
+
+        @self.app.get("/data-chain-auth")
+        async def get_data_chain_auth(request: Request):
+            """Protected endpoint that chains downstream interaction via this resource."""
+            return await self._handle_chained_request(request, "GET")
         
         @self.app.get("/.well-known/aauth-resource")
         @self.app.get("/.well-known/aauth-resource.json")
@@ -165,6 +186,16 @@ class Resource:
             Allows agents to request resource tokens directly when they know the required scope upfront.
             """
             return await self._handle_resource_token_request(request)
+
+        @self.app.get("/pending/{pending_id}")
+        async def chained_pending_get(pending_id: str):
+            """Agent polls this pending URL while Resource chains downstream interaction."""
+            return await self._handle_chained_pending_get(pending_id)
+
+        @self.app.get("/interact")
+        async def chained_interact(request: Request):
+            """User interaction endpoint that redirects to downstream auth server interaction."""
+            return await self._handle_chained_interact(request)
     
     async def _handle_protected_request(self, request: Request, method: str, required_scheme: str = "hwk", require_auth_token: bool = False):
         """Handle a protected request with signature verification.
@@ -1672,6 +1703,232 @@ class Resource:
             if debug:
                 print(f"DEBUG RESOURCE:   Failed to parse response: {e}", file=sys.stderr, flush=True)
             return None
+
+    async def _request_downstream_authorization(
+        self,
+        downstream_url: str,
+        upstream_auth_token: str,
+        method: str = "GET",
+    ) -> Dict[str, Any]:
+        """Request downstream authorization token or deferred interaction details."""
+        # Step 1: get challenge from downstream resource
+        sig_headers = sign_request(
+            method=method,
+            target_uri=downstream_url,
+            headers={},
+            body=b"",
+            private_key=self.private_key,
+            sig_scheme="jwks_uri",
+            id=self.resource_id,
+            kid=self.kid,
+        )
+        async with httpx.AsyncClient() as client:
+            challenge_response = await client.request(method=method, url=downstream_url, headers=sig_headers)
+
+        if challenge_response.status_code != 401:
+            return {"mode": "final_response", "response": challenge_response}
+
+        aauth_header = challenge_response.headers.get("AAuth", "") or challenge_response.headers.get("Agent-Auth", "")
+        import re
+        resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
+        auth_server_match = re.search(r'auth[-_]server="([^"]+)"', aauth_header)
+        if not resource_token_match or not auth_server_match:
+            return {"mode": "final_response", "response": challenge_response}
+
+        resource_token = resource_token_match.group(1)
+        auth_server = auth_server_match.group(1)
+        token_endpoint = f"{auth_server}/token"
+        request_data = {"resource_token": resource_token, "upstream_token": upstream_auth_token}
+        request_body = json.dumps(request_data).encode("utf-8")
+        base_headers = {"Content-Type": "application/json"}
+        token_sig_headers = sign_request(
+            method="POST",
+            target_uri=token_endpoint,
+            headers=base_headers,
+            body=request_body,
+            private_key=self.private_key,
+            sig_scheme="jwt",
+            jwt=upstream_auth_token,
+        )
+        token_headers = {**base_headers, **token_sig_headers}
+
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(token_endpoint, headers=token_headers, content=request_body)
+
+        if token_response.status_code == 200:
+            token_data = token_response.json()
+            return {"mode": "token", "auth_token": token_data.get("auth_token")}
+
+        if token_response.status_code == 202:
+            body = token_response.json()
+            pending_url = body.get("location") or token_response.headers.get("location")
+            code = body.get("code")
+            metadata = fetch_metadata(f"{auth_server}/.well-known/aauth-issuer")
+            interaction_endpoint = metadata.get("interaction_endpoint")
+            return {
+                "mode": "deferred",
+                "downstream_pending_url": pending_url,
+                "downstream_code": code,
+                "downstream_interaction_endpoint": interaction_endpoint,
+            }
+
+        return {"mode": "final_response", "response": token_response}
+
+    async def _handle_chained_request(self, request: Request, method: str) -> Response:
+        """Handle Resource1->Resource2 interaction chaining and bubble 202 via Resource1."""
+        # First validate upstream auth token as normal
+        auth_result = await self._handle_protected_request(request, method, require_auth_token=True)
+        if auth_result.status_code != 200:
+            return auth_result
+        if not self.downstream_resource_url:
+            return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Missing downstream_resource_url"})
+
+        signature_key_header = request.headers.get("Signature-Key", "")
+        try:
+            parsed_key = parse_signature_key(signature_key_header)
+            upstream_auth_token = parsed_key["params"].get("jwt")
+        except Exception:
+            upstream_auth_token = None
+        if not upstream_auth_token:
+            return JSONResponse(status_code=401, content={"error": "invalid_request", "error_description": "Missing upstream auth token"})
+
+        downstream_authz = await self._request_downstream_authorization(
+            downstream_url=self.downstream_resource_url,
+            upstream_auth_token=upstream_auth_token,
+            method="GET",
+        )
+
+        if downstream_authz["mode"] == "token":
+            auth_token = downstream_authz.get("auth_token")
+            if not auth_token:
+                return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Missing downstream auth token"})
+            sig_headers = sign_request(
+                method="GET",
+                target_uri=self.downstream_resource_url,
+                headers={},
+                body=b"",
+                private_key=self.private_key,
+                sig_scheme="jwt",
+                jwt=auth_token,
+            )
+            async with httpx.AsyncClient() as client:
+                final_response = await client.get(self.downstream_resource_url, headers=sig_headers)
+            return JSONResponse(status_code=final_response.status_code, content=final_response.json())
+
+        if downstream_authz["mode"] == "deferred":
+            pending_id = generate_pending_id()
+            interaction_code = generate_interaction_code()
+            local_pending_url = f"{self.resource_id}/pending/{pending_id}"
+            self.chained_pending_requests[pending_id] = {
+                "status": "pending",
+                "local_interaction_code": interaction_code,
+                "downstream_pending_url": downstream_authz.get("downstream_pending_url"),
+                "downstream_code": downstream_authz.get("downstream_code"),
+                "downstream_interaction_endpoint": downstream_authz.get("downstream_interaction_endpoint"),
+                "downstream_url": self.downstream_resource_url,
+                "created_at": int(time.time()),
+                "expires_at": int(time.time()) + 600,
+            }
+            body = build_pending_response_body(
+                location=local_pending_url,
+                require="interaction",
+                code=interaction_code,
+            )
+            body["interaction_endpoint"] = f"{self.resource_id}/interact"
+            headers = build_pending_response_headers(
+                location=local_pending_url,
+                retry_after=2,
+                require="interaction",
+                code=interaction_code,
+            )
+            return Response(content=json.dumps(body), status_code=202, headers=headers, media_type="application/json")
+
+        final_resp = downstream_authz.get("response")
+        if final_resp is None:
+            return JSONResponse(status_code=500, content={"error": "server_error"})
+        try:
+            return JSONResponse(status_code=final_resp.status_code, content=final_resp.json())
+        except Exception:
+            return Response(status_code=final_resp.status_code, content=final_resp.text)
+
+    async def _handle_chained_pending_get(self, pending_id: str) -> Response:
+        """Poll downstream pending URL and return terminal response to the original agent."""
+        pending = self.chained_pending_requests.get(pending_id)
+        if not pending:
+            return JSONResponse(status_code=404, content={"error": "not_found"})
+        if int(time.time()) >= pending.get("expires_at", 0):
+            del self.chained_pending_requests[pending_id]
+            return JSONResponse(status_code=408, content={"error": "expired", "error_description": "Request expired"})
+
+        downstream_pending_url = pending.get("downstream_pending_url")
+        if not downstream_pending_url:
+            return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Missing downstream pending URL"})
+
+        sig_headers = sign_request(
+            method="GET",
+            target_uri=downstream_pending_url,
+            headers={},
+            body=b"",
+            private_key=self.private_key,
+            sig_scheme="jwks_uri",
+            id=self.resource_id,
+            kid=self.kid,
+        )
+        async with httpx.AsyncClient() as client:
+            downstream_poll = await client.get(downstream_pending_url, headers=sig_headers)
+
+        if downstream_poll.status_code == 202:
+            local_pending_url = f"{self.resource_id}/pending/{pending_id}"
+            body = build_pending_response_body(location=local_pending_url)
+            headers = build_pending_response_headers(location=local_pending_url, retry_after=2)
+            return Response(content=json.dumps(body), status_code=202, headers=headers, media_type="application/json")
+
+        if downstream_poll.status_code == 200:
+            data = downstream_poll.json()
+            auth_token = data.get("auth_token")
+            if not auth_token:
+                return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Missing downstream auth token"})
+            sig_headers = sign_request(
+                method="GET",
+                target_uri=pending["downstream_url"],
+                headers={},
+                body=b"",
+                private_key=self.private_key,
+                sig_scheme="jwt",
+                jwt=auth_token,
+            )
+            async with httpx.AsyncClient() as client:
+                final_response = await client.get(pending["downstream_url"], headers=sig_headers)
+            del self.chained_pending_requests[pending_id]
+            return JSONResponse(status_code=final_response.status_code, content=final_response.json())
+
+        if downstream_poll.status_code in (403, 408, 410):
+            del self.chained_pending_requests[pending_id]
+            try:
+                return JSONResponse(status_code=downstream_poll.status_code, content=downstream_poll.json())
+            except Exception:
+                return Response(status_code=downstream_poll.status_code, content=downstream_poll.text)
+
+        return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Unexpected downstream pending response"})
+
+    async def _handle_chained_interact(self, request: Request) -> Response:
+        """Redirect user from Resource1 interaction endpoint to downstream auth interaction endpoint."""
+        code = request.query_params.get("code")
+        if not code:
+            return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Missing code"})
+        selected = None
+        for _, details in self.chained_pending_requests.items():
+            if details.get("local_interaction_code") == code:
+                selected = details
+                break
+        if not selected:
+            return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Invalid code"})
+
+        interaction_endpoint = selected.get("downstream_interaction_endpoint")
+        downstream_code = selected.get("downstream_code")
+        if not interaction_endpoint or not downstream_code:
+            return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Downstream interaction unavailable"})
+        return RedirectResponse(url=f"{interaction_endpoint}?code={downstream_code}", status_code=303)
     
     def run(self):
         """Run the resource server."""

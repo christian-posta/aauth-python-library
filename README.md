@@ -106,6 +106,8 @@ This project implements the AAuth protocol incrementally, phase by phase. See **
 - **Phase 5**: Agent is Resource (SSO and unified token flow)
 - **Phase 6**: Agent Delegation (agent tokens for distributed instances)
 - **Phase 7**: Token Exchange (multi-hop resource access with delegation chain)
+- **Phase 8**: Clarification Chat (deferred polling with clarification responses)
+- **Phase 9**: Interaction Chaining (downstream interaction bubbled via Resource 1)
 
 ## Quick Start
 
@@ -203,6 +205,15 @@ Demonstrates deferred polling with clarification questions during consent, and a
 python demo_phase8.py
 ```
 
+#### Phase 9: Interaction Chaining
+
+Demonstrates downstream interaction bubbling via Resource 1, keeping downstream interaction details opaque to the agent:
+
+**Automated mode**:
+```bash
+python demo_phase9.py
+```
+
 ## Testing
 
 Run all tests:
@@ -220,6 +231,7 @@ pytest tests/test_phase5.py -v
 pytest tests/test_phase6.py -v
 pytest tests/test_phase7.py -v
 pytest tests/test_phase8.py -v
+pytest tests/test_phase9.py -v
 ```
 
 ## Phase Overview
@@ -284,6 +296,21 @@ See [PHASE6-agent-delegation.md](PHASE6-agent-delegation.md) for detailed docume
 - Enables autonomous multi-hop resource access
 
 See [PHASE7-token-exchange.md](PHASE7-token-exchange.md) for detailed documentation.
+
+### Phase 8: Clarification Chat
+- Auth server can include `clarification` prompts in polling responses
+- Agent replies with signed `POST /pending/{id}` clarification responses
+- Clarification round-trips occur before user consent completes
+
+See [PHASE8-clarification-chat.md](PHASE8-clarification-chat.md) for detailed documentation.
+
+### Phase 9: Interaction Chaining
+- Resource 1 acts as an interaction broker for downstream deferred auth
+- Resource 1 returns local `202 + pending URL + interaction code` to the agent
+- User enters via Resource 1 interaction endpoint and is redirected downstream
+- Resource 1 polls downstream pending URL and returns terminal outcome upstream
+
+See [PHASE9-interaction-chaining.md](PHASE9-interaction-chaining.md) for detailed documentation.
 
 ## Running Individual Participants
 
@@ -534,6 +561,8 @@ aauth/
 - [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md) - Phase 5 implementation details
 - [PHASE6-agent-delegation.md](PHASE6-agent-delegation.md) - Phase 6 implementation details
 - [PHASE7-token-exchange.md](PHASE7-token-exchange.md) - Phase 7 implementation details
+- [PHASE8-clarification-chat.md](PHASE8-clarification-chat.md) - Phase 8 implementation details
+- [PHASE9-interaction-chaining.md](PHASE9-interaction-chaining.md) - Phase 9 implementation details
 - [SPEC.md](SPEC.md) - AAuth protocol specification (exploratory / older narrative)
 - [SPEC_UPDATED.md](SPEC_UPDATED.md) - Draft-aligned protocol text used for current implementation
 - [DEMOS.md](DEMOS.md) - `demo_phase*.py` ↔ spec mapping and known gaps

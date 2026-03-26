@@ -26,6 +26,20 @@ class UserSimulator:
         self.password = password
         self.debug = _is_debug_enabled()
 
+    def _extract_hidden_input(self, html: str, name: str) -> str:
+        """Extract hidden input value from form HTML."""
+        import re
+        # Support either quote style and either attribute order.
+        patterns = [
+            rf'name=[\'"]{name}[\'"][^>]*value=[\'"]([^\'"]+)[\'"]',
+            rf'value=[\'"]([^\'"]+)[\'"][^>]*name=[\'"]{name}[\'"]',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html, flags=re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return ""
+
     async def complete_interaction(
         self,
         interaction_url: str,
@@ -56,11 +70,15 @@ class UserSimulator:
         if not auth_server_base:
             auth_server_base = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-        interact_endpoint = f"{auth_server_base}/interact"
-
         async with httpx.AsyncClient(follow_redirects=False) as client:
             # Step 1: GET interaction endpoint with code
-            response = await client.get(interaction_url)
+            response = await client.get(interaction_url, follow_redirects=True)
+            # If interaction chaining redirects to another host, post back to final page origin/path.
+            interact_endpoint = str(response.url).split("?", 1)[0]
+            final_query = parse_qs(response.url.query)
+            final_code = final_query.get("code", [None])[0]
+            if final_code:
+                code = final_code
 
             if self.debug:
                 print(f"DEBUG USER_SIM:   Interaction page: {response.status_code}", file=sys.stderr, flush=True)
@@ -75,10 +93,10 @@ class UserSimulator:
                 if self.debug:
                     print(f"DEBUG USER_SIM:   Login page detected, authenticating...", file=sys.stderr, flush=True)
 
-                # Extract pending_id from the form
-                import re
-                pending_id_match = re.search(r'name="pending_id"\s+value="([^"]+)"', content)
-                pending_id = pending_id_match.group(1) if pending_id_match else ""
+                pending_id = self._extract_hidden_input(content, "pending_id")
+                form_code = self._extract_hidden_input(content, "code")
+                if form_code:
+                    code = form_code
 
                 login_response = await client.post(
                     interact_endpoint,
@@ -109,10 +127,10 @@ class UserSimulator:
                 if self.debug:
                     print(f"DEBUG USER_SIM:   Consent page detected, granting consent...", file=sys.stderr, flush=True)
 
-                # Extract pending_id from the form
-                import re
-                pending_id_match = re.search(r'name="pending_id"\s+value="([^"]+)"', content)
-                pending_id = pending_id_match.group(1) if pending_id_match else ""
+                pending_id = self._extract_hidden_input(content, "pending_id")
+                form_code = self._extract_hidden_input(content, "code")
+                if form_code:
+                    code = form_code
 
                 consent_response = await client.post(
                     interact_endpoint,
@@ -156,10 +174,13 @@ class UserSimulator:
         if not auth_server_base:
             auth_server_base = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-        interact_endpoint = f"{auth_server_base}/interact"
-
         async with httpx.AsyncClient(follow_redirects=False) as client:
-            response = await client.get(interaction_url)
+            response = await client.get(interaction_url, follow_redirects=True)
+            interact_endpoint = str(response.url).split("?", 1)[0]
+            final_query = parse_qs(response.url.query)
+            final_code = final_query.get("code", [None])[0]
+            if final_code:
+                code = final_code
             if response.status_code != 200:
                 return False
 
@@ -167,9 +188,10 @@ class UserSimulator:
 
             # Authenticate if needed
             if "username" in content.lower() and "password" in content.lower():
-                import re
-                pending_id_match = re.search(r'name="pending_id"\s+value="([^"]+)"', content)
-                pending_id = pending_id_match.group(1) if pending_id_match else ""
+                pending_id = self._extract_hidden_input(content, "pending_id")
+                form_code = self._extract_hidden_input(content, "code")
+                if form_code:
+                    code = form_code
 
                 login_resp = await client.post(
                     interact_endpoint,
@@ -190,9 +212,10 @@ class UserSimulator:
 
             # Deny consent
             if "consent" in content.lower():
-                import re
-                pending_id_match = re.search(r'name="pending_id"\s+value="([^"]+)"', content)
-                pending_id = pending_id_match.group(1) if pending_id_match else ""
+                pending_id = self._extract_hidden_input(content, "pending_id")
+                form_code = self._extract_hidden_input(content, "code")
+                if form_code:
+                    code = form_code
 
                 consent_resp = await client.post(
                     interact_endpoint,
