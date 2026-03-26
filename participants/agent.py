@@ -37,7 +37,13 @@ logger = logging.getLogger("aauth.agent")
 class Agent:
     """Agent that requests access to resources."""
     
-    def __init__(self, agent_id: str, port: int = 8001, use_user_simulator: bool = True):
+    def __init__(
+        self,
+        agent_id: str,
+        port: int = 8001,
+        use_user_simulator: bool = True,
+        clarification_supported: bool = True,
+    ):
         """Initialize agent.
         
         Args:
@@ -45,16 +51,19 @@ class Agent:
             port: Port to run agent server on
             use_user_simulator: If True, use user simulator for automated consent flow.
                                If False, pause and wait for manual browser interaction.
+            clarification_supported: Whether this agent supports clarification chat.
         """
         self.agent_id = agent_id
         self.port = port
         self.use_user_simulator = use_user_simulator
+        self.clarification_supported = clarification_supported
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "key-1"
         
         # Token storage
         self.auth_token = None
         self.resource_token = None  # Store resource token for debug output
+        self.clarification_history = []
 
         # Phase 6: Agent delegation - track issued agent tokens
         self.issued_agent_tokens: Dict[str, Dict[str, Any]] = {}  # sub -> token details
@@ -83,7 +92,11 @@ class Agent:
         async def metadata():
             """Agent metadata endpoint per AAuth spec Section 13.1."""
             jwks_uri = f"{self.agent_id}/jwks.json"
-            return generate_agent_metadata(self.agent_id, jwks_uri)
+            return generate_agent_metadata(
+                self.agent_id,
+                jwks_uri,
+                clarification_supported=self.clarification_supported,
+            )
         
         @self.app.get("/callback")
         async def callback(request: Request):
@@ -510,11 +523,43 @@ class Agent:
             with httpx.Client() as client:
                 return client.get(url, headers=sig_h)
 
+        def _sign_and_send_post(url: str, body_dict: Dict[str, Any]):
+            """Synchronous signed POST for clarification responses."""
+            payload = json.dumps(body_dict).encode("utf-8")
+            base_headers = {"Content-Type": "application/json"}
+            sig_h = self.sign_request(
+                method="POST",
+                url=url,
+                headers=base_headers,
+                body=payload,
+                sig_scheme="jwks_uri",
+            )
+            request_headers = {**base_headers, **sig_h}
+            with httpx.Client() as client:
+                return client.post(url, headers=request_headers, content=payload)
+
+        def _on_clarification(_pending_url: str, question: str) -> Optional[str]:
+            """Generate a deterministic clarification response for demos."""
+            answer = (
+                "This agent only requests access to fulfill the current task and "
+                "uses the minimum required scope."
+            )
+            self.clarification_history.append({
+                "question": question,
+                "answer": answer,
+            })
+            if debug:
+                logger.debug(f"Clarification question received: {question[:120]}")
+                logger.debug(f"Clarification answer sent: {answer[:120]}")
+            return answer
+
         result = await loop.run_in_executor(
             None,
             lambda: poll_pending_url(
                 pending_url=pending_url,
                 sign_and_send_get=_sign_and_send_get,
+                on_clarification=_on_clarification if self.clarification_supported else None,
+                sign_and_send_post=_sign_and_send_post if self.clarification_supported else None,
                 max_polls=60,
                 default_wait=2,
             ),

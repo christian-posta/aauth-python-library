@@ -194,6 +194,15 @@ Demonstrates multi-hop resource access where a resource exchanges an upstream au
 python demo_phase7.py
 ```
 
+#### Phase 8: Clarification Chat
+
+Demonstrates deferred polling with clarification questions during consent, and agent `POST` clarification responses to the pending URL:
+
+**Automated mode**:
+```bash
+python demo_phase8.py
+```
+
 ## Testing
 
 Run all tests:
@@ -210,6 +219,7 @@ pytest tests/test_phase4.py -v
 pytest tests/test_phase5.py -v
 pytest tests/test_phase6.py -v
 pytest tests/test_phase7.py -v
+pytest tests/test_phase8.py -v
 ```
 
 ## Phase Overview

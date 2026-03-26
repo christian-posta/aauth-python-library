@@ -41,7 +41,15 @@ logger = logging.getLogger("aauth.auth_server")
 class AuthServer:
     """Auth server that issues auth tokens for autonomous authorization."""
 
-    def __init__(self, auth_id: str, port: int = 8003, require_user_consent: bool = False, trusted_auth_servers: Optional[List[str]] = None):
+    def __init__(
+        self,
+        auth_id: str,
+        port: int = 8003,
+        require_user_consent: bool = False,
+        trusted_auth_servers: Optional[List[str]] = None,
+        clarification_questions: Optional[List[str]] = None,
+        max_clarification_rounds: int = 5,
+    ):
         """Initialize auth server.
 
         Args:
@@ -49,6 +57,8 @@ class AuthServer:
             port: Port to run auth server on
             trusted_auth_servers: List of trusted auth server identifiers for call chaining
             require_user_consent: If True, require user consent for all requests (Phase 4 demo mode)
+            clarification_questions: Optional queued clarification prompts for demo flows.
+            max_clarification_rounds: Maximum clarification answers accepted.
         """
         self.auth_id = auth_id
         self.port = port
@@ -61,6 +71,8 @@ class AuthServer:
         # Pending requests: pending_id -> request details
         # Replaces old request_token and authorization_codes dicts
         self.pending_requests: Dict[str, Dict[str, Any]] = {}
+        self.clarification_questions = clarification_questions or []
+        self.max_clarification_rounds = max_clarification_rounds
 
         self.users: Dict[str, Dict[str, str]] = {  # Simple in-memory user database
             "testuser": {"password": "testpass", "name": "Test User", "email": "testuser@example.com"}
@@ -490,6 +502,9 @@ class AuthServer:
                 content={"error": "invalid_request", "error_description": "Agent signing key not available"}
             )
 
+        # Check whether the agent supports clarification chat.
+        agent_clarification_supported = self._agent_supports_clarification(agent_id, debug)
+
         # Check if user consent is required → deferred response (202)
         if policy_result.get("requires_user_consent"):
             return self._create_pending_request(
@@ -500,6 +515,7 @@ class AuthServer:
                 purpose=purpose,
                 agent_is_resource=agent_is_resource,
                 txn=resource_txn,
+                clarification_supported=agent_clarification_supported,
             )
 
         # Direct grant (autonomous authorization) → 200
@@ -670,6 +686,17 @@ class AuthServer:
             return agent_jwk  # agent server's key
         return None
 
+    def _agent_supports_clarification(self, agent_id: str, debug: bool = False) -> bool:
+        """Discover whether agent metadata declares clarification support."""
+        try:
+            metadata_url = f"{agent_id}/.well-known/aauth-agent"
+            metadata = fetch_resource_metadata(metadata_url)
+            return bool(metadata.get("clarification_supported", False))
+        except Exception as e:
+            if debug:
+                logger.debug(f"Unable to fetch agent metadata for clarification support: {e}")
+            return False
+
     def _create_pending_request(
         self,
         agent_id: str,
@@ -679,6 +706,7 @@ class AuthServer:
         purpose: Optional[str] = None,
         agent_is_resource: bool = False,
         txn: Optional[str] = None,
+        clarification_supported: bool = False,
     ) -> Response:
         """Create a pending request and return 202 with Location + interaction code.
 
@@ -704,6 +732,9 @@ class AuthServer:
             "user_id": None,
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + 600,  # 10 minutes
+            "clarification_supported": clarification_supported,
+            "clarification_questions": list(self.clarification_questions),
+            "clarification_history": [],
         }
 
         if debug:
@@ -787,7 +818,14 @@ class AuthServer:
 
         # Still pending → 202
         pending_url = f"{self.auth_id}/pending/{pending_id}"
-        body = build_pending_response_body(location=pending_url)
+        clarification = None
+        if pending.get("clarification_supported"):
+            questions = pending.get("clarification_questions") or []
+            history = pending.get("clarification_history") or []
+            if questions and len(history) < len(questions):
+                clarification = questions[len(history)]
+
+        body = build_pending_response_body(location=pending_url, clarification=clarification)
         headers = build_pending_response_headers(location=pending_url, retry_after=2)
 
         return Response(
@@ -814,13 +852,26 @@ class AuthServer:
             )
 
         clarification_response = body.get("clarification_response")
-        if clarification_response:
-            pending.setdefault("clarification_history", []).append({
-                "response": clarification_response,
-                "timestamp": int(time.time()),
-            })
-            if debug:
-                logger.debug(f"Clarification response received for {pending_id}: {clarification_response[:80]}")
+        if not clarification_response:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "Missing clarification_response"},
+            )
+
+        history = pending.setdefault("clarification_history", [])
+        if len(history) >= self.max_clarification_rounds:
+            pending["status"] = "denied"
+            return JSONResponse(
+                status_code=403,
+                content=build_polling_error_body("denied", "Clarification round limit exceeded"),
+            )
+
+        history.append({
+            "response": clarification_response,
+            "timestamp": int(time.time()),
+        })
+        if debug:
+            logger.debug(f"Clarification response received for {pending_id}: {clarification_response[:80]}")
 
         # Return current status
         pending_url = f"{self.auth_id}/pending/{pending_id}"

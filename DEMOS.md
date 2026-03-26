@@ -13,8 +13,9 @@ Normative reference for current protocol behavior in this repo: **`SPEC_UPDATED.
 | `demo_phase5.py` | Section 4.5.5 Agent as audience (`scope` only, no `resource_token`) |
 | `demo_phase6.py` | Agent tokens (Section 7); delegate `scheme=jwt` |
 | `demo_phase7.py` | Section 4.5.8.1 Call chaining (direct grant), `upstream_token` |
+| `demo_phase8.py` | Section 11.4 Clarification chat (polling `clarification` + POST `clarification_response`) |
 
-There is **no** `demo_phase8.py`. Additional behaviors are listed below as gaps.
+`demo_phase8.py` now covers clarification chat. Additional behaviors are listed below as remaining gaps.
 
 ## Gaps (not covered by `demo_phase*`)
 
@@ -25,7 +26,6 @@ These spec areas are either not scripted as demos or depend on features still in
 - **Section 4.5.8.2 Interaction chaining** — downstream user interaction forwarded via Resource 1’s interaction endpoint.
 - **Section 8.3 Resource token endpoint** — proactive `POST` for a resource token **without** a prior 401 challenge.
 - **Sections 10 / 18.4 Terminal polling** — scripted demos for 403 (denied / abandoned), 408 (expired), 410 (invalid code).
-- **Section 11.4 Clarification chat** — full round-trip (poll carries `clarification`, agent `POST`s `clarification_response`).
 - **Section 11.6 Token refresh** — `POST` token with expired `auth_token`; token refresh handling is not fully implemented on the demo auth server.
 
 **Optional / advanced:** Section 7.1 agent token `aud` / `aud_sub`; Section 15.3 `additional_signature_components` on resources.
