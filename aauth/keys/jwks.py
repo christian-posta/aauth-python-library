@@ -108,41 +108,38 @@ class JWKSFetcher:
         self,
         identifier: str,
         kid: Optional[str] = None,
-        well_known: Optional[str] = None
+        metadata_path: str = "aauth-agent.json"
     ) -> Dict[str, Any]:
-        """Fetch JWKS for an identifier.
-        
+        """Fetch JWKS for an identifier via metadata discovery.
+
         Args:
             identifier: Agent/resource/auth server identifier (HTTPS URL)
             kid: Optional key ID (for cache key)
-            well_known: Optional well-known metadata document name
-        
+            metadata_path: Well-known metadata filename (default: aauth-agent.json)
+
         Returns:
             JWKS document dictionary
-            
+
         Raises:
             JWKSError: If fetch fails
         """
-        # Determine JWKS URL
-        if well_known:
-            # Fetch metadata first, then extract jwks_uri
-            metadata_url = f"{identifier}/.well-known/{well_known}"
-            try:
-                metadata = await self._http_client.fetch_json(metadata_url)
-                jwks_uri = metadata.get("jwks_uri")
-                if not jwks_uri:
-                    raise JWKSError(
-                        f"No jwks_uri in metadata from {metadata_url}",
-                        jwks_uri=metadata_url
-                    )
-            except Exception as e:
+        # Fetch metadata to discover jwks_uri
+        metadata_url = f"{identifier}/.well-known/{metadata_path}"
+        try:
+            metadata = await self._http_client.fetch_json(metadata_url)
+            jwks_uri = metadata.get("jwks_uri")
+            if not jwks_uri:
                 raise JWKSError(
-                    f"Failed to fetch metadata from {metadata_url}: {e}",
+                    f"No jwks_uri in metadata from {metadata_url}",
                     jwks_uri=metadata_url
                 )
-        else:
-            # Assume identifier is JWKS URL or can be fetched directly
-            jwks_uri = identifier
+        except JWKSError:
+            raise
+        except Exception as e:
+            raise JWKSError(
+                f"Failed to fetch metadata from {metadata_url}: {e}",
+                jwks_uri=metadata_url
+            )
         
         # Check cache
         cache_key = f"{jwks_uri}:{kid}" if kid else jwks_uri

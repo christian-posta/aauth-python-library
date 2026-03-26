@@ -42,10 +42,10 @@ async def main():
         print("1. User visits agent's website (simulated)", file=sys.stderr)
         print("2. Agent detects user needs authentication and initiates SSO flow", file=sys.stderr)
         print("3. Agent requests self-authorization with scope (no resource_token)", file=sys.stderr)
-        print("4. Auth server returns request_token", file=sys.stderr)
+        print("4. Auth server returns 202 + pending URL + interaction code", file=sys.stderr)
         print("5. **YOU WILL BE PROMPTED TO OPEN A URL IN YOUR BROWSER**", file=sys.stderr)
-        print("6. Authenticate and grant consent in the browser", file=sys.stderr)
-        print("7. Agent exchanges authorization code for auth token", file=sys.stderr)
+        print("6. Authenticate and grant consent at /interact", file=sys.stderr)
+        print("7. Agent polls pending URL until 200 with auth_token (no authorization code)", file=sys.stderr)
         print("8. Verify auth token claims (aud=agent, agent omitted, sub present)", file=sys.stderr)
         print("\nDemo Credentials:", file=sys.stderr)
         print("  Username: testuser", file=sys.stderr)
@@ -57,9 +57,9 @@ async def main():
         print("1. User visits agent's website (simulated)", file=sys.stderr)
         print("2. Agent detects user needs authentication and initiates SSO flow", file=sys.stderr)
         print("3. Agent requests self-authorization with scope (no resource_token)", file=sys.stderr)
-        print("4. Auth server returns request_token", file=sys.stderr)
-        print("5. User simulator completes consent flow automatically", file=sys.stderr)
-        print("6. Agent exchanges authorization code for auth token", file=sys.stderr)
+        print("4. Auth server returns 202 + pending URL + interaction code", file=sys.stderr)
+        print("5. User simulator completes consent at /interact", file=sys.stderr)
+        print("6. Agent polls pending URL until auth_token is returned", file=sys.stderr)
         print("7. Verify auth token claims (aud=agent, agent omitted, sub present)", file=sys.stderr)
     
     print("\nDebug output is enabled by default.", file=sys.stderr)
@@ -126,13 +126,11 @@ async def main():
         
         # Request self-authorization (triggered by user's visit)
         scope = "profile email"
-        redirect_uri = f"{agent_id}/callback"
-        
+
         print(f"📤 Agent requests self-authorization with scope: {scope}", file=sys.stderr, flush=True)
         auth_token = await agent.request_self_authorization(
             scope=scope,
             auth_server=auth_id,
-            redirect_uri=redirect_uri
         )
         
         if not auth_token:
@@ -223,11 +221,11 @@ async def main():
         print("MANUAL TESTING INSTRUCTIONS", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("To test manually:", file=sys.stderr)
-        print("1. The agent will request self-authorization", file=sys.stderr)
-        print("2. Open the authorization URL in your browser", file=sys.stderr)
+        print("1. The agent will POST the token endpoint for self-access (scope only)", file=sys.stderr)
+        print(f"2. Open the interaction URL, e.g. {auth_id}/interact?code=<code>", file=sys.stderr)
         print("3. Login with: testuser / testpass", file=sys.stderr)
         print("4. Grant consent", file=sys.stderr)
-        print("5. The agent will automatically exchange the code for tokens", file=sys.stderr)
+        print("5. The agent polls the pending URL until it receives auth_token", file=sys.stderr)
         print("=" * 80 + "\n", file=sys.stderr)
     
     print("Servers are still running. Press Ctrl+C to stop.", file=sys.stderr, flush=True)

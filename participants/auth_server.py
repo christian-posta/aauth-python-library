@@ -1,4 +1,12 @@
-"""Auth server participant - issues auth tokens for autonomous authorization."""
+"""Auth server participant - issues auth tokens for autonomous authorization.
+
+Updated for SPEC_UPDATED.md:
+- JSON request bodies (not form-encoded)
+- Token endpoint mode detection by parameters (resource_token, scope, upstream_token, auth_token)
+- Deferred responses: 202 + Location + pending URL polling
+- Interaction codes (ABCD1234) replace authorization codes
+- Pending URL endpoints: GET /pending/{id} for polling, POST for clarification
+"""
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -7,6 +15,7 @@ import sys
 import os
 import json
 import time
+import logging
 from urllib.parse import urlparse
 
 # Add parent directory to path for imports
@@ -18,112 +27,136 @@ from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.keys.jwk import public_key_to_jwk, generate_jwks, jwk_to_public_key, calculate_jwk_thumbprint
 from aauth.metadata.auth_server import generate_auth_metadata, fetch_metadata as fetch_resource_metadata
 from aauth.tokens.auth_token import verify_token, create_auth_token
-from core import _is_debug_enabled, _is_http_debug_enabled
+from aauth.http.deferred import (
+    generate_pending_id, generate_interaction_code,
+    build_pending_response_body, build_pending_response_headers,
+    build_success_response, build_polling_error_body,
+    detect_token_request_mode,
+)
+from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
+
+logger = logging.getLogger("aauth.auth_server")
 
 
 class AuthServer:
     """Auth server that issues auth tokens for autonomous authorization."""
-    
+
     def __init__(self, auth_id: str, port: int = 8003, require_user_consent: bool = False, trusted_auth_servers: Optional[List[str]] = None):
         """Initialize auth server.
-        
+
         Args:
             auth_id: Auth server identifier (HTTPS URL)
             port: Port to run auth server on
-            trusted_auth_servers: List of trusted auth server identifiers for token exchange (Phase 7)
+            trusted_auth_servers: List of trusted auth server identifiers for call chaining
             require_user_consent: If True, require user consent for all requests (Phase 4 demo mode)
         """
         self.auth_id = auth_id
         self.port = port
         self.require_user_consent = require_user_consent
-        
+
         # Generate key pair for signing auth tokens
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "auth-key-1"
-        
-        # Phase 4: State management for user consent flows
-        self.pending_requests: Dict[str, Dict[str, Any]] = {}  # request_token -> request details
-        self.authorization_codes: Dict[str, Dict[str, Any]] = {}  # code -> request details
+
+        # Pending requests: pending_id -> request details
+        # Replaces old request_token and authorization_codes dicts
+        self.pending_requests: Dict[str, Dict[str, Any]] = {}
+
         self.users: Dict[str, Dict[str, str]] = {  # Simple in-memory user database
             "testuser": {"password": "testpass", "name": "Test User", "email": "testuser@example.com"}
         }
-        
-        # Phase 7: Federation trust - list of trusted auth servers for token exchange
-        # In production, this would be configured via policy or discovered via metadata
+
+        # Federation trust - list of trusted auth servers for call chaining
         self.trusted_auth_servers: List[str] = trusted_auth_servers if trusted_auth_servers else []
-        
+
         # Create FastAPI app
         self.app = FastAPI(title="AAuth Auth Server")
-        
+
         # Setup routes
         self._setup_routes()
     
     def _setup_routes(self):
         """Setup FastAPI routes."""
-        
+
         @self.app.get("/")
         async def root():
             return {"auth_id": self.auth_id, "status": "running"}
-        
+
         @self.app.get("/jwks.json")
         async def jwks():
             """JWKS endpoint for auth server signing keys."""
             jwk = public_key_to_jwk(self.public_key, kid=self.kid)
             return generate_jwks([jwk])
-        
+
         @self.app.get("/.well-known/aauth-issuer")
+        @self.app.get("/.well-known/aauth-issuer.json")
         async def metadata():
-            """Auth server metadata endpoint per AAuth spec Section 8.2."""
+            """Auth server metadata endpoint per spec Section 13.2."""
             jwks_uri = f"{self.auth_id}/jwks.json"
-            token_endpoint = f"{self.auth_id}/agent/token"
-            auth_endpoint = f"{self.auth_id}/agent/auth"
+            token_endpoint = f"{self.auth_id}/token"
+            interaction_endpoint = f"{self.auth_id}/interact"
             return generate_auth_metadata(
                 auth_id=self.auth_id,
                 jwks_uri=jwks_uri,
                 token_endpoint=token_endpoint,
-                auth_endpoint=auth_endpoint,
-                signing_algs_supported=["ed25519"],
-                request_types_supported=["auth", "code", "exchange", "refresh"]
+                interaction_endpoint=interaction_endpoint,
             )
-        
-        @self.app.post("/agent/token")
+
+        @self.app.post("/token")
         async def token_endpoint(request: Request):
-            """Token endpoint for autonomous authorization per AAuth spec Section 9.3.
-            
-            Supports:
-            - request_type=auth: Autonomous authorization (Phase 3) or user consent flow (Phase 4)
-            - request_type=code: Authorization code exchange (Phase 4)
+            """Token endpoint per spec Section 11.
+
+            Mode detection by parameters:
+            - resource_token → resource access
+            - scope (no resource_token) → self-access (SSO/1P)
+            - resource_token + upstream_token → call chaining
+            - auth_token → token refresh
             """
             return await self._handle_token_request(request)
-        
-        @self.app.get("/agent/auth")
-        async def auth_endpoint_get(request: Request):
-            """Authorization endpoint (user-facing) per AAuth spec Section 9.5.
-            
-            Displays login page (if not authenticated) or consent page.
-            """
-            return await self._handle_auth_get(request)
-        
-        @self.app.post("/agent/auth")
-        async def auth_endpoint_post(request: Request):
-            """Authorization endpoint for login and consent submission per AAuth spec Section 9.5."""
-            return await self._handle_auth_post(request)
+
+        # --- Pending URL endpoints (Deferred Responses, spec Section 10) ---
+
+        @self.app.get("/pending/{pending_id}")
+        async def pending_get(pending_id: str, request: Request):
+            """Poll pending URL with GET per spec Section 10.3."""
+            return await self._handle_pending_get(pending_id, request)
+
+        @self.app.post("/pending/{pending_id}")
+        async def pending_post(pending_id: str, request: Request):
+            """POST to pending URL for clarification response per spec Section 11.4."""
+            return await self._handle_pending_post(pending_id, request)
+
+        # --- Interaction endpoint (user-facing, spec Section 11.5) ---
+
+        @self.app.get("/interact")
+        async def interact_get(request: Request):
+            """Interaction endpoint - user navigates here with code parameter."""
+            return await self._handle_interact_get(request)
+
+        @self.app.post("/interact")
+        async def interact_post(request: Request):
+            """Interaction endpoint - login and consent submission."""
+            return await self._handle_interact_post(request)
     
     async def _handle_token_request(self, request: Request) -> Response:
-        """Handle token request from agent.
-        
-        Per AAuth spec Section 9.3, supports request_type=auth for autonomous authorization.
+        """Handle token request per spec Section 11.
+
+        Accepts JSON body. Mode detection by parameters:
+        - resource_token → resource access
+        - scope (no resource_token) → self-access
+        - resource_token + upstream_token → call chaining
+        - auth_token → token refresh
         """
         debug = _is_debug_enabled()
         http_debug = _is_http_debug_enabled()
-        
+
         # Get request body
         body_bytes = await request.body()
         body_text = body_bytes.decode('utf-8') if body_bytes else ""
-        
+
         if http_debug:
             print("\n" + "=" * 80, file=sys.stderr)
-            print(">>> AUTH SERVER REQUEST received", file=sys.stderr)
+            print(">>> AUTH SERVER TOKEN REQUEST received", file=sys.stderr)
             print("=" * 80, file=sys.stderr)
             print(f"{request.method} {request.url.path} HTTP/1.1", file=sys.stderr)
             for name, value in sorted(request.headers.items()):
@@ -135,69 +168,59 @@ class AuthServer:
                 print(f"\n[Body ({len(body_bytes)} bytes)]", file=sys.stderr)
                 print(body_text, file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
-        
-        if debug:
-            print(f"DEBUG AUTH: Handling token request", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Method: {request.method}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Path: {request.url.path}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Body: {body_text}", file=sys.stderr, flush=True)
-        
-        # Parse request body (application/x-www-form-urlencoded)
+
+        # Parse JSON request body (spec requires application/json)
         try:
-            from urllib.parse import parse_qs
-            params = parse_qs(body_text, keep_blank_values=True)
-            # Convert to simple dict (take first value from each list)
-            params_dict = {k: v[0] if v else "" for k, v in params.items()}
+            params_dict = json.loads(body_text) if body_text else {}
         except Exception as e:
             if debug:
-                print(f"DEBUG AUTH:   Failed to parse request body: {e}", file=sys.stderr, flush=True)
+                logger.debug(f"Failed to parse JSON request body: {e}")
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_request", "error_description": f"Failed to parse request body: {e}"}
+                content={"error": "invalid_request", "error_description": f"Invalid JSON body: {e}"}
             )
-        
+
         if debug:
-            print(f"DEBUG AUTH:   Parsed parameters: {json.dumps(params_dict, indent=2)}", file=sys.stderr, flush=True)
-        
-        # Check request_type
-        request_type = params_dict.get("request_type")
-        
-        # Phase 4: Handle authorization code exchange
-        if request_type == "code":
-            return await self._handle_code_exchange(request, params_dict, body_bytes)
-        
-        # Phase 7: Handle token exchange
-        if request_type == "exchange":
-            return await self._handle_token_exchange(request, params_dict, body_bytes)
-        
-        # Phase 3/4: Handle auth request (autonomous or user consent)
-        if request_type != "auth":
-            if debug:
-                print(f"DEBUG AUTH:   Unsupported request_type: {request_type}", file=sys.stderr, flush=True)
+            logger.debug(f"Token request params: {json.dumps(params_dict, indent=2)}")
+
+        # Detect mode by parameters (spec Section 11.1)
+        try:
+            mode = detect_token_request_mode(params_dict)
+        except ValueError as e:
             return JSONResponse(
                 status_code=400,
-                content={"error": "unsupported_request_type", "error_description": f"Unsupported request_type: {request_type}"}
+                content={"error": "invalid_request", "error_description": str(e)}
             )
+
+        if debug:
+            logger.debug(f"Token endpoint mode: {mode}")
+
+        # Route to handler based on mode
+        if mode == "call_chaining":
+            return await self._handle_call_chaining(request, params_dict, body_bytes)
+        if mode == "token_refresh":
+            return await self._handle_token_refresh(request, params_dict, body_bytes)
+        # resource_access and self_access share the same authorization flow
         
         # Verify agent's HTTPSig signature
         headers_dict = dict(request.headers)
         method = request.method
         target_uri = str(request.url)
-        
+
         if debug:
-            print(f"DEBUG AUTH:   Verifying agent's HTTPSig signature", file=sys.stderr, flush=True)
-        
+            logger.debug("Verifying agent's HTTPSig signature")
+
         # Extract signature headers
         signature_input_header = headers_dict.get("signature-input", "")
         signature_header = headers_dict.get("signature", "")
         signature_key_header = headers_dict.get("signature-key", "")
-        
+
         if not signature_input_header or not signature_header or not signature_key_header:
             if debug:
-                print(f"DEBUG AUTH:   Missing signature headers", file=sys.stderr, flush=True)
+                logger.debug("Missing signature headers")
             return JSONResponse(
                 status_code=401,
-                content={"error": "invalid_request", "error_description": "Missing signature headers"}
+                content={"error": "invalid_signature", "error_description": "Missing signature headers"}
             )
         
         # Parse signature key to determine scheme
@@ -222,7 +245,7 @@ class AuthServer:
         agent_delegate_sub = None  # Phase 6: agent delegation
         agent_jwk = None  # Phase 6: delegate's key from agent token
         
-        if scheme == "jwks":
+        if scheme in ("jwks", "jwks_uri"):
             agent_id = key_params.get("id")
         elif scheme == "jwt":
             # Phase 6: Agent delegation - validate agent token
@@ -335,39 +358,27 @@ class AuthServer:
             if agent_delegate_sub:
                 print(f"DEBUG AUTH:   Agent delegate (sub): {agent_delegate_sub}", file=sys.stderr, flush=True)
         
-        # Extract well-known parameter (optional, defaults to "aauth-agent" for AAuth agents)
-        well_known = key_params.get("well-known", "aauth-agent") if scheme == "jwks" else None
-        
         # Verify signature
         # For agent tokens, we've already validated the JWT, but we still need to verify HTTPSig
         # using the delegate's key from cnf.jwk
         def jwks_fetcher(agent_id_param: str, kid_param: str = None):
-            """Fetch JWKS for agent and return full JWKS document.
-            
-            Returns full JWKS document (with "keys" array) for verify_signature.
-            Uses well-known parameter from signature if present, otherwise fetches {id} directly as JWKS.
+            """Fetch JWKS for agent via metadata discovery.
+
+            Fetches agent metadata from {id}/.well-known/aauth-agent.json,
+            extracts jwks_uri, then fetches the JWKS document.
             """
             if debug:
-                print(f"DEBUG AUTH:   Fetching JWKS for agent: {agent_id_param}, kid={kid_param}, well-known={well_known}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Fetching JWKS for agent: {agent_id_param}, kid={kid_param}", file=sys.stderr, flush=True)
             try:
                 import httpx
-                jwks_uri = None
-                
-                if well_known:
-                    # Fetch metadata from {id}/.well-known/{well-known}
-                    from aauth.metadata.auth_server import fetch_metadata
-                    metadata_url = f"{agent_id_param}/.well-known/{well_known}"
-                    if debug:
-                        print(f"DEBUG AUTH:   Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
-                    metadata = fetch_metadata(metadata_url)
-                    jwks_uri = metadata.get("jwks_uri")
-                    if debug:
-                        print(f"DEBUG AUTH:   JWKS URI from metadata: {jwks_uri}", file=sys.stderr, flush=True)
-                else:
-                    # Fetch {id} directly as JWKS
-                    jwks_uri = agent_id_param
-                    if debug:
-                        print(f"DEBUG AUTH:   well-known absent, fetching {agent_id_param} directly as JWKS", file=sys.stderr, flush=True)
+                from aauth.metadata.auth_server import fetch_metadata
+                metadata_url = f"{agent_id_param}/.well-known/aauth-agent.json"
+                if debug:
+                    print(f"DEBUG AUTH:   Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
+                metadata = fetch_metadata(metadata_url)
+                jwks_uri = metadata.get("jwks_uri")
+                if debug:
+                    print(f"DEBUG AUTH:   JWKS URI from metadata: {jwks_uri}", file=sys.stderr, flush=True)
                 
                 if not jwks_uri:
                     if debug:
@@ -424,268 +435,102 @@ class AuthServer:
         if debug:
             print(f"DEBUG AUTH:   Signature verification PASSED", file=sys.stderr, flush=True)
         
-        # Get redirect_uri (REQUIRED per SPEC.md Section 9.3, even for autonomous flows)
-        redirect_uri = params_dict.get("redirect_uri")
-        if not redirect_uri:
-            if debug:
-                print(f"DEBUG AUTH:   Missing redirect_uri parameter (REQUIRED per spec)", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_request", "error_description": "Missing redirect_uri parameter (required per spec)"}
-            )
-        
-        if debug:
-            print(f"DEBUG AUTH:   redirect_uri: {redirect_uri}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Note: For Phase 3 autonomous flow, redirect_uri is not used but required by spec", file=sys.stderr, flush=True)
-        
-        # Phase 5: Support direct authorization (agent is resource)
-        # Exactly one of resource_token, scope, or auth_request_url must be provided
+        # Extract parameters for mode routing
         resource_token = params_dict.get("resource_token")
         scope = params_dict.get("scope")
-        auth_request_url = params_dict.get("auth_request_url")
+        purpose = params_dict.get("purpose")
+
+        # Determine resource_id and scope based on mode
+        agent_is_resource = (mode == "self_access")
         
-        # Count how many are provided
-        provided_count = sum([bool(resource_token), bool(scope), bool(auth_request_url)])
-        
-        if provided_count == 0:
-            if debug:
-                print(f"DEBUG AUTH:   Missing required parameter: must provide resource_token, scope, or auth_request_url", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_request", "error_description": "Must provide exactly one of: resource_token, scope, or auth_request_url"}
-            )
-        
-        if provided_count > 1:
-            if debug:
-                print(f"DEBUG AUTH:   Multiple parameters provided: resource_token={bool(resource_token)}, scope={bool(scope)}, auth_request_url={bool(auth_request_url)}", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_request", "error_description": "Must provide exactly one of: resource_token, scope, or auth_request_url"}
-            )
-        
-        # Determine if this is Phase 5 (agent is resource) or Phase 4 (resource token)
-        agent_is_resource = bool(scope) or bool(auth_request_url)
-        
+        # Extract agent's JWK for agent_jkt verification and cnf.jwk
+        agent_jwk = self._extract_agent_jwk(scheme, key_params, agent_id, debug)
+
         if debug:
-            if agent_is_resource:
-                print(f"DEBUG AUTH:   Phase 5: Agent is resource (direct authorization)", file=sys.stderr, flush=True)
-                print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
-                if auth_request_url:
-                    print(f"DEBUG AUTH:   Auth request URL: {auth_request_url}", file=sys.stderr, flush=True)
-            else:
-                print(f"DEBUG AUTH:   Phase 4: Resource token provided", file=sys.stderr, flush=True)
-                print(f"DEBUG AUTH:   Resource token received: {resource_token[:100]}...", file=sys.stderr, flush=True)
-        
-        # Extract agent's current signing key for agent_jkt verification
-        # We need to get the JWK from the signature to verify agent_jkt
-        agent_jwk = None
-        if scheme == "jwks":
-            # Fetch agent's JWKS and find the key used for signing
-            kid = key_params.get("kid")
-            if debug:
-                print(f"DEBUG AUTH:   Extracting agent JWK for agent_jkt verification: scheme={scheme}, kid={kid}", file=sys.stderr, flush=True)
-            
-            if kid:
-                # jwks_fetcher returns a single JWK, but we need the full JWKS document
-                # So we'll fetch it directly using the same well-known logic
-                try:
-                    import httpx
-                    jwks_uri = None
-                    
-                    if well_known:
-                        from aauth.metadata.auth_server import fetch_metadata
-                        metadata_url = f"{agent_id}/.well-known/{well_known}"
-                        if debug:
-                            print(f"DEBUG AUTH:   Fetching agent metadata from {metadata_url} for agent_jkt verification", file=sys.stderr, flush=True)
-                        metadata = fetch_metadata(metadata_url)
-                        jwks_uri = metadata.get("jwks_uri")
-                    else:
-                        jwks_uri = agent_id
-                        if debug:
-                            print(f"DEBUG AUTH:   well-known absent, fetching {agent_id} directly as JWKS for agent_jkt verification", file=sys.stderr, flush=True)
-                    
-                    if jwks_uri:
-                        if debug:
-                            print(f"DEBUG AUTH:   Fetching agent JWKS from {jwks_uri} for agent_jkt verification", file=sys.stderr, flush=True)
-                        response = httpx.get(jwks_uri, timeout=10.0)
-                        response.raise_for_status()
-                        agent_jwks_doc = response.json()
-                        if debug:
-                            print(f"DEBUG AUTH:   Agent JWKS document received: {json.dumps(agent_jwks_doc, indent=2)}", file=sys.stderr, flush=True)
-                        # Find the key by kid
-                        for key in agent_jwks_doc.get("keys", []):
-                            if key.get("kid") == kid:
-                                agent_jwk = key
-                                if debug:
-                                    print(f"DEBUG AUTH:   ✓ Found agent JWK for agent_jkt verification: kid={kid}", file=sys.stderr, flush=True)
-                                    print(f"DEBUG AUTH:   Agent JWK: {json.dumps(agent_jwk, indent=2)}", file=sys.stderr, flush=True)
-                                break
-                        if not agent_jwk:
-                            if debug:
-                                print(f"DEBUG AUTH:   ✗ Key with kid={kid} not found in agent JWKS", file=sys.stderr, flush=True)
-                    else:
-                        if debug:
-                            print(f"DEBUG AUTH:   ✗ No jwks_uri in agent metadata", file=sys.stderr, flush=True)
-                except Exception as e:
-                    if debug:
-                        print(f"DEBUG AUTH:   ✗ Error fetching agent JWKS for agent_jkt: {e}", file=sys.stderr, flush=True)
-                        import traceback
-                        traceback.print_exc()
-            else:
-                if debug:
-                    print(f"DEBUG AUTH:   ✗ No kid in signature key params", file=sys.stderr, flush=True)
-        else:
-            if debug:
-                print(f"DEBUG AUTH:   ✗ Cannot extract agent_jwk: scheme={scheme} (not jwks)", file=sys.stderr, flush=True)
-        
-        if debug:
-            print(f"DEBUG AUTH:   agent_jwk extracted: {agent_jwk is not None}", file=sys.stderr, flush=True)
-        
-        # Phase 5: Handle agent-is-resource vs Phase 4 resource-token flow
+            logger.debug(f"agent_jwk extracted: {agent_jwk is not None}")
+
+        # Determine resource_id and scope based on mode
+        resource_txn = None
         if agent_is_resource:
-            # Phase 5: Agent is resource - use agent identifier as resource
-            resource_id = agent_id  # Agent is the resource
-            # Scope is provided directly in the request
+            resource_id = agent_id
             if not scope:
-                scope = ""  # Empty scope if not provided
-            
+                scope = ""
             if debug:
-                print(f"DEBUG AUTH:   Phase 5: Using agent as resource", file=sys.stderr, flush=True)
-                print(f"DEBUG AUTH:   Resource ID (agent): {resource_id}", file=sys.stderr, flush=True)
-                print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
+                logger.debug(f"Self-access mode: resource_id={resource_id}, scope={scope}")
         else:
-            # Phase 4: Validate resource token
+            # Validate resource token
             try:
                 resource_claims = await self._verify_resource_token(resource_token, agent_id, agent_jwk)
             except Exception as e:
                 if debug:
-                    print(f"DEBUG AUTH:   Resource token validation FAILED: {e}", file=sys.stderr, flush=True)
+                    logger.debug(f"Resource token validation FAILED: {e}")
                 return JSONResponse(
                     status_code=400,
                     content={"error": "invalid_resource_token", "error_description": str(e)}
                 )
-            
-            if debug:
-                print(f"DEBUG AUTH:   Resource token validation PASSED", file=sys.stderr, flush=True)
-                print(f"DEBUG AUTH:   Resource claims: {json.dumps(resource_claims, indent=2)}", file=sys.stderr, flush=True)
-            
-            # Extract resource and scope from resource token
-            resource_id = resource_claims.get("iss")  # Resource is the issuer
+            resource_id = resource_claims.get("iss")
             scope = resource_claims.get("scope", "")
-            
+            resource_txn = resource_claims.get("txn")
             if debug:
-                print(f"DEBUG AUTH:   Resource ID: {resource_id}", file=sys.stderr, flush=True)
-                print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
-        
+                logger.debug(f"Resource access mode: resource_id={resource_id}, scope={scope}")
+                if resource_txn:
+                    logger.debug(f"Resource token txn: {resource_txn}")
+
         # Evaluate policy
         policy_result = self._evaluate_policy(agent_id, resource_id, scope)
-        
+
         if debug:
-            print(f"DEBUG AUTH:   Policy evaluation: {json.dumps(policy_result, indent=2)}", file=sys.stderr, flush=True)
-        
-        # Phase 4: Check if user consent is required
-        if policy_result.get("requires_user_consent"):
-            redirect_uri = params_dict.get("redirect_uri")
-            if not redirect_uri:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": "invalid_request", "error_description": "redirect_uri is required when user consent is needed"}
-                )
-            
-            # Generate request_token
-            request_token = self._generate_request_token(
-                agent=agent_id,
-                resource=resource_id,
-                scope=scope,
-                redirect_uri=redirect_uri,
-                agent_jwk=agent_jwk,
-                agent_is_resource=agent_is_resource
+            logger.debug(f"Policy evaluation: {json.dumps(policy_result, indent=2)}")
+
+        # Determine agent key for cnf.jwk
+        agent_key = self._resolve_agent_key(scheme, agent_jwk, debug)
+        if agent_key is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "Agent signing key not available"}
             )
-            
-            if debug:
-                print(f"DEBUG AUTH:   User consent required, returning request_token", file=sys.stderr, flush=True)
-            
-            response_data = {
-                "request_token": request_token,
-                "expires_in": 600  # 10 minutes
-            }
-            
-            if http_debug:
-                print("\n" + "=" * 80, file=sys.stderr)
-                print("<<< AUTH SERVER RESPONSE", file=sys.stderr)
-                print("=" * 80, file=sys.stderr)
-                print(f"HTTP/1.1 200 OK", file=sys.stderr)
-                print(f"Content-Type: application/json", file=sys.stderr)
-                print(f"\n[Body]", file=sys.stderr)
-                print(json.dumps(response_data, indent=2), file=sys.stderr)
-                print("=" * 80 + "\n", file=sys.stderr)
-            
-            return JSONResponse(content=response_data)
-        
-        # Phase 3: Direct grant (autonomous authorization)
+
+        # Check if user consent is required → deferred response (202)
+        if policy_result.get("requires_user_consent"):
+            return self._create_pending_request(
+                agent_id=agent_id,
+                resource_id=resource_id,
+                scope=scope,
+                agent_jwk=agent_key,
+                purpose=purpose,
+                agent_is_resource=agent_is_resource,
+                txn=resource_txn,
+            )
+
+        # Direct grant (autonomous authorization) → 200
         if not policy_result.get("allowed"):
             return JSONResponse(
                 status_code=403,
-                content={"error": "access_denied", "error_description": policy_result.get("reason", "Access denied")}
+                content={"error": "denied", "error_description": policy_result.get("reason", "Access denied")}
             )
-        
-        # Get agent's current signing key for cnf.jwk
-        # For agent tokens (Phase 6), use delegate's key from agent token
-        # For agent server (scheme=jwks), use agent server's key
-        if scheme == "jwt" and agent_jwk:
-            # Phase 6: Agent token - use delegate's key from agent token
-            agent_key = agent_jwk  # This is the delegate's key from cnf.jwk in agent token
-            if debug:
-                print(f"DEBUG AUTH:   Using delegate's JWK from agent token for cnf.jwk: {json.dumps(agent_key, indent=2)}", file=sys.stderr, flush=True)
-        elif scheme == "jwks":
-            # Use the agent_jwk we already extracted for agent_jkt verification
-            if not agent_jwk:
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": "server_error", "error_description": "Agent JWK not available for auth token issuance"}
-                )
-            agent_key = agent_jwk
-            if debug:
-                print(f"DEBUG AUTH:   Using agent JWK for cnf.jwk: {json.dumps(agent_key, indent=2)}", file=sys.stderr, flush=True)
-        else:
-            # For sig=hwk, we'd need to extract from signature-key header
-            # For Phase 3, we expect sig=jwks
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_request", "error_description": "Agent must use sig=jwks or sig=jwt with agent token"}
-            )
-        
-        # Issue auth token
-        cnf_jwk = agent_key
+
+        # Issue auth token (carry forward txn from resource token if present)
+        txn = resource_txn if not agent_is_resource else None
         auth_token = self._issue_auth_token(
             agent=agent_id,
             resource=resource_id,
             scope=scope,
-            cnf_jwk=cnf_jwk,
-            agent_delegate=agent_delegate_sub,  # Phase 6: Include delegate identifier
-            agent_is_resource=agent_is_resource
+            cnf_jwk=agent_key,
+            txn=txn,
         )
-        
+
         if debug:
-            print(f"DEBUG AUTH:   Auth token issued: {auth_token[:100]}...", file=sys.stderr, flush=True)
-        
-        # Build response
-        response_data = {
-            "auth_token": auth_token,
-            "expires_in": 3600,  # 1 hour
-            "token_type": "Bearer"  # For compatibility, though AAuth uses proof-of-possession
-        }
-        
+            logger.debug(f"Auth token issued: {auth_token[:80]}...")
+
+        response_data = build_success_response(auth_token)
+
         if http_debug:
             print("\n" + "=" * 80, file=sys.stderr)
-            print("<<< AUTH SERVER RESPONSE", file=sys.stderr)
+            print("<<< AUTH SERVER RESPONSE (200 Direct Grant)", file=sys.stderr)
             print("=" * 80, file=sys.stderr)
-            print(f"HTTP/1.1 200 OK", file=sys.stderr)
-            print(f"Content-Type: application/json", file=sys.stderr)
-            print(f"\n[Body]", file=sys.stderr)
             print(json.dumps(response_data, indent=2), file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
-        
+
         return JSONResponse(content=response_data)
     
     async def _verify_resource_token(self, token: str, expected_agent: str, agent_jwk: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -787,7 +632,354 @@ class AuthServer:
                 print(f"DEBUG AUTH:     {key}: {value}", file=sys.stderr, flush=True)
         
         return claims
-    
+
+    def _extract_agent_jwk(self, scheme, key_params, agent_id, debug):
+        """Extract agent's JWK from JWKS for agent_jkt verification and cnf.jwk.
+
+        Discovers JWKS via agent metadata at {agent_id}/.well-known/aauth-agent.json.
+        """
+        agent_jwk = None
+        if scheme in ("jwks", "jwks_uri"):
+            kid = key_params.get("kid")
+            if kid:
+                try:
+                    import httpx
+                    from aauth.metadata.auth_server import fetch_metadata
+                    metadata_url = f"{agent_id}/.well-known/aauth-agent.json"
+                    metadata = fetch_metadata(metadata_url)
+                    jwks_uri = metadata.get("jwks_uri")
+
+                    if jwks_uri:
+                        response = httpx.get(jwks_uri, timeout=10.0)
+                        response.raise_for_status()
+                        agent_jwks_doc = response.json()
+                        for key in agent_jwks_doc.get("keys", []):
+                            if key.get("kid") == kid:
+                                agent_jwk = key
+                                break
+                except Exception as e:
+                    if debug:
+                        logger.debug(f"Error fetching agent JWKS for agent_jkt: {e}")
+        return agent_jwk
+
+    def _resolve_agent_key(self, scheme, agent_jwk, debug):
+        """Resolve the agent key to use for cnf.jwk in the auth token."""
+        if scheme == "jwt" and agent_jwk:
+            return agent_jwk  # delegate's key from agent token
+        elif scheme in ("jwks", "jwks_uri"):
+            return agent_jwk  # agent server's key
+        return None
+
+    def _create_pending_request(
+        self,
+        agent_id: str,
+        resource_id: str,
+        scope: str,
+        agent_jwk: Dict[str, Any],
+        purpose: Optional[str] = None,
+        agent_is_resource: bool = False,
+        txn: Optional[str] = None,
+    ) -> Response:
+        """Create a pending request and return 202 with Location + interaction code.
+
+        Per spec Section 10.2 and 11.3.
+        """
+        debug = _is_debug_enabled()
+
+        pending_id = generate_pending_id()
+        interaction_code = generate_interaction_code()
+        pending_url = f"{self.auth_id}/pending/{pending_id}"
+
+        # Store pending request details
+        self.pending_requests[pending_id] = {
+            "agent": agent_id,
+            "resource": resource_id,
+            "scope": scope,
+            "agent_jwk": agent_jwk,
+            "purpose": purpose,
+            "agent_is_resource": agent_is_resource,
+            "interaction_code": interaction_code,
+            "txn": txn,
+            "status": "pending",  # pending | approved | denied | expired
+            "user_id": None,
+            "created_at": int(time.time()),
+            "expires_at": int(time.time()) + 600,  # 10 minutes
+        }
+
+        if debug:
+            logger.debug(f"Created pending request: id={pending_id}, code={interaction_code}")
+
+        # Build 202 response
+        body = build_pending_response_body(
+            location=pending_url,
+            require="interaction",
+            code=interaction_code,
+        )
+        headers = build_pending_response_headers(
+            location=pending_url,
+            retry_after=2,
+            require="interaction",
+            code=interaction_code,
+        )
+
+        return Response(
+            content=json.dumps(body),
+            status_code=202,
+            headers=headers,
+            media_type="application/json",
+        )
+
+    async def _handle_pending_get(self, pending_id: str, request: Request) -> Response:
+        """Handle GET /pending/{id} - polling per spec Section 10.3."""
+        debug = _is_debug_enabled()
+
+        pending = self.pending_requests.get(pending_id)
+        if not pending:
+            return JSONResponse(status_code=404, content={"error": "not_found"})
+
+        # Check expiration
+        if int(time.time()) >= pending.get("expires_at", 0):
+            pending["status"] = "expired"
+            del self.pending_requests[pending_id]
+            return JSONResponse(
+                status_code=408,
+                content=build_polling_error_body("expired", "Request expired"),
+            )
+
+        status = pending.get("status", "pending")
+
+        # Terminal: approved → issue token
+        if status == "approved":
+            agent_id = pending["agent"]
+            resource_id = pending["resource"]
+            scope_val = pending["scope"]
+            agent_jwk = pending["agent_jwk"]
+            user_id = pending.get("user_id")
+            pending_txn = pending.get("txn")
+
+            auth_token = self._issue_auth_token(
+                agent=agent_id,
+                resource=resource_id,
+                scope=scope_val,
+                cnf_jwk=agent_jwk,
+                sub=user_id,
+                txn=pending_txn,
+            )
+
+            # Clean up pending request
+            del self.pending_requests[pending_id]
+
+            if debug:
+                logger.debug(f"Pending {pending_id} approved, auth token issued")
+
+            return JSONResponse(
+                status_code=200,
+                content=build_success_response(auth_token),
+            )
+
+        # Terminal: denied
+        if status == "denied":
+            del self.pending_requests[pending_id]
+            return JSONResponse(
+                status_code=403,
+                content=build_polling_error_body("denied", "User denied consent"),
+            )
+
+        # Still pending → 202
+        pending_url = f"{self.auth_id}/pending/{pending_id}"
+        body = build_pending_response_body(location=pending_url)
+        headers = build_pending_response_headers(location=pending_url, retry_after=2)
+
+        return Response(
+            content=json.dumps(body),
+            status_code=202,
+            headers=headers,
+            media_type="application/json",
+        )
+
+    async def _handle_pending_post(self, pending_id: str, request: Request) -> Response:
+        """Handle POST /pending/{id} - clarification response per spec Section 11.4."""
+        debug = _is_debug_enabled()
+
+        pending = self.pending_requests.get(pending_id)
+        if not pending:
+            return JSONResponse(status_code=404, content={"error": "not_found"})
+
+        try:
+            body = json.loads(await request.body())
+        except Exception:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "Invalid JSON"},
+            )
+
+        clarification_response = body.get("clarification_response")
+        if clarification_response:
+            pending.setdefault("clarification_history", []).append({
+                "response": clarification_response,
+                "timestamp": int(time.time()),
+            })
+            if debug:
+                logger.debug(f"Clarification response received for {pending_id}: {clarification_response[:80]}")
+
+        # Return current status
+        pending_url = f"{self.auth_id}/pending/{pending_id}"
+        resp_body = build_pending_response_body(location=pending_url)
+        return JSONResponse(status_code=202, content=resp_body)
+
+    async def _handle_interact_get(self, request: Request) -> Response:
+        """Handle GET /interact - user interaction endpoint per spec Section 11.5.
+
+        User arrives with ?code=ABCD1234 (and optional &callback=...)
+        """
+        from fastapi.responses import HTMLResponse
+
+        code = request.query_params.get("code")
+        callback = request.query_params.get("callback")
+
+        if not code:
+            return HTMLResponse(
+                status_code=400,
+                content="<html><body><h1>Error</h1><p>Missing code parameter</p></body></html>",
+            )
+
+        # Find pending request by interaction code
+        pending_id = None
+        pending_details = None
+        for pid, details in self.pending_requests.items():
+            if details.get("interaction_code") == code:
+                pending_id = pid
+                pending_details = details
+                break
+
+        if not pending_details:
+            return HTMLResponse(
+                status_code=400,
+                content="<html><body><h1>Error</h1><p>Invalid or expired interaction code</p></body></html>",
+            )
+
+        # Check expiration
+        if int(time.time()) >= pending_details.get("expires_at", 0):
+            pending_details["status"] = "expired"
+            return HTMLResponse(
+                status_code=400,
+                content="<html><body><h1>Error</h1><p>Interaction code expired</p></body></html>",
+            )
+
+        # Store callback URL if provided
+        if callback:
+            pending_details["callback"] = callback
+
+        # Check if user is authenticated
+        user_id = pending_details.get("user_id")
+        if not user_id:
+            return self._render_login_page(pending_id, code, pending_details)
+        else:
+            return self._render_consent_page(pending_id, code, pending_details, user_id)
+
+    async def _handle_interact_post(self, request: Request) -> Response:
+        """Handle POST /interact - login and consent form submission."""
+        from fastapi.responses import RedirectResponse, HTMLResponse
+
+        form_data = await request.form()
+        pending_id = form_data.get("pending_id")
+        code = form_data.get("code")
+        action = form_data.get("action", "")
+        username = form_data.get("username", "")
+        password = form_data.get("password", "")
+        consent = form_data.get("consent", "")
+
+        if not pending_id or not code:
+            return HTMLResponse(
+                status_code=400,
+                content="<html><body><h1>Error</h1><p>Missing pending_id or code</p></body></html>",
+            )
+
+        pending_details = self.pending_requests.get(pending_id)
+        if not pending_details or pending_details.get("interaction_code") != code:
+            return HTMLResponse(
+                status_code=400,
+                content="<html><body><h1>Error</h1><p>Invalid request</p></body></html>",
+            )
+
+        # Handle login
+        if action == "login" or (username and password):
+            user = self.users.get(username)
+            if not user or user.get("password") != password:
+                return self._render_login_page(
+                    pending_id, code, pending_details,
+                    error="Invalid username or password",
+                )
+
+            pending_details["user_id"] = username
+            pending_details["user_name"] = user.get("name", username)
+            pending_details["user_email"] = user.get("email", "")
+
+            # Redirect back to show consent page
+            interact_url = f"{self.auth_id}/interact?code={code}"
+            return RedirectResponse(url=interact_url, status_code=303)
+
+        # Handle consent
+        if consent:
+            user_id = pending_details.get("user_id")
+            if not user_id:
+                return self._render_login_page(
+                    pending_id, code, pending_details,
+                    error="Please authenticate first",
+                )
+
+            if consent == "grant":
+                pending_details["status"] = "approved"
+                # If callback was provided, redirect user there
+                callback = pending_details.get("callback")
+                if callback:
+                    return RedirectResponse(url=callback, status_code=303)
+                # Otherwise show completion page
+                return HTMLResponse(content=self._render_completion_page(granted=True))
+
+            elif consent == "deny":
+                pending_details["status"] = "denied"
+                callback = pending_details.get("callback")
+                if callback:
+                    return RedirectResponse(url=callback, status_code=303)
+                return HTMLResponse(content=self._render_completion_page(granted=False))
+
+        return HTMLResponse(
+            status_code=400,
+            content="<html><body><h1>Error</h1><p>Invalid request</p></body></html>",
+        )
+
+    def _render_completion_page(self, granted: bool) -> str:
+        """Render a completion page after user consent."""
+        if granted:
+            return """<!DOCTYPE html><html><head><title>Access Granted</title>
+<style>body{font-family:sans-serif;max-width:500px;margin:50px auto;padding:20px}
+.ok{background:#efe;border:1px solid #cfc;padding:15px;border-radius:4px;color:#3a3}</style>
+</head><body><h1>Access Granted</h1>
+<div class="ok">You may close this window. The agent will receive the authorization automatically.</div>
+</body></html>"""
+        else:
+            return """<!DOCTYPE html><html><head><title>Access Denied</title>
+<style>body{font-family:sans-serif;max-width:500px;margin:50px auto;padding:20px}
+.err{background:#fee;border:1px solid #fcc;padding:15px;border-radius:4px;color:#c33}</style>
+</head><body><h1>Access Denied</h1>
+<div class="err">You denied the request. You may close this window.</div>
+</body></html>"""
+
+    async def _handle_token_refresh(self, request: Request, params_dict: Dict, body_bytes: bytes) -> Response:
+        """Handle token refresh per spec Section 11.6."""
+        # For now, return not implemented
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_request", "error_description": "Token refresh not yet implemented"},
+        )
+
+    async def _handle_call_chaining(self, request: Request, params_dict: Dict, body_bytes: bytes) -> Response:
+        """Handle call chaining (resource_token + upstream_token) per spec Section 11.1."""
+        # Delegate to the existing token exchange logic (renamed)
+        # Convert params_dict back to the format _handle_token_exchange expects
+        return await self._handle_token_exchange(request, params_dict, body_bytes)
+
     def _evaluate_policy(self, agent: str, resource: str, scope: str) -> Dict[str, Any]:
         """Evaluate authorization policy.
         
@@ -838,41 +1030,36 @@ class AuthServer:
         scope: str,
         cnf_jwk: Dict[str, Any],
         sub: Optional[str] = None,
-        agent_delegate: Optional[str] = None,
         agent_is_resource: bool = False,
-        act: Optional[Dict[str, Any]] = None
+        txn: Optional[str] = None,
+        **kwargs
     ) -> str:
-        """Issue auth token per AAuth spec Section 7.
-        
+        """Issue auth token per AAuth spec Section 9.1.
+
         Args:
             agent: Agent identifier
-            resource: Resource identifier (audience). When agent_is_resource=True, this should be the agent identifier.
+            resource: Resource identifier (audience)
             scope: Authorized scope
             cnf_jwk: Agent's public signing key (JWK format)
             sub: Optional user identifier
-            agent_delegate: Optional agent delegate identifier
-            agent_is_resource: If True, omit 'agent' claim and set aud to agent identifier (Phase 5)
-            act: Optional actor claim for token exchange delegation chain (Phase 7)
-            
+            agent_is_resource: Ignored (kept for caller compatibility during migration)
+            txn: Optional transaction identifier (carried forward from resource token)
+
         Returns:
             Signed auth token JWT string
         """
         debug = _is_debug_enabled()
-        
+
         if debug:
             print(f"DEBUG AUTH: Issuing auth token:", file=sys.stderr, flush=True)
             print(f"DEBUG AUTH:   Agent: {agent}", file=sys.stderr, flush=True)
             print(f"DEBUG AUTH:   Resource (aud): {resource}", file=sys.stderr, flush=True)
             print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   cnf.jwk: {json.dumps(cnf_jwk, indent=2)}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Agent is resource: {agent_is_resource}", file=sys.stderr, flush=True)
             if sub:
                 print(f"DEBUG AUTH:   User (sub): {sub}", file=sys.stderr, flush=True)
-            if agent_delegate:
-                print(f"DEBUG AUTH:   Agent delegate: {agent_delegate}", file=sys.stderr, flush=True)
-            if act:
-                print(f"DEBUG AUTH:   Actor (act): {json.dumps(act, indent=2)}", file=sys.stderr, flush=True)
-        
+            if txn:
+                print(f"DEBUG AUTH:   Txn: {txn}", file=sys.stderr, flush=True)
+
         # Create auth token
         token = create_auth_token(
             iss=self.auth_id,
@@ -884,9 +1071,7 @@ class AuthServer:
             kid=self.kid,
             exp=None,  # Default 1 hour
             sub=sub,
-            agent_delegate=agent_delegate,
-            agent_is_resource=agent_is_resource,
-            act=act
+            txn=txn,
         )
         
         if debug:
@@ -894,448 +1079,13 @@ class AuthServer:
         
         return token
     
-    def _generate_request_token(
-        self,
-        agent: str,
-        resource: str,
-        scope: str,
-        redirect_uri: str,
-        agent_jwk: Optional[Dict[str, Any]] = None,
-        agent_is_resource: bool = False
-    ) -> str:
-        """Generate request_token for user consent flow.
-        
-        Args:
-            agent: Agent identifier
-            resource: Resource identifier
-            scope: Requested scope
-            redirect_uri: Agent's callback URI
-            agent_jwk: Agent's JWK (for future use)
-            agent_is_resource: If True, agent is requesting authorization to itself (Phase 5)
-            
-        Returns:
-            Opaque request_token string
-        """
-        import secrets
-        import base64
-        
-        debug = _is_debug_enabled()
-        
-        # Generate random token (opaque string)
-        token_bytes = secrets.token_bytes(32)
-        request_token = base64.urlsafe_b64encode(token_bytes).decode('utf-8').rstrip('=')
-        
-        # Store request details
-        expires_at = int(time.time()) + 600  # 10 minutes
-        self.pending_requests[request_token] = {
-            "agent": agent,
-            "resource": resource,
-            "scope": scope,
-            "redirect_uri": redirect_uri,
-            "expires_at": expires_at,
-            "agent_jwk": agent_jwk,
-            "agent_is_resource": agent_is_resource
-        }
-        
-        if debug:
-            print(f"DEBUG AUTH: Generated request_token:", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Token: {request_token[:20]}...", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Agent: {agent}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Resource: {resource}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Redirect URI: {redirect_uri}", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Expires at: {expires_at}", file=sys.stderr, flush=True)
-        
-        return request_token
+    # NOTE: _generate_request_token, _generate_authorization_code, and _handle_code_exchange
+    # have been removed. Replaced by deferred response pattern:
+    # _create_pending_request → pending URL + interaction code → polling via GET /pending/{id}
     
-    def _generate_authorization_code(self, request_details: Dict[str, Any]) -> str:
-        """Generate authorization code for code exchange.
-        
-        Args:
-            request_details: Request details from pending_requests
-            
-        Returns:
-            Authorization code string
-        """
-        import secrets
-        import base64
-        
-        debug = _is_debug_enabled()
-        
-        # Generate random code (opaque string)
-        code_bytes = secrets.token_bytes(32)
-        code = base64.urlsafe_b64encode(code_bytes).decode('utf-8').rstrip('=')
-        
-        # Store code with request details
-        expires_at = int(time.time()) + 60  # 60 seconds
-        self.authorization_codes[code] = {
-            **request_details,
-            "expires_at": expires_at
-        }
-        
-        if debug:
-            print(f"DEBUG AUTH: Generated authorization code:", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Code: {code[:20]}...", file=sys.stderr, flush=True)
-            print(f"DEBUG AUTH:   Expires at: {expires_at}", file=sys.stderr, flush=True)
-        
-        return code
-    
-    async def _handle_code_exchange(
-        self,
-        request: Request,
-        params_dict: Dict[str, str],
-        body_bytes: bytes
-    ) -> Response:
-        """Handle authorization code exchange (request_type=code).
-        
-        Per AAuth spec Section 9.6.
-        """
-        from fastapi.responses import RedirectResponse
-        
-        debug = _is_debug_enabled()
-        http_debug = _is_http_debug_enabled()
-        
-        if debug:
-            print(f"DEBUG AUTH: Handling code exchange", file=sys.stderr, flush=True)
-        
-        # Extract parameters
-        code = params_dict.get("code")
-        redirect_uri = params_dict.get("redirect_uri")
-        
-        if not code:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_request", "error_description": "Missing code parameter"}
-            )
-        
-        if not redirect_uri:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_request", "error_description": "Missing redirect_uri parameter"}
-            )
-        
-        # Verify authorization code
-        code_details = self.authorization_codes.get(code)
-        if not code_details:
-            if debug:
-                print(f"DEBUG AUTH:   Invalid authorization code", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_grant", "error_description": "Invalid or expired authorization code"}
-            )
-        
-        # Check expiration
-        if int(time.time()) >= code_details.get("expires_at", 0):
-            if debug:
-                print(f"DEBUG AUTH:   Authorization code expired", file=sys.stderr, flush=True)
-            del self.authorization_codes[code]
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_grant", "error_description": "Authorization code expired"}
-            )
-        
-        # Verify redirect_uri matches
-        if code_details.get("redirect_uri") != redirect_uri:
-            if debug:
-                print(f"DEBUG AUTH:   redirect_uri mismatch", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_grant", "error_description": "redirect_uri mismatch"}
-            )
-        
-        # Verify agent's HTTPSig signature
-        headers_dict = dict(request.headers)
-        signature_input_header = headers_dict.get("signature-input", "")
-        signature_header = headers_dict.get("signature", "")
-        signature_key_header = headers_dict.get("signature-key", "")
-        
-        if not signature_input_header or not signature_header or not signature_key_header:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "invalid_request", "error_description": "Missing signature headers"}
-            )
-        
-        # Parse signature key to get agent ID
-        try:
-            parsed_key = parse_signature_key(signature_key_header)
-            scheme = parsed_key["scheme"]
-            key_params = parsed_key["params"]
-        except Exception as e:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "invalid_request", "error_description": f"Invalid Signature-Key: {e}"}
-            )
-        
-        agent_id = None
-        agent_jwk = None
-        agent_delegate_sub = None  # Phase 6: agent delegation
-        
-        if scheme == "jwks":
-            agent_id = key_params.get("id")
-            kid = key_params.get("kid")
-            
-            # Fetch agent JWK for cnf.jwk
-            if agent_id and kid:
-                try:
-                    from aauth.metadata.auth_server import fetch_metadata
-                    metadata_url = f"{agent_id}/.well-known/aauth-agent"
-                    metadata = fetch_metadata(metadata_url)
-                    jwks_uri = metadata.get("jwks_uri")
-                    
-                    import httpx
-                    response = httpx.get(jwks_uri, timeout=10.0)
-                    response.raise_for_status()
-                    jwks_doc = response.json()
-                    
-                    # Find matching key
-                    for key in jwks_doc.get("keys", []):
-                        if key.get("kid") == kid:
-                            agent_jwk = key
-                            break
-                    
-                    if debug:
-                        print(f"DEBUG AUTH:   Fetched agent JWK for code exchange", file=sys.stderr, flush=True)
-                except Exception as e:
-                    if debug:
-                        print(f"DEBUG AUTH:   Error fetching agent JWK: {e}", file=sys.stderr, flush=True)
-        elif scheme == "jwt":
-            # Phase 6: Agent delegation - validate agent token
-            jwt_token = key_params.get("jwt")
-            if not jwt_token:
-                return JSONResponse(
-                    status_code=401,
-                    content={"error": "invalid_request", "error_description": "Missing jwt parameter in Signature-Key"}
-                )
-            
-            # Parse token header to determine type
-            try:
-                import jwt as jwt_lib
-                header = jwt_lib.get_unverified_header(jwt_token)
-                typ = header.get("typ")
-            except Exception as e:
-                return JSONResponse(
-                    status_code=401,
-                    content={"error": "invalid_request", "error_description": f"Invalid JWT token: {e}"}
-                )
-            
-            if typ == "agent+jwt":
-                # Phase 6: Agent token (delegated identity)
-                if debug:
-                    print(f"DEBUG AUTH:   Validating agent token for code exchange", file=sys.stderr, flush=True)
-                
-                # Create JWKS fetcher for agent server
-                def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
-                    """Fetch agent server JWKS."""
-                    try:
-                        from aauth.metadata.auth_server import fetch_metadata
-                        import httpx
-                        metadata_url = f"{issuer_url}/.well-known/aauth-agent"
-                        metadata = fetch_metadata(metadata_url)
-                        jwks_uri = metadata.get("jwks_uri")
-                        if not jwks_uri:
-                            return None
-                        
-                        jwks_response = httpx.get(jwks_uri, timeout=10.0)
-                        jwks_response.raise_for_status()
-                        return jwks_response.json()
-                    except Exception as e:
-                        if debug:
-                            print(f"DEBUG AUTH:   Error fetching agent server JWKS: {e}", file=sys.stderr, flush=True)
-                        return None
-                
-                # Verify agent token
-                try:
-                    from aauth.tokens.agent_token import verify_agent_token
-                    agent_claims = verify_agent_token(
-                        token=jwt_token,
-                        jwks_fetcher=agent_jwks_fetcher,
-                        expected_aud=None
-                    )
-                    
-                    # Extract agent identifier and delegate identifier
-                    agent_id = agent_claims.get("iss")  # Agent server identifier
-                    agent_delegate_sub = agent_claims.get("sub")  # Delegate identifier
-                    cnf = agent_claims.get("cnf", {})
-                    agent_jwk = cnf.get("jwk")  # Delegate's key for cnf.jwk
-                    
-                    if debug:
-                        print(f"DEBUG AUTH:   Agent token validated for code exchange", file=sys.stderr, flush=True)
-                        print(f"DEBUG AUTH:     Agent server (iss): {agent_id}", file=sys.stderr, flush=True)
-                        print(f"DEBUG AUTH:     Agent delegate (sub): {agent_delegate_sub}", file=sys.stderr, flush=True)
-                except Exception as e:
-                    if debug:
-                        print(f"DEBUG AUTH:   Agent token validation failed: {e}", file=sys.stderr, flush=True)
-                    return JSONResponse(
-                        status_code=401,
-                        content={"error": "invalid_token", "error_description": f"Invalid agent token: {e}"}
-                    )
-            elif typ == "auth+jwt":
-                # Auth tokens shouldn't be used for code exchange
-                return JSONResponse(
-                    status_code=401,
-                    content={"error": "invalid_request", "error_description": "Auth tokens cannot be used for code exchange"}
-                )
-            else:
-                return JSONResponse(
-                    status_code=401,
-                    content={"error": "invalid_request", "error_description": f"Unsupported token type: {typ}"}
-                )
-        
-        if not agent_id:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "invalid_request", "error_description": "Could not determine agent identity"}
-            )
-        
-        # Verify agent matches code details
-        if code_details.get("agent") != agent_id:
-            if debug:
-                print(f"DEBUG AUTH:   Agent mismatch: {agent_id} != {code_details.get('agent')}", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_grant", "error_description": "Agent mismatch"}
-            )
-        
-        # Verify signature
-        method = request.method
-        target_uri = str(request.url)
-        
-        # Extract well-known parameter from signature (if present)
-        well_known = key_params.get("well-known", "aauth-agent") if scheme == "jwks" else None
-        
-        # Create JWKS fetcher for verify_signature
-        # For agent tokens (Phase 6), this fetches agent server's JWKS (to validate agent token JWT)
-        # For agent server (scheme=jwks), this fetches agent server's JWKS (to validate HTTPSig)
-        def jwks_fetcher(agent_id_param: str, kid_param: str = None):
-            """Fetch JWKS for agent and return full JWKS document.
-            
-            Uses well-known parameter from signature if present, otherwise fetches {id} directly as JWKS.
-            For agent tokens, this fetches the agent server's JWKS.
-            Returns full JWKS document (with "keys" array) for verify_signature.
-            """
-            try:
-                import httpx
-                jwks_uri = None
-                
-                if well_known:
-                    from aauth.metadata.auth_server import fetch_metadata
-                    metadata_url = f"{agent_id_param}/.well-known/{well_known}"
-                    metadata = fetch_metadata(metadata_url)
-                    jwks_uri = metadata.get("jwks_uri")
-                else:
-                    # For agent tokens, agent_id_param is the agent server identifier
-                    # Try fetching metadata first
-                    try:
-                        from aauth.metadata.auth_server import fetch_metadata
-                        metadata_url = f"{agent_id_param}/.well-known/aauth-agent"
-                        metadata = fetch_metadata(metadata_url)
-                        jwks_uri = metadata.get("jwks_uri")
-                    except:
-                        # Fall back to fetching {id} directly as JWKS
-                        jwks_uri = agent_id_param
-                
-                if not jwks_uri:
-                    return None
-                
-                response = httpx.get(jwks_uri, timeout=10.0)
-                response.raise_for_status()
-                jwks_doc = response.json()
-                
-                # Verify key exists if kid is provided (but return full JWKS document for verifier)
-                if kid_param:
-                    keys = jwks_doc.get("keys", [])
-                    key_found = False
-                    for key in keys:
-                        if key.get("kid") == kid_param:
-                            key_found = True
-                            break
-                    if not key_found:
-                        if debug:
-                            print(f"DEBUG AUTH:   Key with kid={kid_param} not found in JWKS", file=sys.stderr, flush=True)
-                        return None
-                
-                # Return full JWKS document (verifier will extract the key it needs)
-                return jwks_doc
-            except Exception as e:
-                if debug:
-                    print(f"DEBUG AUTH:   Error fetching JWKS: {e}", file=sys.stderr, flush=True)
-                return None
-        
-        is_valid = verify_signature(
-            method=method,
-            target_uri=target_uri,
-            headers=headers_dict,
-            body=body_bytes,
-            signature_input_header=signature_input_header,
-            signature_header=signature_header,
-            signature_key_header=signature_key_header,
-            jwks_fetcher=jwks_fetcher
-        )
-        
-        if not is_valid:
-            if debug:
-                print(f"DEBUG AUTH:   Signature verification FAILED", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=401,
-                content={"error": "invalid_request", "error_description": "Invalid signature"}
-            )
-        
-        # Extract request details
-        resource_id = code_details.get("resource")
-        scope = code_details.get("scope")
-        user_id = code_details.get("user_id")  # Set during consent
-        agent_is_resource = code_details.get("agent_is_resource", False)  # Phase 5: agent is resource
-        
-        # Use fetched agent_jwk, or fall back to stored one
-        # For agent tokens (Phase 6), agent_jwk is the delegate's key from agent token
-        # For agent server (scheme=jwks), agent_jwk is the agent server's key
-        if not agent_jwk:
-            agent_jwk = code_details.get("agent_jwk")
-        
-        if not agent_jwk:
-            if debug:
-                print(f"DEBUG AUTH:   Agent JWK not available", file=sys.stderr, flush=True)
-            return JSONResponse(
-                status_code=500,
-                content={"error": "server_error", "error_description": "Agent JWK not available"}
-            )
-        
-        # Issue auth token with user identity
-        # Phase 6: Include agent_delegate if present (from agent token)
-        auth_token = self._issue_auth_token(
-            agent=agent_id,
-            resource=resource_id,
-            scope=scope,
-            cnf_jwk=agent_jwk,
-            sub=user_id,
-            agent_delegate=agent_delegate_sub,  # Phase 6: Include delegate identifier
-            agent_is_resource=agent_is_resource
-        )
-        
-        # Remove code (single-use)
-        del self.authorization_codes[code]
-        
-        if debug:
-            print(f"DEBUG AUTH:   Code exchanged successfully, auth token issued", file=sys.stderr, flush=True)
-        
-        # Build response
-        response_data = {
-            "auth_token": auth_token,
-            "expires_in": 3600,
-            "token_type": "Bearer"
-        }
-        
-        if http_debug:
-            print("\n" + "=" * 80, file=sys.stderr)
-            print("<<< AUTH SERVER RESPONSE", file=sys.stderr)
-            print("=" * 80, file=sys.stderr)
-            print(f"HTTP/1.1 200 OK", file=sys.stderr)
-            print(f"Content-Type: application/json", file=sys.stderr)
-            print(f"\n[Body]", file=sys.stderr)
-            print(json.dumps(response_data, indent=2), file=sys.stderr)
-            print("=" * 80 + "\n", file=sys.stderr)
-        
-        return JSONResponse(content=response_data)
+    async def _handle_token_exchange_legacy(self, request, params_dict, body_bytes):
+        """REMOVED: Code exchange no longer exists in updated spec."""
+        return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Code exchange removed; use deferred responses"})
     
     async def _handle_token_exchange(
         self,
@@ -1480,7 +1230,7 @@ class AuthServer:
         
         # Verify upstream token signature using upstream auth server's JWKS
         try:
-            from core.metadata import fetch_metadata
+            from aauth.metadata.auth_server import fetch_metadata
             import httpx
             
             # Fetch upstream auth server metadata
@@ -1560,7 +1310,7 @@ class AuthServer:
             # Create JWKS fetcher for resource
             def resource_jwks_fetcher(issuer_url: str, kid_param: str = None):
                 try:
-                    from core.metadata import fetch_metadata
+                    from aauth.metadata.auth_server import fetch_metadata
                     import httpx
                     metadata_url = f"{issuer_url}/.well-known/aauth-resource"
                     metadata = fetch_metadata(metadata_url)
@@ -1633,7 +1383,7 @@ class AuthServer:
         
         # Fetch the requesting resource's JWKS
         try:
-            from core.metadata import fetch_metadata
+            from aauth.metadata.auth_server import fetch_metadata
             import httpx
             
             # Fetch resource metadata
@@ -1705,9 +1455,9 @@ class AuthServer:
             path = parsed_uri.path or "/"
             query_string = parsed_uri.query if parsed_uri.query else None
             
-            # Extract signature params (the part after "sig1=") for @signature-params line
-            # Signature-Input format: sig1=("@method" "@authority" ...);created=...
-            signature_params = signature_input_header[5:] if signature_input_header.startswith("sig1=") else signature_input_header
+            # Extract signature params (the part after "sig=") for @signature-params line
+            # Signature-Input format: sig=("@method" "@authority" ...);created=...
+            signature_params = signature_input_header.split("=", 1)[1] if "=" in signature_input_header else signature_input_header
             
             signature_base = build_signature_base(
                 method=method,
@@ -1722,7 +1472,7 @@ class AuthServer:
             )
             
             # Parse signature
-            signature_bytes = parse_signature(signature_header, label="sig1")
+            signature_bytes = parse_signature(signature_header, label=None)
             
             # Verify HTTPSig using requesting resource's public key
             from aauth.keys.jwk import jwk_to_public_key
@@ -1774,23 +1524,6 @@ class AuthServer:
         if debug:
             print(f"DEBUG AUTH:   Policy evaluation passed", file=sys.stderr, flush=True)
         
-        # Build actor (act) claim for delegation chain
-        act_claim = {
-            "agent": upstream_agent  # Required: the upstream agent
-        }
-        if upstream_agent_delegate:
-            act_claim["agent_delegate"] = upstream_agent_delegate
-        if upstream_sub:
-            act_claim["sub"] = upstream_sub
-        
-        # Check for nested act claim (multi-hop chains)
-        upstream_act = upstream_payload.get("act")
-        if upstream_act:
-            act_claim["act"] = upstream_act
-        
-        if debug:
-            print(f"DEBUG AUTH:   Actor claim: {json.dumps(act_claim, indent=2)}", file=sys.stderr, flush=True)
-        
         # Issue auth token for downstream resource
         # Bound to requesting resource's key (from requesting resource's JWKS)
         if debug:
@@ -1802,7 +1535,6 @@ class AuthServer:
             scope=scope,
             cnf_jwk=resource_jwk_for_cnf,
             sub=upstream_sub,  # Maintain user context through the chain
-            act=act_claim
         )
         
         if debug:
@@ -1826,408 +1558,117 @@ class AuthServer:
         
         return JSONResponse(content=response_data)
     
-    async def _handle_auth_get(self, request: Request) -> Response:
-        """Handle GET /agent/auth - display login or consent page."""
-        from fastapi.responses import HTMLResponse
-        
-        debug = _is_debug_enabled()
-        
-        # Extract query parameters
-        request_token = request.query_params.get("request_token")
-        redirect_uri = request.query_params.get("redirect_uri")
-        
-        if not request_token:
-            return HTMLResponse(
-                status_code=400,
-                content="<html><body><h1>Error</h1><p>Missing request_token parameter</p></body></html>"
-            )
-        
-        # Validate request_token
-        request_details = self.pending_requests.get(request_token)
-        if not request_details:
-            return HTMLResponse(
-                status_code=400,
-                content="<html><body><h1>Error</h1><p>Invalid or expired request_token</p></body></html>"
-            )
-        
-        # Check expiration
-        if int(time.time()) >= request_details.get("expires_at", 0):
-            del self.pending_requests[request_token]
-            return HTMLResponse(
-                status_code=400,
-                content="<html><body><h1>Error</h1><p>Request token expired</p></body></html>"
-            )
-        
-        # Check if user is authenticated (simplified - check session/cookie)
-        # For demo, we'll check if there's a user_id in request_details
-        user_id = request_details.get("user_id")
-        
-        if not user_id:
-            # Show login page
-            return self._render_login_page(request_token, redirect_uri, request_details)
-        else:
-            # Show consent page
-            return self._render_consent_page(request_token, redirect_uri, request_details, user_id)
-    
-    async def _handle_auth_post(self, request: Request) -> Response:
-        """Handle POST /agent/auth - process login or consent submission."""
-        from fastapi.responses import RedirectResponse
-        
-        debug = _is_debug_enabled()
-        
-        # Parse form data
-        form_data = await request.form()
-        request_token = form_data.get("request_token")
-        redirect_uri = form_data.get("redirect_uri")
-        action = form_data.get("action", "")
-        username = form_data.get("username", "")
-        password = form_data.get("password", "")
-        consent = form_data.get("consent", "")
-        
-        if not request_token:
-            return HTMLResponse(
-                status_code=400,
-                content="<html><body><h1>Error</h1><p>Missing request_token</p></body></html>"
-            )
-        
-        # Get request details
-        request_details = self.pending_requests.get(request_token)
-        if not request_details:
-            return HTMLResponse(
-                status_code=400,
-                content="<html><body><h1>Error</h1><p>Invalid request_token</p></body></html>"
-            )
-        
-        # Handle login
-        if action == "login" or (username and password):
-            # Validate credentials
-            user = self.users.get(username)
-            if not user or user.get("password") != password:
-                return self._render_login_page(
-                    request_token, redirect_uri, request_details,
-                    error="Invalid username or password"
-                )
-            
-            # Store user_id in request_details
-            request_details["user_id"] = username
-            request_details["user_name"] = user.get("name", username)
-            request_details["user_email"] = user.get("email", "")
-            
-            if debug:
-                print(f"DEBUG AUTH: User authenticated: {username}", file=sys.stderr, flush=True)
-            
-            # Redirect back to consent page
-            auth_url = f"{self.auth_id}/agent/auth?request_token={request_token}&redirect_uri={redirect_uri}"
-            return RedirectResponse(url=auth_url, status_code=303)
-        
-        # Handle consent
-        if consent:
-            user_id = request_details.get("user_id")
-            if not user_id:
-                # Not authenticated, redirect to login
-                return self._render_login_page(
-                    request_token, redirect_uri, request_details,
-                    error="Please authenticate first"
-                )
-            
-            if consent == "grant":
-                # Generate authorization code
-                code = self._generate_authorization_code(request_details)
-                
-                # Clean up request_token
-                del self.pending_requests[request_token]
-                
-                if debug:
-                    print(f"DEBUG AUTH: Consent granted, redirecting with code", file=sys.stderr, flush=True)
-                
-                # Redirect to agent's callback with code
-                redirect_url = f"{redirect_uri}?code={code}"
-                return RedirectResponse(url=redirect_url, status_code=303)
-            
-            elif consent == "deny":
-                # Clean up request_token
-                del self.pending_requests[request_token]
-                
-                if debug:
-                    print(f"DEBUG AUTH: Consent denied, redirecting with error", file=sys.stderr, flush=True)
-                
-                # Redirect to agent's callback with error
-                redirect_url = f"{redirect_uri}?error=access_denied&error_description=User+denied+consent"
-                return RedirectResponse(url=redirect_url, status_code=303)
-        
-        return HTMLResponse(
-            status_code=400,
-            content="<html><body><h1>Error</h1><p>Invalid request</p></body></html>"
-        )
-    
+    # NOTE: _handle_auth_get and _handle_auth_post removed.
+    # Replaced by _handle_interact_get and _handle_interact_post
+    # which use interaction codes instead of request_tokens.
+
     def _render_login_page(
         self,
-        request_token: str,
-        redirect_uri: str,
+        pending_id: str,
+        code: str,
         request_details: Dict[str, Any],
         error: Optional[str] = None
     ) -> Response:
-        """Render login page HTML."""
+        """Render login page HTML for interaction endpoint."""
         from fastapi.responses import HTMLResponse
-        
+
         agent = request_details.get("agent", "Unknown")
         resource = request_details.get("resource", "Unknown")
-        
         error_html = f'<div style="color: red; margin: 10px 0;">{error}</div>' if error else ""
-        
+
         html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>AAuth Login</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            max-width: 500px;
-            margin: 50px auto;
-            padding: 20px;
-            background: #f5f5f5;
-        }}
-        .container {{
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        h1 {{
-            margin-top: 0;
-            color: #333;
-        }}
-        .info {{
-            background: #f0f0f0;
-            padding: 15px;
-            border-radius: 4px;
-            margin: 20px 0;
-            font-size: 14px;
-        }}
-        .info strong {{
-            display: block;
-            margin-bottom: 5px;
-        }}
-        form {{
-            margin-top: 20px;
-        }}
-        label {{
-            display: block;
-            margin: 10px 0 5px;
-            font-weight: 500;
-        }}
-        input[type="text"],
-        input[type="password"] {{
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            box-sizing: border-box;
-        }}
-        button {{
-            width: 100%;
-            padding: 12px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            font-size: 16px;
-            font-weight: 500;
-            cursor: pointer;
-            margin-top: 15px;
-        }}
-        button:hover {{
-            background: #0056b3;
-        }}
-        .demo-credentials {{
-            background: #e7f3ff;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 15px 0;
-            font-size: 12px;
-            color: #0066cc;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>AAuth Login</h1>
-        <div class="info">
-            <strong>Agent:</strong> {agent}
-            <strong>Resource:</strong> {resource}
-        </div>
-        {error_html}
-        <form method="POST" action="/agent/auth">
-            <input type="hidden" name="request_token" value="{request_token}">
-            <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-            <input type="hidden" name="action" value="login">
-            
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" required>
-            
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required>
-            
-            <div class="demo-credentials">
-                <strong>Demo Credentials:</strong><br>
-                Username: testuser<br>
-                Password: testpass
-            </div>
-            
-            <button type="submit">Login</button>
-        </form>
-    </div>
-</body>
-</html>"""
-        
+<html><head><title>AAuth Login</title>
+<style>
+body{{font-family:sans-serif;max-width:500px;margin:50px auto;padding:20px;background:#f5f5f5}}
+.container{{background:#fff;padding:30px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1)}}
+h1{{margin-top:0;color:#333}}
+.info{{background:#f0f0f0;padding:15px;border-radius:4px;margin:20px 0;font-size:14px}}
+.info strong{{display:block;margin-bottom:5px}}
+label{{display:block;margin:10px 0 5px;font-weight:500}}
+input[type="text"],input[type="password"]{{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box}}
+button{{width:100%;padding:12px;background:#007bff;color:#fff;border:none;border-radius:4px;font-size:16px;font-weight:500;cursor:pointer;margin-top:15px}}
+button:hover{{background:#0056b3}}
+.demo{{background:#e7f3ff;padding:10px;border-radius:4px;margin:15px 0;font-size:12px;color:#0066cc}}
+</style></head>
+<body><div class="container">
+<h1>AAuth Login</h1>
+<div class="info"><strong>Agent:</strong> {agent}<br><strong>Resource:</strong> {resource}</div>
+<div class="info"><strong>Interaction Code:</strong> {code}</div>
+{error_html}
+<form method="POST" action="/interact">
+<input type="hidden" name="pending_id" value="{pending_id}">
+<input type="hidden" name="code" value="{code}">
+<input type="hidden" name="action" value="login">
+<label for="username">Username:</label>
+<input type="text" id="username" name="username" required>
+<label for="password">Password:</label>
+<input type="password" id="password" name="password" required>
+<div class="demo"><strong>Demo Credentials:</strong><br>Username: testuser / Password: testpass</div>
+<button type="submit">Login</button>
+</form></div></body></html>"""
+
         return HTMLResponse(content=html)
-    
+
     def _render_consent_page(
         self,
-        request_token: str,
-        redirect_uri: str,
+        pending_id: str,
+        code: str,
         request_details: Dict[str, Any],
         user_id: str
     ) -> Response:
-        """Render consent page HTML."""
+        """Render consent page HTML for interaction endpoint."""
         from fastapi.responses import HTMLResponse
-        
+
         agent = request_details.get("agent", "Unknown")
         resource = request_details.get("resource", "Unknown")
         scope = request_details.get("scope", "")
+        purpose = request_details.get("purpose", "")
         user_name = request_details.get("user_name", user_id)
-        
-        # Parse scopes
+
         scopes = scope.split() if scope else []
-        scope_descriptions = {
-            "data.read": "Read access to your data",
-            "data.write": "Write access to your data",
-            "data.delete": "Delete access to your data"
-        }
-        
-        scope_list_html = ""
-        for s in scopes:
-            desc = scope_descriptions.get(s, s)
-            scope_list_html += f'<li><strong>{s}</strong> - {desc}</li>'
-        
+        scope_descs = {"data.read": "Read access to your data", "data.write": "Write access to your data", "data.delete": "Delete access to your data"}
+        scope_list_html = "".join(f'<li><strong>{s}</strong> - {scope_descs.get(s, s)}</li>' for s in scopes) or '<li>No specific scopes requested</li>'
+        purpose_html = f'<div class="info"><strong>Purpose:</strong> {purpose}</div>' if purpose else ""
+
         html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>AAuth Authorization</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            max-width: 600px;
-            margin: 50px auto;
-            padding: 20px;
-            background: #f5f5f5;
-        }}
-        .container {{
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        h1 {{
-            margin-top: 0;
-            color: #333;
-        }}
-        .info {{
-            background: #f0f0f0;
-            padding: 15px;
-            border-radius: 4px;
-            margin: 20px 0;
-            font-size: 14px;
-        }}
-        .info strong {{
-            display: block;
-            margin-bottom: 5px;
-        }}
-        .scopes {{
-            background: #fff9e6;
-            padding: 15px;
-            border-radius: 4px;
-            margin: 20px 0;
-        }}
-        .scopes ul {{
-            margin: 10px 0;
-            padding-left: 20px;
-        }}
-        .scopes li {{
-            margin: 5px 0;
-        }}
-        .buttons {{
-            display: flex;
-            gap: 10px;
-            margin-top: 25px;
-        }}
-        button {{
-            flex: 1;
-            padding: 12px;
-            border: none;
-            border-radius: 4px;
-            font-size: 16px;
-            font-weight: 500;
-            cursor: pointer;
-        }}
-        .grant {{
-            background: #28a745;
-            color: white;
-        }}
-        .grant:hover {{
-            background: #218838;
-        }}
-        .deny {{
-            background: #dc3545;
-            color: white;
-        }}
-        .deny:hover {{
-            background: #c82333;
-        }}
-        form {{
-            margin: 0;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Authorize Access</h1>
-        <p>Hello, <strong>{user_name}</strong>!</p>
-        
-        <div class="info">
-            <strong>Agent:</strong> {agent}
-            <strong>Resource:</strong> {resource}
-        </div>
-        
-        <div class="scopes">
-            <strong>The following permissions are requested:</strong>
-            <ul>
-                {scope_list_html if scope_list_html else '<li>No specific scopes requested</li>'}
-            </ul>
-        </div>
-        
-        <div class="buttons">
-            <form method="POST" action="/agent/auth" style="flex: 1;">
-                <input type="hidden" name="request_token" value="{request_token}">
-                <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                <input type="hidden" name="consent" value="grant">
-                <button type="submit" class="grant">Grant Access</button>
-            </form>
-            
-            <form method="POST" action="/agent/auth" style="flex: 1;">
-                <input type="hidden" name="request_token" value="{request_token}">
-                <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                <input type="hidden" name="consent" value="deny">
-                <button type="submit" class="deny">Deny</button>
-            </form>
-        </div>
-    </div>
-</body>
-</html>"""
-        
+<html><head><title>AAuth Authorization</title>
+<style>
+body{{font-family:sans-serif;max-width:600px;margin:50px auto;padding:20px;background:#f5f5f5}}
+.container{{background:#fff;padding:30px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1)}}
+h1{{margin-top:0;color:#333}}
+.info{{background:#f0f0f0;padding:15px;border-radius:4px;margin:20px 0;font-size:14px}}
+.info strong{{display:block;margin-bottom:5px}}
+.scopes{{background:#fff9e6;padding:15px;border-radius:4px;margin:20px 0}}
+.scopes ul{{margin:10px 0;padding-left:20px}}
+.scopes li{{margin:5px 0}}
+.buttons{{display:flex;gap:10px;margin-top:25px}}
+button{{flex:1;padding:12px;border:none;border-radius:4px;font-size:16px;font-weight:500;cursor:pointer}}
+.grant{{background:#28a745;color:#fff}}.grant:hover{{background:#218838}}
+.deny{{background:#dc3545;color:#fff}}.deny:hover{{background:#c82333}}
+</style></head>
+<body><div class="container">
+<h1>Authorize Access</h1>
+<p>Hello, <strong>{user_name}</strong>!</p>
+<div class="info"><strong>Agent:</strong> {agent}<br><strong>Resource:</strong> {resource}</div>
+{purpose_html}
+<div class="scopes"><strong>Permissions requested:</strong><ul>{scope_list_html}</ul></div>
+<div class="buttons">
+<form method="POST" action="/interact" style="flex:1">
+<input type="hidden" name="pending_id" value="{pending_id}">
+<input type="hidden" name="code" value="{code}">
+<input type="hidden" name="consent" value="grant">
+<button type="submit" class="grant">Grant Access</button>
+</form>
+<form method="POST" action="/interact" style="flex:1">
+<input type="hidden" name="pending_id" value="{pending_id}">
+<input type="hidden" name="code" value="{code}">
+<input type="hidden" name="consent" value="deny">
+<button type="submit" class="deny">Deny</button>
+</form>
+</div></div></body></html>"""
+
         return HTMLResponse(content=html)
-    
+
     def run(self):
         """Run the auth server."""
         import uvicorn

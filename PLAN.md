@@ -61,7 +61,7 @@ todos:
     dependencies:
       - phase3-tests
   - id: phase4-auth-endpoints
-    content: Add request_token and authorization code exchange endpoints to auth_server.py
+    content: Add deferred token flow to auth_server.py (202 + /pending + /interact per SPEC_UPDATED)
     status: pending
     dependencies:
       - phase4-user-sim
@@ -175,17 +175,16 @@ aauth/
 - `flows/autonomous.py`: Autonomous flow orchestrator
 
 ### Phase 4: User Delegation
-**Goal**: Full OAuth-like authorization code flow
+**Goal**: User consent via deferred responses (SPEC_UPDATED Sections 4.5.4, 10, 11)
 
-- Auth server returns `request_token` when user consent needed
-- Simulate browser redirect flow
-- User authenticates and consents
-- Authorization code exchange
-- Auth token includes user identity (`sub`, `email`)
+- Auth server returns **202** + pending **Location** + interaction **code** when consent is needed
+- User completes login/consent at **`/interact`**
+- Agent **polls** pending URL until **200** with `auth_token` (no `request_token`, no OAuth authorization code)
+- Auth token includes user identity (`sub`, etc.)
 
 **Deliverables**:
-- `participants/auth_server.py`: Add request_token and code exchange
-- `participants/user_simulator.py`: Browser redirect simulation
+- `participants/auth_server.py`: `POST /token`, `GET/POST /interact`, `GET/POST /pending/{id}`
+- `participants/user_simulator.py`: Drives `/interact` HTML flow
 - `flows/user_delegated.py`: User delegation flow orchestrator
 
 ### Additional Flows (Post-Phase 4)
@@ -287,7 +286,7 @@ These flows extend the core protocol with additional capabilities:
 **Key Methods**:
 - `sign_request(url, method, headers, body)` - Sign outgoing requests
 - `request_resource(resource_url, scope)` - Request access to resource
-- `exchange_code(auth_code)` - Exchange authorization code (Phase 4)
+- `_handle_deferred_response` / polling - Obtain auth token after 202 (Phase 4)
 
 **State**:
 - Agent ID (HTTPS URL)
@@ -316,20 +315,18 @@ These flows extend the core protocol with additional capabilities:
 **FastAPI Application** with endpoints:
 - `GET /.well-known/aauth-auth-server` - Metadata endpoint
 - `GET /jwks.json` - JWKS endpoint
-- `POST /agent/token` - Token endpoint (autonomous + code exchange)
-- `GET /agent/auth` - Authorization endpoint (user consent)
-- `POST /agent/auth` - Consent submission
+- `POST /token` - Token endpoint (JSON body; autonomous + deferred consent)
+- `GET /interact` - Interaction endpoint (user consent)
+- `POST /interact` - Login/consent forms
+- `GET /pending/{id}` - Poll for auth token
 
 **Key Methods**:
 - `evaluate_policy(agent, resource, scope)` - Policy evaluation (autonomous)
-- `issue_auth_token(agent, resource, scope, cnf_jwk, sub)` - Issue auth token
-- `issue_refresh_token(agent, sub, cnf_jwk)` - Issue refresh token
-- `exchange_code(code, agent)` - Exchange authorization code
+- `issue_auth_token(...)` - Issue auth token
+- `_create_pending_request` - 202 + interaction code + pending URL
 
 **State Management** (in-memory dicts):
-- `pending_requests` - request_token → request details
-- `authorization_codes` - code → authorization details
-- `refresh_tokens` - refresh_token → token binding
+- `pending_requests` - pending_id → request details (includes `interaction_code`)
 
 ### User Simulator (`participants/user_simulator.py`)
 
@@ -339,7 +336,7 @@ These flows extend the core protocol with additional capabilities:
 - `follow_redirect(location)` - Follow redirect URL
 - `authenticate(username, password)` - Simulate user login
 - `consent(scope)` - Simulate user consent
-- `complete_flow(request_token_url, redirect_uri)` - Complete full redirect flow
+- `complete_flow(interact_url, ...)` - Complete `/interact` login and consent
 
 ## Flow Implementations
 
@@ -355,21 +352,15 @@ These flows extend the core protocol with additional capabilities:
 
 ### User Delegated Flow (`flows/user_delegated.py`)
 
-**Sequence**:
-1. Agent → Resource: GET /data (unsigned)
-2. Resource → Agent: 401 + resource_token
-3. Agent → Auth Server: POST /agent/token (resource_token, sig=jwks)
-4. Auth Server → Agent: 200 + request_token
-5. Agent → User Simulator: Redirect to auth server
-6. User Simulator → Auth Server: GET /agent/auth?request_token=...
-7. Auth Server → User Simulator: Login/consent page
-8. User Simulator → Auth Server: POST /agent/auth (credentials + consent)
-9. Auth Server → User Simulator: Redirect to agent with code
-10. User Simulator → Agent: GET /callback?code=...
-11. Agent → Auth Server: POST /agent/token (code, sig=jwks)
-12. Auth Server → Agent: 200 + auth_token + refresh_token
-13. Agent → Resource: GET /data (auth_token, sig=jwt)
-14. Resource → Agent: 200 + data
+**Sequence** (SPEC_UPDATED deferred pattern):
+1. Agent → Resource: signed GET /data-auth
+2. Resource → Agent: 401 + resource_token (AAuth header)
+3. Agent → Auth Server: POST /token (JSON `resource_token`, HTTPSig)
+4. Auth Server → Agent: **202** + `location` + interaction `code`
+5. User Simulator → Auth Server: GET/POST `/interact` (login + consent)
+6. Agent → Auth Server: GET pending URL (poll) until **200** + `auth_token`
+7. Agent → Resource: GET /data-auth (auth_token, sig=jwt)
+8. Resource → Agent: 200 + data
 
 ## Dependencies
 

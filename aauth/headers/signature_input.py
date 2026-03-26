@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 
 def build_signature_input_header(
     covered_components: List[str],
-    label: str = "sig1",
+    label: str = "sig",
     created: Optional[int] = None
 ) -> str:
     """Build Signature-Input header per RFC 9421 Section 4.1.

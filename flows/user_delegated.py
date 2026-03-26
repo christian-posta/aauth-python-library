@@ -10,7 +10,7 @@ from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
 from participants.user_simulator import UserSimulator
-from core import _is_debug_enabled, _is_jwt_token_debug_enabled
+from aauth.debug import _is_debug_enabled, _is_jwt_token_debug_enabled
 from aauth.tokens.auth_token import parse_token_claims
 
 
@@ -23,15 +23,15 @@ async def run_user_delegated_flow(
     method: str = "GET"
 ) -> httpx.Response:
     """Run the complete user delegation flow (automated with user simulator).
-    
-    Flow:
-    1. Agent requests resource (gets resource token challenge)
-    2. Agent presents resource token to auth server (gets request_token)
-    3. User simulator completes consent flow
-    4. Agent exchanges authorization code for auth token
+
+    Flow (SPEC_UPDATED.md Sections 4.5.4, 10):
+    1. Agent requests resource (401 + resource token in AAuth header)
+    2. Agent POSTs resource token to auth server token endpoint → 202 + Location + interaction code
+    3. User simulator completes consent at auth server /interact
+    4. Agent polls pending URL (GET) until 200 with auth_token
     5. Agent retries resource request with auth token
     6. Resource validates auth token and grants access
-    
+
     Args:
         agent: Agent instance
         resource: Resource instance
@@ -62,7 +62,7 @@ async def run_user_delegated_flow(
     response = await agent.request_resource(
         resource_url=resource_url,
         method=method,
-        sig_scheme="jwks"
+        sig_scheme="jwks_uri"
     )
     
     if debug:
@@ -94,33 +94,9 @@ async def run_user_delegated_flow(
         except Exception as e:
             print(f"Failed to decode resource token: {e}", file=sys.stderr, flush=True)
     
-    # Print request_token information (if JWT token debug is enabled)
-    # Note: request_token is opaque (not a JWT), but we can show its value and associated request details
-    if jwt_token_debug and agent.pending_request_token:
-        print("\n" + "=" * 80, file=sys.stderr, flush=True)
-        print("REQUEST TOKEN (opaque)", file=sys.stderr, flush=True)
-        print("=" * 80, file=sys.stderr, flush=True)
-        print(f"Token value: {agent.pending_request_token}", file=sys.stderr, flush=True)
-        print(f"\nNote: request_token is an opaque value (not a JWT) representing a pending authorization request.", file=sys.stderr, flush=True)
-        
-        # Try to get request details from auth server if available
-        if hasattr(auth_server, 'pending_requests') and agent.pending_request_token in auth_server.pending_requests:
-            request_details = auth_server.pending_requests[agent.pending_request_token]
-            print(f"\nAssociated request details:", file=sys.stderr, flush=True)
-            print(json.dumps({
-                "agent": request_details.get("agent"),
-                "resource": request_details.get("resource"),
-                "scope": request_details.get("scope"),
-                "redirect_uri": request_details.get("redirect_uri"),
-                "expires_at": request_details.get("expires_at")
-            }, indent=2), file=sys.stderr, flush=True)
-        
-        print("=" * 80 + "\n", file=sys.stderr, flush=True)
-    
-    # Step 2-5: Agent should have automatically handled the challenge
-    # (request_resource handles 401, gets request_token, uses user simulator, exchanges code)
+    # Steps 2–5: Agent handles 401, token POST, 202 + pending URL, polling, retry with auth token.
     if debug:
-        print("\nSteps 2-5: Agent automatically handled challenge, user consent, and code exchange", file=sys.stderr, flush=True)
+        print("\nSteps 2-5: Agent handled challenge, deferred response (202), and polling", file=sys.stderr, flush=True)
         if agent.auth_token:
             print(f"Agent now has auth token: {agent.auth_token[:100]}...", file=sys.stderr, flush=True)
         else:
@@ -164,18 +140,14 @@ async def run_user_delegated_flow_manual(
     resource_url: str = "http://127.0.0.1:8002/data-auth",
     method: str = "GET"
 ) -> httpx.Response:
-    """Run the user delegation flow with manual browser interaction.
-    
-    Flow:
-    1. Agent requests resource (gets resource token challenge)
-    2. Agent presents resource token to auth server (gets request_token)
-    3. **PAUSES** - Displays URL for user to open in browser
-    4. User opens URL, authenticates, and grants consent
-    5. Agent detects authorization code from callback
-    6. Agent exchanges authorization code for auth token
-    7. Agent retries resource request with auth token
-    8. Resource validates auth token and grants access
-    
+    """Run the user delegation flow with manual browser interaction (placeholder).
+
+    Intended flow (SPEC_UPDATED.md): same as automated — 202, interaction code, /interact,
+    polling pending URL for auth_token; there is no authorization code exchange.
+
+    This function is not fully implemented for hands-off manual browser testing; use
+    ``demo_phase4.py`` and extend the agent to surface the interaction URL if needed.
+
     Args:
         agent: Agent instance
         resource: Resource instance
@@ -205,7 +177,7 @@ async def run_user_delegated_flow_manual(
     response = await agent.request_resource(
         resource_url=resource_url,
         method=method,
-        sig_scheme="jwks"
+        sig_scheme="jwks_uri"
     )
     
     if debug:
@@ -225,17 +197,8 @@ async def run_user_delegated_flow_manual(
             print("Agent already has auth token (autonomous flow succeeded)", file=sys.stderr, flush=True)
         return response
     
-    # Check if we need to handle request_token manually
-    # The agent's _request_auth_token should have stored the request_token
-    # For manual flow, we need to intercept and display the URL
-    
-    # For now, the agent will use user simulator automatically
-    # In a true manual flow, we'd need to modify the agent to pause and display URL
-    # This will be handled in the demo script
-    
     if debug:
-        print("\nNote: For true manual testing, use demo_phase4.py", file=sys.stderr, flush=True)
-        print("This flow uses user simulator for automated testing", file=sys.stderr, flush=True)
+        print("\nNote: Manual browser path not fully wired; use demo_phase4.py --manual or automated flow.", file=sys.stderr, flush=True)
     
     return response
 

@@ -72,20 +72,14 @@ def auth_server2(auth2_id, auth1_id):
     return AuthServer(auth2_id, port=8005, require_user_consent=False, trusted_auth_servers=[auth1_id])
 
 
-class TestActClaimCreation:
-    """Test act claim creation in auth tokens."""
+class TestAuthTokenClaims:
+    """Test auth token claim behavior per updated spec."""
     
-    def test_create_auth_token_with_act_claim(self):
-        """Test that auth token can be created with act claim."""
+    def test_create_auth_token_with_txn_claim(self):
+        """Test that auth token can be created with txn claim."""
         private_key, public_key = generate_ed25519_keypair()
         cnf_jwk = public_key_to_jwk(public_key, kid="test-key")
-        
-        act_claim = {
-            "agent": "https://original-agent.example",
-            "agent_delegate": "delegate-1",
-            "sub": "user-123"
-        }
-        
+
         token = create_auth_token(
             iss="https://auth.example",
             aud="https://resource.example",
@@ -95,61 +89,21 @@ class TestActClaimCreation:
             private_key=private_key,
             kid="auth-key-1",
             sub="user-123",
-            act=act_claim
+            txn="txn-123"
         )
         
         # Parse token
         claims = parse_token_claims(token)
         payload = claims["payload"]
         
-        # Verify act claim is present
-        assert "act" in payload, "act claim should be present"
-        assert payload["act"]["agent"] == "https://original-agent.example"
-        assert payload["act"]["agent_delegate"] == "delegate-1"
-        assert payload["act"]["sub"] == "user-123"
+        # Verify txn claim is present
+        assert payload["txn"] == "txn-123"
     
-    def test_create_auth_token_with_nested_act(self):
-        """Test that auth token can be created with nested act claim."""
+    def test_create_auth_token_without_txn(self):
+        """Test that auth token without txn claim works normally."""
         private_key, public_key = generate_ed25519_keypair()
         cnf_jwk = public_key_to_jwk(public_key, kid="test-key")
-        
-        # Nested act for multi-hop chain
-        nested_act = {
-            "agent": "https://first-agent.example",
-            "sub": "user-original"
-        }
-        
-        act_claim = {
-            "agent": "https://second-agent.example",
-            "sub": "user-123",
-            "act": nested_act
-        }
-        
-        token = create_auth_token(
-            iss="https://auth.example",
-            aud="https://resource.example",
-            agent="https://third-agent.example",
-            cnf_jwk=cnf_jwk,
-            scope="read",
-            private_key=private_key,
-            kid="auth-key-1",
-            act=act_claim
-        )
-        
-        # Parse token
-        claims = parse_token_claims(token)
-        payload = claims["payload"]
-        
-        # Verify nested act claim
-        assert "act" in payload
-        assert "act" in payload["act"]
-        assert payload["act"]["act"]["agent"] == "https://first-agent.example"
-    
-    def test_create_auth_token_without_act(self):
-        """Test that auth token without act claim works normally."""
-        private_key, public_key = generate_ed25519_keypair()
-        cnf_jwk = public_key_to_jwk(public_key, kid="test-key")
-        
+
         token = create_auth_token(
             iss="https://auth.example",
             aud="https://resource.example",
@@ -157,15 +111,16 @@ class TestActClaimCreation:
             cnf_jwk=cnf_jwk,
             scope="read",
             private_key=private_key,
-            kid="auth-key-1"
+            kid="auth-key-1",
+            sub="user-123"
         )
         
         # Parse token
         claims = parse_token_claims(token)
         payload = claims["payload"]
         
-        # Verify act claim is NOT present
-        assert "act" not in payload, "act claim should not be present when not specified"
+        # Verify txn claim is not present by default
+        assert "txn" not in payload
 
 
 class TestFederationTrust:
@@ -246,11 +201,11 @@ async def test_token_exchange_flow(
 
 
 @pytest.mark.asyncio
-async def test_token_exchange_returns_act_claim(
+async def test_token_exchange_returns_required_claims(
     agent1, resource1, resource2, auth_server1, auth_server2,
     agent1_id, resource1_id, resource2_id, auth1_id, auth2_id
 ):
-    """Test that token exchange returns token with act claim."""
+    """Test that token exchange returns required claims per updated spec."""
     from flows.autonomous import run_autonomous_flow
     from aauth.signing.signer import sign_request
     
@@ -294,10 +249,9 @@ async def test_token_exchange_returns_act_claim(
             headers={},
             body=b"",
             private_key=resource1.private_key,
-            sig_scheme="jwks",
+            sig_scheme="jwks_uri",
             id=resource1.resource_id,
             kid=resource1.kid,
-            **{"well-known": "aauth-resource"}
         )
         
         async with httpx.AsyncClient() as client:
@@ -318,21 +272,21 @@ async def test_token_exchange_returns_act_claim(
         
         assert exchanged_token is not None, "Should obtain exchanged token"
         
-        # Parse and verify act claim
+        # Parse and verify required claims
         claims = parse_token_claims(exchanged_token)
         payload = claims["payload"]
         
-        # Should have act claim showing delegation chain
-        assert "act" in payload, "Exchanged token should have act claim"
-        assert payload["act"]["agent"] == agent1_id, "act.agent should be original agent"
-        
-        # Other claims
+        # Required/conditional claims in updated spec
         assert payload["iss"] == auth2_id, "Issuer should be Auth Server 2"
         assert payload["aud"] == resource2_id, "Audience should be Resource 2"
         assert payload["agent"] == resource1_id, "Agent should be Resource 1 (as agent)"
+        assert "sub" in payload or "scope" in payload, "Auth token must include at least one of sub or scope"
+        
+        # Legacy act claim is no longer spec-required
+        assert "act" not in payload, "act claim should not be present for updated spec compliance"
         
     except Exception as e:
-        pytest.fail(f"Act claim verification failed: {e}")
+        pytest.fail(f"Required claim verification failed: {e}")
 
 
 @pytest.mark.asyncio
@@ -391,10 +345,9 @@ async def test_untrusted_auth_server_rejected(
             headers={},
             body=b"",
             private_key=resource1.private_key,
-            sig_scheme="jwks",
+            sig_scheme="jwks_uri",
             id=resource1.resource_id,
             kid=resource1.kid,
-            **{"well-known": "aauth-resource"}
         )
         
         async with httpx.AsyncClient() as client:

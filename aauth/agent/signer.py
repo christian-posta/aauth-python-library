@@ -45,7 +45,7 @@ class AgentRequestSigner:
             target_uri: Target URI
             headers: Request headers (will be modified)
             body: Request body bytes
-            sig_scheme: Signature scheme ("hwk", "jwks", or "jwt")
+            sig_scheme: Signature scheme ("hwk", "jwks_uri", or "jwt")
         
         Returns:
             Dictionary with signature headers
@@ -55,9 +55,9 @@ class AgentRequestSigner:
         """
         kwargs = {}
         
-        if sig_scheme == "jwks":
+        if sig_scheme == "jwks_uri":
             if not self.agent_id:
-                raise SignatureError("agent_id required for jwks scheme")
+                raise SignatureError("agent_id required for jwks_uri scheme")
             kwargs["id"] = self.agent_id
             kwargs["kid"] = self.kid
         

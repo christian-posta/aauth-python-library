@@ -1,8 +1,10 @@
 """Tests for Phase 4: User Delegation."""
 
+import json
+
 import pytest
-import asyncio
-import httpx
+from starlette.testclient import TestClient
+
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
@@ -34,47 +36,44 @@ def user_simulator():
     return UserSimulator()
 
 
-@pytest.mark.asyncio
-async def test_request_token_generation(auth_server):
-    """Test that auth server generates request_token when user consent is required."""
-    # This test would require running the auth server
-    # For now, we'll test the method directly
-    request_token = auth_server._generate_request_token(
-        agent="http://127.0.0.1:8001",
-        resource="http://127.0.0.1:8002",
+def test_create_pending_request_returns_202_with_interaction_code(auth_server):
+    """When consent is required, pending state uses 202 + Location + interaction code (SPEC_UPDATED 10, 11.3)."""
+    agent_jwk = {"kty": "OKP", "crv": "Ed25519", "x": "11"}
+    resp = auth_server._create_pending_request(
+        agent_id="http://127.0.0.1:8001",
+        resource_id="http://127.0.0.1:8002",
         scope="data.read",
-        redirect_uri="http://127.0.0.1:8001/callback"
+        agent_jwk=agent_jwk,
     )
-    
-    assert request_token is not None
-    assert len(request_token) > 0
-    assert request_token in auth_server.pending_requests
+    assert resp.status_code == 202
+    body = json.loads(resp.body.decode())
+    assert body["status"] == "pending"
+    assert body["location"]
+    assert body["require"] == "interaction"
+    assert body["code"]
+    assert len(auth_server.pending_requests) == 1
+    pending_id = next(iter(auth_server.pending_requests))
+    stored = auth_server.pending_requests[pending_id]
+    assert stored["interaction_code"] == body["code"]
+    assert stored["status"] == "pending"
 
 
-@pytest.mark.asyncio
-async def test_authorization_code_generation(auth_server):
-    """Test that auth server generates authorization codes."""
-    request_details = {
-        "agent": "http://127.0.0.1:8001",
-        "resource": "http://127.0.0.1:8002",
-        "scope": "data.read",
-        "redirect_uri": "http://127.0.0.1:8001/callback",
-        "user_id": "testuser"
-    }
-    
-    code = auth_server._generate_authorization_code(request_details)
-    
-    assert code is not None
-    assert len(code) > 0
-    assert code in auth_server.authorization_codes
-    assert auth_server.authorization_codes[code]["agent"] == request_details["agent"]
+def test_auth_server_metadata_includes_token_and_interaction_endpoints(auth_server):
+    """Metadata exposes token_endpoint and interaction_endpoint (SPEC_UPDATED 13.2), not legacy agent/auth paths."""
+    client = TestClient(auth_server.app)
+    r = client.get("/.well-known/aauth-issuer.json")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["issuer"] == auth_server.auth_id
+    assert "token_endpoint" in data
+    assert "interaction_endpoint" in data
+    assert str(data["interaction_endpoint"]).rstrip("/").endswith("interact")
+    assert "jwks_uri" in data
 
 
 @pytest.mark.asyncio
 async def test_user_simulator_complete_flow(user_simulator):
     """Test user simulator can complete the consent flow."""
-    # This test requires running servers
-    # For now, we'll test the structure
     assert user_simulator is not None
     assert user_simulator.username == "testuser"
     assert user_simulator.password == "testpass"
@@ -88,7 +87,7 @@ async def test_policy_evaluation_requires_consent(auth_server):
         resource="http://127.0.0.1:8002",
         scope="data.read"
     )
-    
+
     assert result["requires_user_consent"] is True
     assert result["allowed"] is False
 
@@ -97,35 +96,23 @@ async def test_policy_evaluation_requires_consent(auth_server):
 async def test_policy_evaluation_autonomous():
     """Test that policy evaluation allows autonomous when user consent not required."""
     auth_server = AuthServer("http://127.0.0.1:8003", port=8003, require_user_consent=False)
-    
+
     result = auth_server._evaluate_policy(
         agent="http://127.0.0.1:8001",
         resource="http://127.0.0.1:8002",
         scope="data.read"
     )
-    
+
     assert result["requires_user_consent"] is False
     assert result["allowed"] is True
 
 
 @pytest.mark.asyncio
-async def test_agent_handles_request_token(agent):
-    """Test that agent can handle request_token responses."""
-    # This test would require running servers
-    # For now, we'll test the structure
+async def test_agent_supports_deferred_token_flow(agent):
+    """Agent handles 202 deferred responses and token requests (no request_token / code exchange)."""
     assert agent is not None
-    assert hasattr(agent, "_handle_request_token")
-    assert hasattr(agent, "_exchange_authorization_code")
-    assert hasattr(agent, "_handle_callback")
-
-
-@pytest.mark.asyncio
-async def test_auth_server_metadata_includes_auth_endpoint(auth_server):
-    """Test that auth server metadata includes agent_auth_endpoint."""
-    # This would require running the server and fetching metadata
-    # For now, we'll test the structure
-    assert auth_server is not None
-    assert hasattr(auth_server, "auth_id")
+    assert hasattr(agent, "_handle_deferred_response")
+    assert hasattr(agent, "_request_auth_token")
 
 
 # Integration test (requires running servers)
@@ -133,13 +120,10 @@ async def test_auth_server_metadata_includes_auth_endpoint(auth_server):
 @pytest.mark.integration
 async def test_user_delegation_flow_integration(agent, resource, auth_server, user_simulator):
     """Integration test for complete user delegation flow.
-    
+
     This test requires all servers to be running.
     Run with: pytest -m integration
     """
-    # Start servers in background (simplified - in real test would use fixtures)
-    # For now, this is a placeholder
-    
     response = await run_user_delegated_flow(
         agent=agent,
         resource=resource,
@@ -148,6 +132,5 @@ async def test_user_delegation_flow_integration(agent, resource, auth_server, us
         resource_url="http://127.0.0.1:8002/data-auth",
         method="GET"
     )
-    
-    assert response.status_code == 200
 
+    assert response.status_code == 200

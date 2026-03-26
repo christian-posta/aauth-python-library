@@ -18,27 +18,30 @@ from aauth.metadata.resource import generate_resource_metadata
 from aauth.metadata.auth_server import fetch_metadata
 from aauth.tokens.resource_token import create_resource_token
 from aauth.tokens.auth_token import parse_token_claims, verify_token
-from core import _is_debug_enabled, _is_http_debug_enabled
+from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
 import httpx
 from typing import Optional
 import time
 import json
+import uuid
 
 
 class Resource:
     """Resource server that validates signatures."""
     
-    def __init__(self, resource_id: str, port: int = 8002, auth_server: Optional[str] = None):
+    def __init__(self, resource_id: str, port: int = 8002, auth_server: Optional[str] = None, enable_txn: bool = False):
         """Initialize resource.
-        
+
         Args:
             resource_id: Resource identifier (HTTPS URL)
             port: Port to run resource server on
             auth_server: Optional auth server identifier (HTTPS URL) for Phase 3
+            enable_txn: Include txn claim in resource tokens for request correlation
         """
         self.resource_id = resource_id
         self.port = port
         self.auth_server = auth_server
+        self.enable_txn = enable_txn
         
         # Generate key pair for resource token signing
         self.private_key, self.public_key = generate_ed25519_keypair()
@@ -80,12 +83,12 @@ class Resource:
         @self.app.get("/data-jwks")
         async def get_data_jwks(request: Request):
             """Protected endpoint that requires sig=jwks scheme."""
-            return await self._handle_protected_request(request, "GET", required_scheme="jwks")
+            return await self._handle_protected_request(request, "GET", required_scheme="jwks_uri")
         
         @self.app.post("/data-jwks")
         async def post_data_jwks(request: Request):
             """Protected endpoint that requires sig=jwks scheme."""
-            return await self._handle_protected_request(request, "POST", required_scheme="jwks")
+            return await self._handle_protected_request(request, "POST", required_scheme="jwks_uri")
         
         @self.app.get("/data-auth")
         async def get_data_auth(request: Request):
@@ -120,17 +123,34 @@ class Resource:
                 )
         
         @self.app.get("/.well-known/aauth-resource")
+        @self.app.get("/.well-known/aauth-resource.json")
         async def resource_metadata():
-            """Resource metadata endpoint per AAuth spec Section 8.3."""
+            """Resource metadata endpoint per AAuth spec Section 13.3."""
             jwks_uri = f"{self.resource_id}/jwks.json"
             resource_token_endpoint = f"{self.resource_id}/resource/token"
             metadata = generate_resource_metadata(
                 resource_id=self.resource_id,
                 jwks_uri=jwks_uri,
                 resource_token_endpoint=resource_token_endpoint,
-                supported_scopes=["data.read", "data.write"]
+                scope_descriptions={
+                    "data.read": "Read access to your data",
+                    "data.write": "Write access to your data",
+                },
             )
             return metadata
+
+        @self.app.get("/.well-known/aauth-agent")
+        @self.app.get("/.well-known/aauth-agent.json")
+        async def agent_metadata():
+            """Agent metadata endpoint for call chaining.
+
+            Per spec: resources acting as agents MUST publish agent metadata
+            at /.well-known/aauth-agent.json so downstream resources and
+            auth servers can verify identity.
+            """
+            from aauth.metadata.agent import generate_agent_metadata
+            jwks_uri = f"{self.resource_id}/jwks.json"
+            return generate_agent_metadata(self.resource_id, jwks_uri)
         
         @self.app.get("/jwks.json")
         async def jwks():
@@ -187,32 +207,32 @@ class Resource:
         signature_header = request.headers.get("Signature")
         signature_key_header = request.headers.get("Signature-Key")
         
-        # Helper function to build appropriate Agent-Auth challenge based on endpoint requirements
-        # Per SPEC.md Section 4:
-        # - httpsig = any signature scheme (pseudonymous) - Section 4.1
-        # - httpsig; identity=?1 = requires identity (jwks, x509, or jwt with agent token) - Section 4.2
-        # - httpsig; auth-token; resource_token="..."; auth_server="..." = requires authorization - Section 4.3
-        def build_agent_auth_challenge():
-            """Build Agent-Auth challenge based on endpoint requirements."""
+        # Helper function to build appropriate AAuth challenge based on endpoint requirements
+        # Per SPEC_UPDATED.md Section 4:
+        # - require=pseudonym = any signature scheme (pseudonymous) - Section 4.1
+        # - require=identity = requires identity (jwks, x509, or jwt with agent token) - Section 4.2
+        # - require=auth-token; resource-token="..."; auth-server="..." = requires authorization - Section 4.3
+        def build_aauth_challenge():
+            """Build AAuth challenge value based on endpoint requirements."""
             if require_auth_token:
                 # For auth token endpoints, we need agent identity first to issue resource token
                 # So challenge for identity, then we can issue resource token on retry
-                return "httpsig; identity=?1"
-            elif required_scheme == "jwks":
-                return "httpsig; identity=?1"
+                return "require=identity"
+            elif required_scheme in ("jwks", "jwks_uri"):
+                return "require=identity"
             elif required_scheme == "jwt":
                 # Shouldn't happen (handled by require_auth_token), but fallback
-                return "httpsig; identity=?1"
+                return "require=identity"
             else:
                 # required_scheme == "hwk" or None - any signature is fine
-                return "httpsig"
+                return "require=pseudonym"
         
         if not signature_input_header or not signature_header or not signature_key_header:
-            agent_auth_value = build_agent_auth_challenge()
+            agent_auth_value = build_aauth_challenge()
             
             response = Response(
                 status_code=401,
-                headers={"Agent-Auth": agent_auth_value},
+                headers={"AAuth": agent_auth_value},
                 content="Missing signature headers"
             )
             if _is_http_debug_enabled():
@@ -223,11 +243,11 @@ class Resource:
         try:
             parsed_key = parse_signature_key(signature_key_header)
         except Exception as e:
-            agent_auth_value = build_agent_auth_challenge()
+            agent_auth_value = build_aauth_challenge()
             
             response = Response(
                 status_code=401,
-                headers={"Agent-Auth": agent_auth_value},
+                headers={"AAuth": agent_auth_value},
                 content=f"Invalid Signature-Key header: {e}"
             )
             if _is_http_debug_enabled():
@@ -246,10 +266,10 @@ class Resource:
                 return await self._issue_resource_token_challenge(request, method, scheme, params)
         else:
             # Verify scheme matches required scheme (for backward compatibility)
-            # Phase 6: When identity is required (required_scheme == "jwks"), also accept scheme=jwt with agent token
+            # Phase 6: When identity is required (required_scheme in ("jwks", "jwks_uri")), also accept scheme=jwt with agent token
             if required_scheme and scheme != required_scheme:
                 # Phase 6: Check if scheme=jwt contains an agent token (acceptable for identity requirement)
-                if required_scheme == "jwks" and scheme == "jwt":
+                if required_scheme in ("jwks", "jwks_uri") and scheme == "jwt":
                     jwt_token = params.get("jwt")
                     if jwt_token:
                         # Parse token header to check if it's an agent token
@@ -268,10 +288,10 @@ class Resource:
                                 if _is_debug_enabled():
                                     print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme} (not agent token)", file=sys.stderr, flush=True)
                                 
-                                agent_auth_value = "httpsig; identity=?1"
+                                agent_auth_value = "require=identity"
                                 response = Response(
                                     status_code=401,
-                                    headers={"Agent-Auth": agent_auth_value},
+                                    headers={"AAuth": agent_auth_value},
                                     content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                                 )
                                 if _is_http_debug_enabled():
@@ -282,10 +302,10 @@ class Resource:
                             if _is_debug_enabled():
                                 print(f"DEBUG RESOURCE: Failed to parse JWT token: {e}", file=sys.stderr, flush=True)
                             
-                            agent_auth_value = "httpsig; identity=?1"
+                            agent_auth_value = "require=identity"
                             response = Response(
                                 status_code=401,
-                                headers={"Agent-Auth": agent_auth_value},
+                                headers={"AAuth": agent_auth_value},
                                 content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                             )
                             if _is_http_debug_enabled():
@@ -296,10 +316,10 @@ class Resource:
                         if _is_debug_enabled():
                             print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme} (no jwt parameter)", file=sys.stderr, flush=True)
                         
-                        agent_auth_value = "httpsig; identity=?1"
+                        agent_auth_value = "require=identity"
                         response = Response(
                             status_code=401,
-                            headers={"Agent-Auth": agent_auth_value},
+                            headers={"AAuth": agent_auth_value},
                             content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                         )
                         if _is_http_debug_enabled():
@@ -310,24 +330,24 @@ class Resource:
                     if _is_debug_enabled():
                         print(f"DEBUG RESOURCE: Scheme mismatch - required={required_scheme}, got={scheme}", file=sys.stderr, flush=True)
                     
-                    # Build appropriate Agent-Auth challenge based on required scheme
-                    # Per SPEC.md Section 4:
-                    # - httpsig = any scheme (pseudonymous)
-                    # - httpsig; identity=?1 = requires identity (jwks, x509, or jwt with agent token)
-                    # - httpsig; auth-token = requires authorization (jwt with auth token)
-                    if required_scheme == "jwks":
-                        agent_auth_value = "httpsig; identity=?1"
+                    # Build appropriate AAuth challenge based on required scheme
+                    # Per SPEC_UPDATED.md Section 4:
+                    # - require=pseudonym = any scheme (pseudonymous)
+                    # - require=identity = requires identity (jwks, x509, or jwt with agent token)
+                    # - require=auth-token = requires authorization (jwt with auth token)
+                    if required_scheme in ("jwks", "jwks_uri"):
+                        agent_auth_value = "require=identity"
                     elif required_scheme == "jwt":
                         # This shouldn't happen here (handled by require_auth_token above)
                         # But if it does, we'd need resource_token and auth_server
-                        agent_auth_value = "httpsig; identity=?1"  # Fallback to identity requirement
+                        agent_auth_value = "require=identity"  # Fallback to identity requirement
                     else:
                         # required_scheme == "hwk" or None - any signature is fine
-                        agent_auth_value = "httpsig"
+                        agent_auth_value = "require=pseudonym"
                     
                     response = Response(
                         status_code=401,
-                        headers={"Agent-Auth": agent_auth_value},
+                        headers={"AAuth": agent_auth_value},
                         content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                     )
                     if _is_http_debug_enabled():
@@ -410,7 +430,7 @@ class Resource:
                     print("DEBUG RESOURCE: Signature verification failed", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig"},
+                    headers={"AAuth": "require=pseudonym"},
                     content="Invalid signature"
                 )
                 if _is_http_debug_enabled():
@@ -428,42 +448,41 @@ class Resource:
                 self._print_response_debug(response)
             return response
         
-        elif scheme == "jwks":
+        elif scheme in ("jwks", "jwks_uri"):
             # Extract agent_id, kid, and optional well-known from Signature-Key
             agent_id = params.get("id")
             kid = params.get("kid")
-            well_known = params.get("well-known")
             jwks_param = params.get("jwks")
-            
-            # Per spec Section 10.7 Mode 2: jwks parameter MUST NOT be present
+
+            # Per spec: jwks parameter MUST NOT be present
             if jwks_param:
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    headers={"AAuth": "require=identity"},
                     content="Invalid Signature-Key: jwks parameter must not be present for sig=jwks"
                 )
                 if _is_http_debug_enabled():
                     self._print_response_debug(response)
                 return response
-            
+
             if not agent_id or not kid:
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    headers={"AAuth": "require=identity"},
                     content="Missing id or kid in Signature-Key for sig=jwks"
                 )
                 if _is_http_debug_enabled():
                     self._print_response_debug(response)
                 return response
-            
+
             if _is_debug_enabled():
-                print(f"DEBUG RESOURCE: sig=jwks - agent_id={agent_id}, kid={kid}, well-known={well_known}", file=sys.stderr, flush=True)
-            
+                print(f"DEBUG RESOURCE: sig=jwks - agent_id={agent_id}, kid={kid}", file=sys.stderr, flush=True)
+
             # Create jwks_fetcher callback
             def jwks_fetcher(agent_id_param: str, kid_param: Optional[str] = None):
                 if not kid_param:
                     kid_param = params.get("kid")  # Use kid from params if not provided
-                return self._fetch_jwks_for_agent(agent_id_param, kid_param, well_known)
+                return self._fetch_jwks_for_agent(agent_id_param, kid_param)
             
             # Verify signature
             is_valid = verify_signature(
@@ -482,7 +501,7 @@ class Resource:
                     print("DEBUG RESOURCE: Signature verification failed", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig"},
+                    headers={"AAuth": "require=pseudonym"},
                     content="Invalid signature"
                 )
                 if _is_http_debug_enabled():
@@ -493,7 +512,7 @@ class Resource:
             response = JSONResponse({
                 "message": "Access granted",
                 "data": "This is protected data",
-                "scheme": "jwks",
+                "scheme": "jwks_uri",
                 "method": method,
                 "agent_id": agent_id
             })
@@ -510,7 +529,7 @@ class Resource:
             if not jwt_token:
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    headers={"AAuth": "require=identity"},
                     content="Missing jwt parameter in Signature-Key for sig=jwt"
                 )
                 if _is_http_debug_enabled():
@@ -530,7 +549,7 @@ class Resource:
                     print(f"DEBUG RESOURCE:   Failed to parse token header: {e}", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    headers={"AAuth": "require=identity"},
                     content="Invalid JWT token"
                 )
                 if _is_http_debug_enabled():
@@ -549,7 +568,7 @@ class Resource:
                 if not agent_token_valid:
                     response = Response(
                         status_code=401,
-                        headers={"Agent-Auth": "httpsig; identity=?1"},
+                        headers={"AAuth": "require=identity"},
                         content="Invalid or expired agent token"
                     )
                     if _is_http_debug_enabled():
@@ -581,7 +600,7 @@ class Resource:
                 if not auth_token_valid:
                     response = Response(
                         status_code=401,
-                        headers={"Agent-Auth": "httpsig; auth-token"},
+                        headers={"AAuth": "require=auth-token"},
                         content="Invalid or expired auth token"
                     )
                     if _is_http_debug_enabled():
@@ -607,7 +626,7 @@ class Resource:
                 # Unknown token type
                 response = Response(
                     status_code=401,
-                    headers={"Agent-Auth": "httpsig; identity=?1"},
+                    headers={"AAuth": "require=identity"},
                     content=f"Unsupported token type: {typ}"
                 )
                 if _is_http_debug_enabled():
@@ -617,7 +636,7 @@ class Resource:
         else:
             response = Response(
                 status_code=401,
-                headers={"Agent-Auth": "httpsig"},
+                headers={"AAuth": "require=pseudonym"},
                 content=f"Unsupported signature scheme: {scheme}"
             )
             if _is_http_debug_enabled():
@@ -634,7 +653,7 @@ class Resource:
             params: Signature-Key parameters
             
         Returns:
-            Response with Agent-Auth header containing resource_token
+            Response with AAuth header containing resource-token
         """
         import sys
         
@@ -650,13 +669,12 @@ class Resource:
         agent_id = None
         agent_jkt = None
         
-        if scheme == "jwks":
+        if scheme in ("jwks", "jwks_uri"):
             agent_id = params.get("id")
             if agent_id:
                 # Fetch agent's JWKS to calculate thumbprint
                 kid = params.get("kid")
-                well_known = params.get("well-known")
-                agent_jwks = self._fetch_jwks_for_agent(agent_id, kid, well_known)
+                agent_jwks = self._fetch_jwks_for_agent(agent_id, kid)
                 if agent_jwks:
                     # Extract the matching key from JWKS
                     keys = agent_jwks.get("keys", [])
@@ -685,7 +703,7 @@ class Resource:
                 print(f"DEBUG RESOURCE: Cannot issue resource token - missing agent identity or key", file=sys.stderr, flush=True)
             return Response(
                 status_code=401,
-                headers={"Agent-Auth": "httpsig; identity=?1"},
+                headers={"AAuth": "require=identity"},
                 content="Agent identity required for authorization"
             )
         
@@ -696,12 +714,12 @@ class Resource:
         if _is_debug_enabled():
             print(f"DEBUG RESOURCE: Issued resource token for agent_id={agent_id}, agent_jkt={agent_jkt[:20]}...", file=sys.stderr, flush=True)
         
-        # Build Agent-Auth challenge header
-        agent_auth_header = f'httpsig; auth-token; resource_token="{resource_token}"; auth_server="{self.auth_server}"'
-        
+        # Build AAuth challenge header
+        aauth_header = f'require=auth-token; resource-token="{resource_token}"; auth-server="{self.auth_server}"'
+
         response = Response(
             status_code=401,
-            headers={"Agent-Auth": agent_auth_header},
+            headers={"AAuth": aauth_header},
             content="Authorization required"
         )
         
@@ -712,26 +730,31 @@ class Resource:
     
     def _issue_resource_token(self, agent_id: str, agent_jkt: str, scope: str) -> str:
         """Issue a resource token (resource+jwt).
-        
+
         Args:
             agent_id: Agent identifier
             agent_jkt: JWK Thumbprint of agent's signing key
             scope: Space-separated scope values
-            
+
         Returns:
             Resource token JWT string
         """
         import sys
-        
+
+        # Generate txn for request correlation if enabled on this resource
+        txn = str(uuid.uuid4()) if getattr(self, 'enable_txn', False) else None
+
         if _is_debug_enabled():
             print(f"DEBUG RESOURCE: Issuing resource token:", file=sys.stderr, flush=True)
             print(f"DEBUG RESOURCE:   agent_id={agent_id}", file=sys.stderr, flush=True)
             print(f"DEBUG RESOURCE:   agent_jkt={agent_jkt}", file=sys.stderr, flush=True)
             print(f"DEBUG RESOURCE:   scope={scope}", file=sys.stderr, flush=True)
-        
+            if txn:
+                print(f"DEBUG RESOURCE:   txn={txn}", file=sys.stderr, flush=True)
+
         if not self.auth_server:
             raise ValueError("Cannot issue resource token: auth_server not configured")
-        
+
         # Create resource token (10 minute expiration)
         exp = int(time.time()) + 600
         token = create_resource_token(
@@ -742,7 +765,8 @@ class Resource:
             scope=scope,
             private_key=self.private_key,
             kid=self.kid,
-            exp=exp
+            exp=exp,
+            txn=txn,
         )
         
         if _is_debug_enabled():
@@ -1043,70 +1067,60 @@ class Resource:
         
         return True, claims
     
-    def _fetch_jwks_for_agent(self, agent_id: str, kid: str, well_known: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Fetch JWKS for an agent using Mode 2 discovery (spec Section 10.7).
-        
+    def _fetch_jwks_for_agent(self, agent_id: str, kid: str) -> Optional[Dict[str, Any]]:
+        """Fetch JWKS for an agent via metadata discovery.
+
+        Per SPEC_UPDATED.md, agents publish metadata at the fixed path
+        /.well-known/aauth-agent.json which contains jwks_uri.
+
         Args:
             agent_id: Agent identifier (HTTPS URL)
             kid: Key identifier
-            well_known: Optional well-known document name (e.g., "aauth-agent")
-            
+
         Returns:
             JWKS document (dict with "keys" array) if found, None otherwise
-            
-        Discovery procedure per spec Section 10.7 Mode 2:
-        1. If well-known is present:
-           - Fetch metadata from {id}/.well-known/{well-known} via HTTPS
-           - Extract jwks_uri from metadata
-           - Fetch JWKS from jwks_uri
-        2. If well-known is absent:
-           - Fetch {id} directly as JWKS via HTTPS
-        3. Match key by kid
+
+        Discovery procedure:
+        1. Fetch metadata from {agent_id}/.well-known/aauth-agent.json
+        2. Extract jwks_uri from metadata
+        3. Fetch JWKS from jwks_uri
+        4. Verify key with matching kid exists
         """
-        import os
         import sys
-        
+
         if _is_debug_enabled():
-            print(f"DEBUG RESOURCE: Fetching JWKS for agent_id={agent_id}, kid={kid}, well-known={well_known}", file=sys.stderr, flush=True)
-        
+            print(f"DEBUG RESOURCE: Fetching JWKS for agent_id={agent_id}, kid={kid}", file=sys.stderr, flush=True)
+
         try:
-            jwks_uri = None
-            
-            if well_known:
-                # Step 1: Fetch metadata from agent using well-known parameter
-                metadata_url = f"{agent_id}/.well-known/{well_known}"
+            # Step 1: Fetch agent metadata from fixed well-known path
+            metadata_url = f"{agent_id}/.well-known/aauth-agent.json"
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE: Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
+
+            metadata = fetch_metadata(metadata_url)
+
+            if _is_debug_enabled():
+                print(f"DEBUG RESOURCE: Metadata received: {metadata}", file=sys.stderr, flush=True)
+
+            # Step 2: Extract jwks_uri from metadata
+            jwks_uri = metadata.get("jwks_uri")
+            if not jwks_uri:
                 if _is_debug_enabled():
-                    print(f"DEBUG RESOURCE: Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
-                
-                metadata = fetch_metadata(metadata_url)
-                
-                if _is_debug_enabled():
-                    print(f"DEBUG RESOURCE: Metadata received: {metadata}", file=sys.stderr, flush=True)
-                
-                # Step 2: Extract jwks_uri from metadata
-                jwks_uri = metadata.get("jwks_uri")
-                if not jwks_uri:
-                    if _is_debug_enabled():
-                        print(f"DEBUG RESOURCE: No jwks_uri in metadata", file=sys.stderr, flush=True)
-                    return None
-            else:
-                # Step 1: Fetch {id} directly as JWKS (well-known absent)
-                jwks_uri = agent_id
-                if _is_debug_enabled():
-                    print(f"DEBUG RESOURCE: well-known absent, fetching {agent_id} directly as JWKS", file=sys.stderr, flush=True)
-            
-            # Step 2/3: Fetch JWKS from jwks_uri
+                    print(f"DEBUG RESOURCE: No jwks_uri in metadata", file=sys.stderr, flush=True)
+                return None
+
+            # Step 3: Fetch JWKS from jwks_uri
             if _is_debug_enabled():
                 print(f"DEBUG RESOURCE: Fetching JWKS from {jwks_uri}", file=sys.stderr, flush=True)
-            
+
             jwks_response = httpx.get(jwks_uri, timeout=10.0)
             jwks_response.raise_for_status()
             jwks_doc = jwks_response.json()
-            
+
             if _is_debug_enabled():
                 print(f"DEBUG RESOURCE: JWKS received: {jwks_doc}", file=sys.stderr, flush=True)
-            
-            # Step 3/4: Verify key exists if kid is provided (but return full JWKS document for verifier)
+
+            # Step 4: Verify key exists if kid is provided
             if kid:
                 keys = jwks_doc.get("keys", [])
                 key_found = False
@@ -1116,15 +1130,15 @@ class Resource:
                         if _is_debug_enabled():
                             print(f"DEBUG RESOURCE: Found key with kid={kid}", file=sys.stderr, flush=True)
                         break
-                
+
                 if not key_found:
                     if _is_debug_enabled():
                         print(f"DEBUG RESOURCE: Key with kid={kid} not found in JWKS", file=sys.stderr, flush=True)
                     return None
-            
+
             # Return full JWKS document (verifier will extract the key it needs)
             return jwks_doc
-            
+
         except Exception as e:
             if _is_debug_enabled():
                 print(f"DEBUG RESOURCE: Error fetching JWKS: {e}", file=sys.stderr, flush=True)
@@ -1204,7 +1218,7 @@ class Resource:
         if not signature_input_header or not signature_header or not signature_key_header:
             return JSONResponse(
                 status_code=401,
-                headers={"Agent-Auth": "httpsig; identity=?1"},
+                headers={"AAuth": "require=identity"},
                 content={"error": "invalid_request", "error_description": "Missing signature headers"}
             )
         
@@ -1216,15 +1230,15 @@ class Resource:
         except Exception as e:
             return JSONResponse(
                 status_code=401,
-                headers={"Agent-Auth": "httpsig; identity=?1"},
+                headers={"AAuth": "require=identity"},
                 content={"error": "invalid_request", "error_description": f"Invalid Signature-Key: {e}"}
             )
         
         # Require sig=jwks for resource token endpoint (agent identity required)
-        if scheme != "jwks":
+        if scheme not in ("jwks", "jwks_uri"):
             return JSONResponse(
                 status_code=401,
-                headers={"Agent-Auth": "httpsig; identity=?1"},
+                headers={"AAuth": "require=identity"},
                 content={"error": "invalid_request", "error_description": "Resource token endpoint requires sig=jwks"}
             )
         
@@ -1233,17 +1247,16 @@ class Resource:
         if not agent_id:
             return JSONResponse(
                 status_code=401,
-                headers={"Agent-Auth": "httpsig; identity=?1"},
+                headers={"AAuth": "require=identity"},
                 content={"error": "invalid_request", "error_description": "Could not extract agent identifier"}
             )
         
         # Verify signature
         target_uri = str(request.url)
-        well_known = key_params.get("well-known")
         def jwks_fetcher(agent_id_param: str, kid_param: Optional[str] = None):
             if not kid_param:
                 kid_param = key_params.get("kid")  # Use kid from params if not provided
-            return self._fetch_jwks_for_agent(agent_id_param, kid_param, well_known)
+            return self._fetch_jwks_for_agent(agent_id_param, kid_param)
         
         is_valid = verify_signature(
             method=request.method,
@@ -1259,14 +1272,13 @@ class Resource:
         if not is_valid:
             return JSONResponse(
                 status_code=401,
-                headers={"Agent-Auth": "httpsig; identity=?1"},
+                headers={"AAuth": "require=identity"},
                 content={"error": "invalid_signature", "error_description": "Signature verification failed"}
             )
         
         # Get agent's key for agent_jkt calculation
         kid = key_params.get("kid")
-        well_known = key_params.get("well-known")
-        agent_jwks = self._fetch_jwks_for_agent(agent_id, kid, well_known)
+        agent_jwks = self._fetch_jwks_for_agent(agent_id, kid)
         if not agent_jwks:
             return JSONResponse(
                 status_code=500,
@@ -1403,10 +1415,9 @@ class Resource:
             headers=dict(headers),
             body=body,
             private_key=self.private_key,
-            sig_scheme="jwks",
+            sig_scheme="jwks_uri",
             id=self.resource_id,
             kid=self.kid,
-            **{"well-known": "aauth-resource"}  # Resource uses aauth-resource metadata
         )
         
         initial_headers = {**headers, **sig_headers}
@@ -1428,16 +1439,17 @@ class Resource:
                 print(f"DEBUG RESOURCE:   Downstream resource returned {initial_response.status_code}", file=sys.stderr, flush=True)
             return initial_response
         
-        # Parse Agent-Auth challenge from response
-        agent_auth_header = initial_response.headers.get("Agent-Auth", "")
+        # Parse AAuth challenge from response (with Agent-Auth fallback)
+        aauth_header = initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         if debug:
-            print(f"DEBUG RESOURCE:   Received Agent-Auth challenge: {agent_auth_header}", file=sys.stderr, flush=True)
-        
-        # Extract resource_token and auth_server from challenge
-        # Format: httpsig; auth-token; resource_token="..."; auth_server="..."
+            print(f"DEBUG RESOURCE:   Received AAuth challenge: {aauth_header}", file=sys.stderr, flush=True)
+
+        # Extract resource-token and auth-server from challenge
+        # New format: require=auth-token; resource-token="..."; auth-server="..."
+        # Old format: httpsig; auth-token; resource_token="..."; auth_server="..."
         import re
-        resource_token_match = re.search(r'resource_token="([^"]+)"', agent_auth_header)
-        auth_server_match = re.search(r'auth_server="([^"]+)"', agent_auth_header)
+        resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
+        auth_server_match = re.search(r'auth[-_]server="([^"]+)"', aauth_header)
         
         if not resource_token_match:
             if debug:
@@ -1563,15 +1575,19 @@ class Resource:
             print(f"DEBUG RESOURCE: Exchanging token", file=sys.stderr, flush=True)
             print(f"DEBUG RESOURCE:   Auth server: {auth_server}", file=sys.stderr, flush=True)
         
-        # Build exchange request
-        token_endpoint = f"{auth_server}/agent/token"
-        request_body = f"request_type=exchange&resource_token={resource_token}"
+        # Build exchange request (call chaining: resource_token + upstream_token)
+        token_endpoint = f"{auth_server}/token"
+        request_data = {
+            "resource_token": resource_token,
+            "upstream_token": upstream_auth_token
+        }
+        request_body = json.dumps(request_data)
         request_body_bytes = request_body.encode('utf-8')
-        
+
         from aauth.signing.signer import sign_request
-        
+
         # Build base headers - sign_request will add Content-Digest to this dict
-        base_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        base_headers = {"Content-Type": "application/json"}
         
         # Sign request with scheme=jwt using upstream auth token
         # Note: sign_request modifies base_headers to add Content-Digest

@@ -2,14 +2,40 @@
 
 __version__ = "0.1.0"
 
-# Errors
+# Errors and error codes
 from .errors import (
     AAuthError,
     SignatureError,
     TokenError,
     ChallengeError,
     MetadataError,
-    JWKSError
+    JWKSError,
+    build_error_response,
+    ERROR_INVALID_SIGNATURE,
+    ERROR_INVALID_AGENT_TOKEN,
+    ERROR_INVALID_RESOURCE_TOKEN,
+    ERROR_INVALID_AUTH_TOKEN,
+    ERROR_KEY_BINDING_FAILED,
+    ERROR_INVALID_REQUEST,
+    ERROR_SERVER_ERROR,
+    ERROR_DENIED,
+    ERROR_ABANDONED,
+    ERROR_EXPIRED,
+    ERROR_INVALID_CODE,
+)
+
+# Identifiers
+from .identifiers import (
+    validate_server_identifier,
+    validate_endpoint_url,
+    validate_other_url,
+)
+
+# Debug
+from .debug import (
+    _is_debug_enabled,
+    _is_http_debug_enabled,
+    _is_jwt_token_debug_enabled,
 )
 
 # HTTP abstraction
@@ -49,6 +75,19 @@ from .headers.signature_key import build_signature_key_header, parse_signature_k
 from .headers.signature_input import build_signature_input_header, parse_signature_input
 from .headers.signature import build_signature_header, parse_signature
 from .headers.agent_auth import parse_agent_auth_header, build_agent_auth_challenge
+from .headers.aauth_header import (
+    parse_aauth_header,
+    build_pseudonym_challenge,
+    build_identity_challenge,
+    build_auth_token_challenge,
+    build_interaction_challenge,
+    build_approval_challenge,
+    REQUIRE_PSEUDONYM,
+    REQUIRE_IDENTITY,
+    REQUIRE_AUTH_TOKEN,
+    REQUIRE_INTERACTION,
+    REQUIRE_APPROVAL,
+)
 
 # Metadata
 from .metadata.agent import generate_agent_metadata
@@ -68,13 +107,35 @@ __all__ = [
     # Version
     "__version__",
     
-    # Errors
+    # Errors and error codes
     "AAuthError",
     "SignatureError",
     "TokenError",
     "ChallengeError",
     "MetadataError",
     "JWKSError",
+    "build_error_response",
+    "ERROR_INVALID_SIGNATURE",
+    "ERROR_INVALID_AGENT_TOKEN",
+    "ERROR_INVALID_RESOURCE_TOKEN",
+    "ERROR_INVALID_AUTH_TOKEN",
+    "ERROR_KEY_BINDING_FAILED",
+    "ERROR_INVALID_REQUEST",
+    "ERROR_SERVER_ERROR",
+    "ERROR_DENIED",
+    "ERROR_ABANDONED",
+    "ERROR_EXPIRED",
+    "ERROR_INVALID_CODE",
+
+    # Identifiers
+    "validate_server_identifier",
+    "validate_endpoint_url",
+    "validate_other_url",
+
+    # Debug
+    "_is_debug_enabled",
+    "_is_http_debug_enabled",
+    "_is_jwt_token_debug_enabled",
     
     # HTTP abstraction
     "AAuthRequest",

@@ -267,8 +267,8 @@ class TestAuthServer:
                 metadata = response.json()
                 assert metadata["issuer"] == "https://auth.example"
                 assert "jwks_uri" in metadata
-                assert "agent_token_endpoint" in metadata
-                assert "agent_auth_endpoint" in metadata
+                assert "token_endpoint" in metadata
+                assert "interaction_endpoint" in metadata
         finally:
             pass
     
@@ -343,7 +343,7 @@ class TestEndToEndFlow:
             response = await agent.request_resource(
                 resource_url=f"{resource_id}/data-auth",
                 method="GET",
-                sig_scheme="jwks"
+                sig_scheme="jwks_uri"
             )
             
             # Should succeed after automatic challenge handling

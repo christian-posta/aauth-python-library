@@ -97,11 +97,12 @@ See the [Library Usage](#library-usage) section below for more examples.
 
 ## Overview
 
-This project implements the AAuth protocol incrementally, phase by phase:
+This project implements the AAuth protocol incrementally, phase by phase. See **[DEMOS.md](DEMOS.md)** for how each `demo_phase*.py` maps to **`SPEC_UPDATED.md`** and which spec areas are not yet demoed.
+
 - **Phase 1**: Pseudonymous flow (proof-of-possession without identity)
 - **Phase 2**: Agent identity (JWKS-based identity verification)
 - **Phase 3**: Autonomous authorization (full token flow)
-- **Phase 4**: User delegation (OAuth-like authorization code flow)
+- **Phase 4**: User delegation (202 + pending URL, interaction code, polling — SPEC_UPDATED Section 4.5.4)
 - **Phase 5**: Agent is Resource (SSO and unified token flow)
 - **Phase 6**: Agent Delegation (agent tokens for distributed instances)
 - **Phase 7**: Token Exchange (multi-hop resource access with delegation chain)
@@ -149,7 +150,7 @@ python demo_phase3.py
 
 #### Phase 4: User Delegation
 
-Demonstrates OAuth-like authorization code flow with user consent:
+Demonstrates user-authorized access: resource challenge, token endpoint **202** + **pending URL**, user interaction at **`/interact`**, agent **polling** for `auth_token` (no OAuth authorization code):
 
 **Automated mode** (uses user simulator):
 ```bash
@@ -218,7 +219,7 @@ pytest tests/test_phase7.py -v
 - Resource validates signatures
 - No tokens, no identity - just signature verification
 
-See [PHASE1.md](PHASE1.md) for detailed documentation.
+See [PHASE1-pop-hwk.md](PHASE1-pop-hwk.md) for detailed documentation.
 
 ### Phase 2: Agent Identity via JWKS
 - Agent publishes metadata at `/.well-known/aauth-agent`
@@ -226,7 +227,7 @@ See [PHASE1.md](PHASE1.md) for detailed documentation.
 - Resource can verify agent identity using `sig=jwks` scheme
 - Separate endpoints (`/data-hwk`, `/data-jwks`) for both schemes
 
-See [PHASE2.md](PHASE2.md) for detailed documentation.
+See [PHASE2-identity-jwks.md](PHASE2-identity-jwks.md) for detailed documentation.
 
 ### Phase 3: Autonomous Authorization
 - Resources issue resource tokens when agents request access
@@ -235,16 +236,15 @@ See [PHASE2.md](PHASE2.md) for detailed documentation.
 - Agents use auth tokens to access protected resources
 - Complete token flow without user interaction
 
-See [PHASE3.md](PHASE3.md) for detailed documentation.
+See [PHASE3-autonomous-authz.md](PHASE3-autonomous-authz.md) for detailed documentation.
 
 ### Phase 4: User Delegation
-- Auth servers issue `request_token` when user consent is required
-- Agents redirect users to auth server's authorization endpoint
-- Users authenticate and grant consent
-- Auth server redirects back with authorization code
-- Agents exchange code for auth tokens with `sub` claim
+- Resource returns 401 with resource token; agent POSTs to auth server `token_endpoint`
+- When consent is required, auth server returns **202** + `Location` (pending URL) + interaction **code**
+- User completes login/consent at **`/interact`**; agent **polls** pending URL until **200** with `auth_token`
+- No authorization code: token is delivered only via signed polling (SPEC_UPDATED Sections 10, 19.2)
 
-See [PHASE4.md](PHASE4.md) for detailed documentation.
+See [PHASE4-user-delegation.md](PHASE4-user-delegation.md) for detailed documentation.
 
 ### Phase 5: Agent is Resource
 - Agent requests authorization directly with `scope` (no `resource_token`)
@@ -253,7 +253,7 @@ See [PHASE4.md](PHASE4.md) for detailed documentation.
 - Unified token serves both SSO (user identity) and API access purposes
 - Solves OIDC limitation where ID tokens and access tokens are separate
 
-See [PHASE5.md](PHASE5.md) for detailed documentation.
+See [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md) for detailed documentation.
 
 ### Phase 6: Agent Delegation
 - Agent servers issue agent tokens (`agent+jwt`) to agent delegates
@@ -263,7 +263,7 @@ See [PHASE5.md](PHASE5.md) for detailed documentation.
 - Delegate identifier (`sub`) persists across key rotations
 - Auth tokens include `agent_delegate` claim when issued to delegates
 
-See [PHASE6.md](PHASE6.md) for detailed documentation.
+See [PHASE6-agent-delegation.md](PHASE6-agent-delegation.md) for detailed documentation.
 
 ### Phase 7: Token Exchange
 - Resources can act as agents to access downstream resources
@@ -273,7 +273,7 @@ See [PHASE6.md](PHASE6.md) for detailed documentation.
 - User context (`sub`) is preserved through the chain
 - Enables autonomous multi-hop resource access
 
-See [PHASE7.md](PHASE7.md) for detailed documentation.
+See [PHASE7-token-exchange.md](PHASE7-token-exchange.md) for detailed documentation.
 
 ## Running Individual Participants
 
@@ -517,14 +517,16 @@ aauth/
 
 ## Documentation
 
-- [PHASE1.md](PHASE1.md) - Phase 1 implementation details
-- [PHASE2.md](PHASE2.md) - Phase 2 implementation details
-- [PHASE3.md](PHASE3.md) - Phase 3 implementation details
-- [PHASE4.md](PHASE4.md) - Phase 4 implementation details
-- [PHASE5.md](PHASE5.md) - Phase 5 implementation details
-- [PHASE6.md](PHASE6.md) - Phase 6 implementation details
-- [PHASE7.md](PHASE7.md) - Phase 7 implementation details
-- [SPEC.md](SPEC.md) - AAuth protocol specification
+- [PHASE1-pop-hwk.md](PHASE1-pop-hwk.md) - Phase 1 implementation details
+- [PHASE2-identity-jwks.md](PHASE2-identity-jwks.md) - Phase 2 implementation details
+- [PHASE3-autonomous-authz.md](PHASE3-autonomous-authz.md) - Phase 3 implementation details
+- [PHASE4-user-delegation.md](PHASE4-user-delegation.md) - Phase 4 implementation details
+- [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md) - Phase 5 implementation details
+- [PHASE6-agent-delegation.md](PHASE6-agent-delegation.md) - Phase 6 implementation details
+- [PHASE7-token-exchange.md](PHASE7-token-exchange.md) - Phase 7 implementation details
+- [SPEC.md](SPEC.md) - AAuth protocol specification (exploratory / older narrative)
+- [SPEC_UPDATED.md](SPEC_UPDATED.md) - Draft-aligned protocol text used for current implementation
+- [DEMOS.md](DEMOS.md) - `demo_phase*.py` ↔ spec mapping and known gaps
 - [PLAN.md](PLAN.md) - Overall implementation plan
 
 

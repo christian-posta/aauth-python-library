@@ -74,7 +74,7 @@ async def main():
     try:
         response = await agent.request_resource(
             "http://127.0.0.1:8002/data-jwks",
-            sig_scheme="jwks"
+            sig_scheme="jwks_uri"
         )
         
         print(f"Status: {response.status_code}")
@@ -168,7 +168,7 @@ async def main():
         )
         response_jwks = await agent.request_resource(
             "http://127.0.0.1:8002/data-jwks",
-            sig_scheme="jwks"
+            sig_scheme="jwks_uri"
         )
         
         print(f"/data-hwk status: {response_hwk.status_code}")

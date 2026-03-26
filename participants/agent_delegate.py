@@ -17,7 +17,7 @@ from aauth.keys.jwk import public_key_to_jwk, generate_jwks
 from aauth.signing.signer import sign_request
 from aauth.tokens.agent_token import verify_agent_token
 from aauth.tokens.auth_token import parse_token_claims
-from core import _is_debug_enabled, _is_http_debug_enabled
+from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
 
 
 class AgentDelegate:

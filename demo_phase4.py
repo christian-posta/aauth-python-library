@@ -40,11 +40,11 @@ async def main():
         print("\nMODE: Manual Browser Testing", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("This demo shows the user delegation flow with manual browser interaction:", file=sys.stderr)
-        print("1. Agent requests resource (gets resource token challenge)", file=sys.stderr)
-        print("2. Agent presents resource token to auth server (gets request_token)", file=sys.stderr)
-        print("3. **YOU WILL BE PROMPTED TO OPEN A URL IN YOUR BROWSER**", file=sys.stderr)
+        print("1. Agent requests resource (401 + resource token in AAuth header)", file=sys.stderr)
+        print("2. Agent POSTs to token endpoint; auth server returns 202 + Location (pending URL)", file=sys.stderr)
+        print("3. **OPEN THE INTERACTION URL** (interaction code in 202 body / AAuth header)", file=sys.stderr)
         print("4. Authenticate and grant consent in the browser", file=sys.stderr)
-        print("5. Agent exchanges authorization code for auth token", file=sys.stderr)
+        print("5. Agent polls pending URL (GET) until 200 with auth_token — no authorization code", file=sys.stderr)
         print("6. Agent retries resource request with auth token", file=sys.stderr)
         print("7. Resource validates auth token and grants access", file=sys.stderr)
         print("\nDemo Credentials:", file=sys.stderr)
@@ -54,10 +54,10 @@ async def main():
         print("\nMODE: Automated (with User Simulator)", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("This demo shows the complete user delegation flow:", file=sys.stderr)
-        print("1. Agent requests resource (gets resource token challenge)", file=sys.stderr)
-        print("2. Agent presents resource token to auth server (gets request_token)", file=sys.stderr)
-        print("3. User simulator completes consent flow automatically", file=sys.stderr)
-        print("4. Agent exchanges authorization code for auth token", file=sys.stderr)
+        print("1. Agent requests resource (401 + resource token in AAuth header)", file=sys.stderr)
+        print("2. Agent POSTs to token endpoint; auth server returns 202 + pending URL + interaction code", file=sys.stderr)
+        print("3. User simulator completes interaction at /interact (consent)", file=sys.stderr)
+        print("4. Agent polls pending URL until auth_token is returned (SPEC_UPDATED Section 10)", file=sys.stderr)
         print("5. Agent retries resource request with auth token", file=sys.stderr)
         print("6. Resource validates auth token and grants access", file=sys.stderr)
     
@@ -109,10 +109,9 @@ async def main():
     else:
         print("TEST 1: User Delegation Flow (Automated)", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
-    print("Description: Agent requests protected resource, receives resource token challenge,", file=sys.stderr)
-    print("             obtains request_token from auth server, user grants consent,", file=sys.stderr)
-    print("             agent exchanges authorization code for auth token,", file=sys.stderr)
-    print("             and successfully accesses resource.", file=sys.stderr)
+    print("Description: Agent gets 401 + resource token, POSTs token endpoint, receives 202 + pending URL,", file=sys.stderr)
+    print("             user completes interaction at auth server /interact, agent polls pending URL for auth_token,", file=sys.stderr)
+    print("             then retries the resource with scheme=jwt (auth token).", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
     
     test1_passed = False
@@ -120,33 +119,25 @@ async def main():
     
     try:
         if args.manual:
-            # For manual testing, we need to intercept the request_token flow
-            # and display the URL for the user to open
+            # Manual mode: full browser-driven interaction is not wired here; we fall back to the user simulator.
             print("\n" + "=" * 80, file=sys.stderr)
             print("MANUAL TESTING MODE", file=sys.stderr)
             print("=" * 80, file=sys.stderr)
-            print("The agent will request the resource and receive a request_token.", file=sys.stderr)
-            print("When you see the authorization URL below, open it in your browser.", file=sys.stderr)
+            print("Deferred flow uses 202 + pending URL + interaction code (SPEC_UPDATED Sections 4.5.4, 10).", file=sys.stderr)
+            print(f"Open {auth_id}/interact?code=<code> when the agent logs the interaction URL.", file=sys.stderr)
+            print("This script currently falls back to the user simulator for the same steps.", file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
-            
-            # We'll need to modify the agent to pause and display URL
-            # For now, we'll use a modified version that shows the URL
-            # This is a simplified approach - in production, you'd want better integration
-            
+
             # Make initial request
             response = await agent.request_resource(
                 resource_url=f"{resource_id}/data-auth",
                 method="GET",
-                sig_scheme="jwks"
+                sig_scheme="jwks_uri"
             )
             
-            # Check if we got a request_token (stored in agent's state)
-            # The agent should have handled it, but for manual testing we want to pause
-            
             print("\n" + "=" * 80, file=sys.stderr)
-            print("NOTE: Manual browser testing requires modifications to the agent", file=sys.stderr)
-            print("to pause and display the authorization URL.", file=sys.stderr)
-            print("For now, use automated mode (without --manual flag).", file=sys.stderr)
+            print("NOTE: True manual mode would pause and print the interaction URL from the 202 response.", file=sys.stderr)
+            print("Continuing with the user simulator (same protocol path as automated mode).", file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
             
             # Fall back to automated flow
@@ -219,13 +210,13 @@ async def main():
         print("MANUAL TESTING INSTRUCTIONS", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("To test manually:", file=sys.stderr)
-        print("1. Make a request to the resource (will get request_token)", file=sys.stderr)
-        print("2. Open the authorization URL in your browser", file=sys.stderr)
+        print("1. Run without --manual so the user simulator drives /interact, or extend the agent to print", file=sys.stderr)
+        print("   the interaction URL from the 202 response (code in JSON body / AAuth header).", file=sys.stderr)
+        print("2. Open the interaction URL in your browser, e.g.:", file=sys.stderr)
+        print(f"   {auth_id}/interact?code=<interaction_code>&callback=<optional_callback_url>", file=sys.stderr)
         print("3. Login with: testuser / testpass", file=sys.stderr)
         print("4. Grant consent", file=sys.stderr)
-        print("5. The agent will automatically exchange the code for tokens", file=sys.stderr)
-        print("\nExample authorization URL:", file=sys.stderr)
-        print(f"  {auth_id}/agent/auth?request_token=<token>&redirect_uri={agent_id}/callback", file=sys.stderr)
+        print(f"5. Agent polls GET {auth_id}/pending/<id> until 200 with auth_token (no OAuth authorization code)", file=sys.stderr)
         print("=" * 80 + "\n", file=sys.stderr)
     
     print("Servers are still running. Press Ctrl+C to stop.", file=sys.stderr, flush=True)

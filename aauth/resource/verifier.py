@@ -123,7 +123,7 @@ class RequestVerifier:
             "scopes": None
         }
         
-        if scheme == "jwks":
+        if scheme in ("jwks", "jwks_uri"):
             # Extract agent ID from Signature-Key
             params = parsed_key["params"]
             result["agent_id"] = params.get("id")

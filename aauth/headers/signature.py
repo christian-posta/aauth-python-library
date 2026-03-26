@@ -5,7 +5,7 @@ import base64
 from typing import Optional
 
 
-def build_signature_header(signature_bytes: bytes, label: str = "sig1") -> str:
+def build_signature_header(signature_bytes: bytes, label: str = "sig") -> str:
     """Build Signature header per RFC 9421 Section 4.2.
     
     Args:

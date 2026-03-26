@@ -1,15 +1,19 @@
-"""Agent-Auth challenge building for resource role."""
+"""AAuth challenge building for resource role."""
 
-from typing import Optional, List
-from ..headers.agent_auth import build_agent_auth_challenge
+from typing import Optional
+from ..headers.aauth_header import (
+    build_pseudonym_challenge,
+    build_identity_challenge,
+    build_auth_token_challenge,
+)
 from ..tokens.resource_token import create_resource_token
 from ..keys.jwk import calculate_jwk_thumbprint, public_key_to_jwk
 from ..errors import ChallengeError
 
 
 class ChallengeBuilder:
-    """Builds Agent-Auth challenges for resources."""
-    
+    """Builds AAuth challenges for resources."""
+
     def __init__(
         self,
         resource_id: str,
@@ -17,19 +21,11 @@ class ChallengeBuilder:
         resource_kid: str,
         auth_server: str
     ):
-        """Initialize challenge builder.
-        
-        Args:
-            resource_id: Resource identifier (HTTPS URL)
-            resource_private_key: Resource's private key for signing resource tokens
-            resource_kid: Resource's key ID
-            auth_server: Auth server identifier (HTTPS URL)
-        """
         self.resource_id = resource_id
         self.resource_private_key = resource_private_key
         self.resource_kid = resource_kid
         self.auth_server = auth_server
-    
+
     def build_challenge(
         self,
         require_signature: bool = True,
@@ -39,34 +35,31 @@ class ChallengeBuilder:
         agent_public_key=None,
         scope: Optional[str] = None
     ) -> str:
-        """Build Agent-Auth challenge header.
-        
+        """Build AAuth challenge header value.
+
         Args:
-            require_signature: Require HTTP signature
+            require_signature: Require HTTP signature (pseudonym level)
             require_identity: Require agent identity
             require_auth_token: Require authorization token
             agent_id: Agent identifier (for resource token)
             agent_public_key: Agent's public key (for resource token)
             scope: Required scope (for resource token)
-        
+
         Returns:
-            Agent-Auth header value
-        
+            AAuth header value
+
         Raises:
             ChallengeError: If challenge cannot be built
         """
-        resource_token = None
-        
         if require_auth_token:
             if not agent_id or not agent_public_key or not scope:
                 raise ChallengeError(
                     "agent_id, agent_public_key, and scope required for auth-token challenge"
                 )
-            
-            # Create resource token
+
             agent_jwk = public_key_to_jwk(agent_public_key)
             agent_jkt = calculate_jwk_thumbprint(agent_jwk)
-            
+
             resource_token = create_resource_token(
                 iss=self.resource_id,
                 aud=self.auth_server,
@@ -76,12 +69,10 @@ class ChallengeBuilder:
                 private_key=self.resource_private_key,
                 kid=self.resource_kid
             )
-        
-        return build_agent_auth_challenge(
-            require_signature=require_signature,
-            require_identity=require_identity,
-            require_auth_token=require_auth_token,
-            resource_token=resource_token,
-            auth_server=self.auth_server if require_auth_token else None
-        )
 
+            return build_auth_token_challenge(resource_token, self.auth_server)
+
+        if require_identity:
+            return build_identity_challenge()
+
+        return build_pseudonym_challenge()

@@ -1,7 +1,7 @@
 """Resource token creation and validation for AAuth."""
 
-import json
 import time
+import uuid
 from typing import Dict, Any, Optional
 import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -17,10 +17,11 @@ def create_resource_token(
     scope: str,
     private_key: Ed25519PrivateKey,
     kid: str,
-    exp: Optional[int] = None
+    exp: Optional[int] = None,
+    txn: Optional[str] = None,
 ) -> str:
-    """Create a resource token (resource+jwt) per AAuth spec Section 6.
-    
+    """Create a resource token (resource+jwt) per AAuth spec Section 8.1.
+
     Args:
         iss: Resource identifier (HTTPS URL)
         aud: Auth server identifier (HTTPS URL)
@@ -29,40 +30,39 @@ def create_resource_token(
         scope: Space-separated scope values
         private_key: Resource's Ed25519 private key for signing
         kid: Key ID for signing key
-        exp: Expiration timestamp (Unix time). If None, defaults to 10 minutes from now.
-        
+        exp: Expiration timestamp (Unix time). Defaults to 10 minutes from now.
+        txn: Optional transaction identifier for correlation
+
     Returns:
         Signed JWT string (resource+jwt)
     """
-    # Set expiration (default 10 minutes)
+    now = int(time.time())
     if exp is None:
-        exp = int(time.time()) + 600  # 10 minutes
-    
-    # Build header
+        exp = now + 600  # 10 minutes
+
     header = {
         "typ": "resource+jwt",
         "alg": "EdDSA",
         "kid": kid
     }
-    
-    # Build payload
+
     payload = {
         "iss": iss,
         "aud": aud,
+        "jti": str(uuid.uuid4()),
         "agent": agent,
         "agent_jkt": agent_jkt,
         "scope": scope,
-        "exp": exp
+        "iat": now,
+        "exp": exp,
     }
-    
-    # Sign token
-    # PyJWT supports EdDSA with cryptography Ed25519PrivateKey objects directly
-    token = jwt.encode(
+
+    if txn is not None:
+        payload["txn"] = txn
+
+    return jwt.encode(
         payload,
         private_key,
         algorithm="EdDSA",
         headers=header
     )
-    
-    return token
-

@@ -1,11 +1,19 @@
-"""Agent participant - acts as agent server using sig=jwks (no delegation)."""
+"""Agent participant - acts as agent server using sig=jwks_uri.
+
+Updated for SPEC_UPDATED.md:
+- JSON request bodies for token endpoint
+- Deferred responses: handles 202 + Location + polling
+- Interaction codes replace authorization codes
+- AAuth response header instead of Agent-Auth
+"""
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 import sys
 import os
+import logging
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,11 +23,15 @@ from aauth.keys.jwk import public_key_to_jwk, generate_jwks
 from aauth.signing.signer import sign_request
 from aauth.metadata.agent import generate_agent_metadata
 from aauth.metadata.auth_server import fetch_auth_metadata
-from core import _is_debug_enabled, _is_http_debug_enabled
+from aauth.agent.poller import poll_pending_url, PollingResult
+from aauth.headers.aauth_header import parse_aauth_header
+from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
 import json
 import re
 import threading
 import time
+
+logger = logging.getLogger("aauth.agent")
 
 
 class Agent:
@@ -40,18 +52,10 @@ class Agent:
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "key-1"
         
-        # Phase 3: Token storage
+        # Token storage
         self.auth_token = None
-        self.refresh_token = None
         self.resource_token = None  # Store resource token for debug output
-        
-        # Phase 4: Manual mode - store pending request_token for user interaction
-        self.pending_request_token = None
-        self.pending_redirect_uri = None
-        self.pending_auth_server = None
-        self._manual_consent_event = None  # threading.Event to wait for callback (cross-thread safe)
-        self._manual_consent_result = None  # Store auth token result
-        
+
         # Phase 6: Agent delegation - track issued agent tokens
         self.issued_agent_tokens: Dict[str, Dict[str, Any]] = {}  # sub -> token details
         
@@ -75,9 +79,9 @@ class Agent:
             return generate_jwks([jwk])
         
         @self.app.get("/.well-known/aauth-agent")
+        @self.app.get("/.well-known/aauth-agent.json")
         async def metadata():
-            """Agent metadata endpoint per AAuth spec Section 8.1."""
-            # Construct JWKS URI from agent_id
+            """Agent metadata endpoint per AAuth spec Section 13.1."""
             jwks_uri = f"{self.agent_id}/jwks.json"
             return generate_agent_metadata(self.agent_id, jwks_uri)
         
@@ -111,7 +115,7 @@ class Agent:
                 "method": "GET",
                 "headers": {},
                 "body": null,
-                "sig_scheme": "jwks"
+                "sig_scheme": "jwks_uri"
             }
             
             Returns the response from the resource.
@@ -134,7 +138,7 @@ class Agent:
             url: Target URL
             headers: Request headers
             body: Request body
-            sig_scheme: Signature scheme - "hwk" (Phase 1), "jwks" (Phase 2), or "jwt" (Phase 3)
+            sig_scheme: Signature scheme - "hwk" (Phase 1), "jwks_uri" (Phase 2), or "jwt" (Phase 3)
             jwt: JWT token for sig=jwt scheme (auth token for Phase 3)
             
         Returns:
@@ -150,12 +154,9 @@ class Agent:
         
         # Prepare kwargs for signature schemes
         kwargs = {}
-        if sig_scheme == "jwks":
+        if sig_scheme in ("jwks", "jwks_uri"):
             kwargs["id"] = self.agent_id
             kwargs["kid"] = self.kid
-            # Default to "aauth-agent" for AAuth agent pattern (backward compatible)
-            # Can be set to None to use direct JWKS pattern (fetch {id} as JWKS)
-            kwargs["well-known"] = "aauth-agent"
         elif sig_scheme == "jwt":
             if not jwt:
                 raise ValueError("sig=jwt requires 'jwt' parameter")
@@ -196,7 +197,7 @@ class Agent:
             method: HTTP method
             headers: Request headers
             body: Request body
-            sig_scheme: Signature scheme - "hwk" (Phase 1), "jwks" (Phase 2), or "jwt" (Phase 3)
+            sig_scheme: Signature scheme - "hwk" (Phase 1), "jwks_uri" (Phase 2), or "jwt" (Phase 3)
             
         Returns:
             HTTP response
@@ -275,824 +276,260 @@ class Agent:
                     print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
         
-        # Phase 3: Handle auth token challenge
+        # Handle auth token challenge (AAuth or Agent-Auth header)
         if response.status_code == 401:
-            agent_auth_header = response.headers.get("agent-auth", "")
+            aauth_header = response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
             if debug:
-                print(f"DEBUG AGENT: Received 401 response, checking Agent-Auth header", file=sys.stderr, flush=True)
-                print(f"DEBUG AGENT:   Agent-Auth: {agent_auth_header}", file=sys.stderr, flush=True)
-            
-            # Check if this is an auth token challenge
-            if "auth-token" in agent_auth_header.lower() and "resource_token" in agent_auth_header.lower():
-                if debug:
-                    print(f"DEBUG AGENT: Detected auth token challenge", file=sys.stderr, flush=True)
-                
-                # Extract resource_token and auth_server
-                challenge_info = self._handle_auth_challenge(response)
-                if challenge_info:
-                    resource_token = challenge_info.get("resource_token")
-                    auth_server = challenge_info.get("auth_server")
-                    
-                    if resource_token and auth_server:
-                        # Store resource token for debug output
-                        self.resource_token = resource_token
-                        
+                logger.debug(f"Received 401, challenge header: {aauth_header}")
+
+            if aauth_header:
+                parsed = parse_aauth_header(aauth_header)
+                require = parsed.get("require", "")
+                # Fall back to old Agent-Auth format
+                if not require and "resource_token" in aauth_header:
+                    import re as _re
+                    rt = _re.search(r'resource_token="([^"]+)"', aauth_header)
+                    asrv = _re.search(r'auth_server="([^"]+)"', aauth_header)
+                    if rt:
+                        parsed["resource-token"] = rt.group(1)
+                    if asrv:
+                        parsed["auth-server"] = asrv.group(1)
+                    require = "auth-token"
+
+                if require == "auth-token":
+                    resource_token_val = parsed.get("resource_token") or parsed.get("resource-token")
+                    auth_server = parsed.get("auth_server") or parsed.get("auth-server")
+
+                    if resource_token_val and auth_server:
+                        self.resource_token = resource_token_val
                         if debug:
-                            print(f"DEBUG AGENT: Extracted resource_token and auth_server", file=sys.stderr, flush=True)
-                            print(f"DEBUG AGENT:   Resource token: {resource_token[:100]}...", file=sys.stderr, flush=True)
-                            print(f"DEBUG AGENT:   Auth server: {auth_server}", file=sys.stderr, flush=True)
-                        
-                        # Request auth token
-                        auth_token = await self._request_auth_token(resource_token, auth_server)
+                            logger.debug(f"Auth token challenge: auth_server={auth_server}")
+
+                        auth_token = await self._request_auth_token(resource_token_val, auth_server)
                         if auth_token:
                             if debug:
-                                print(f"DEBUG AGENT: Auth token obtained, retrying request", file=sys.stderr, flush=True)
-                            
-                            # Retry request with auth token
+                                logger.debug("Auth token obtained, retrying request")
                             return await self.request_resource(
                                 resource_url=resource_url,
                                 method=method,
                                 headers=headers,
                                 body=body,
-                                sig_scheme="jwt"
+                                sig_scheme="jwt",
                             )
-        
+
         return response
     
-    def _handle_auth_challenge(self, response: httpx.Response) -> Optional[Dict[str, str]]:
-        """Parse Agent-Auth challenge header to extract resource_token and auth_server.
-        
-        Args:
-            response: HTTP response with Agent-Auth header
-            
-        Returns:
-            Dictionary with 'resource_token' and 'auth_server' keys, or None if not found
-        """
-        debug = _is_debug_enabled()
-        
-        agent_auth_header = response.headers.get("agent-auth", "")
-        if not agent_auth_header:
-            if debug:
-                print(f"DEBUG AGENT: No Agent-Auth header found", file=sys.stderr, flush=True)
-            return None
-        
-        if debug:
-            print(f"DEBUG AGENT: Parsing Agent-Auth header: {agent_auth_header}", file=sys.stderr, flush=True)
-        
-        # Parse Agent-Auth header: httpsig; auth-token; resource_token="..."; auth_server="..."
-        # Extract resource_token="..." and auth_server="..."
-        result = {}
-        
-        # Extract resource_token
-        resource_token_match = re.search(r'resource_token="([^"]+)"', agent_auth_header)
-        if resource_token_match:
-            result["resource_token"] = resource_token_match.group(1)
-            if debug:
-                print(f"DEBUG AGENT:   Extracted resource_token: {result['resource_token'][:100]}...", file=sys.stderr, flush=True)
-        else:
-            if debug:
-                print(f"DEBUG AGENT:   No resource_token found in Agent-Auth header", file=sys.stderr, flush=True)
-            return None
-        
-        # Extract auth_server
-        auth_server_match = re.search(r'auth_server="([^"]+)"', agent_auth_header)
-        if auth_server_match:
-            result["auth_server"] = auth_server_match.group(1)
-            if debug:
-                print(f"DEBUG AGENT:   Extracted auth_server: {result['auth_server']}", file=sys.stderr, flush=True)
-        else:
-            if debug:
-                print(f"DEBUG AGENT:   No auth_server found in Agent-Auth header", file=sys.stderr, flush=True)
-            return None
-        
-        return result
+    # NOTE: _handle_auth_challenge removed. AAuth header parsing now uses
+    # parse_aauth_header() directly in request_resource().
     
-    async def request_self_authorization(self, scope: str, auth_server: str, redirect_uri: Optional[str] = None) -> Optional[str]:
-        """Request authorization directly from auth server (Phase 5: agent is resource).
-        
-        The agent requests authorization to itself, providing scope directly instead of a resource_token.
-        This enables SSO and API access with a unified auth token.
-        
+    async def request_self_authorization(self, scope: str, auth_server: str) -> Optional[str]:
+        """Request authorization directly from auth server (agent is resource / SSO).
+
         Args:
             scope: Space-separated scope values (e.g., "profile email")
-            auth_server: Auth server identifier (HTTPS URL)
-            redirect_uri: Optional redirect URI (defaults to {agent_id}/callback)
-            
+            auth_server: Auth server identifier
+
         Returns:
             Auth token string, or None if request failed
         """
         debug = _is_debug_enabled()
-        http_debug = _is_http_debug_enabled()
-        
-        if redirect_uri is None:
-            redirect_uri = f"{self.agent_id}/callback"
-        
+
         if debug:
-            print(f"DEBUG AGENT: Requesting self-authorization (Phase 5: agent is resource)", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Auth server: {auth_server}", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Scope: {scope}", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Redirect URI: {redirect_uri}", file=sys.stderr, flush=True)
-        
-        # Fetch auth server metadata to get token endpoint
+            logger.debug(f"Requesting self-authorization: scope={scope}, auth_server={auth_server}")
+
+        # Fetch auth server metadata
         try:
             metadata_url = f"{auth_server}/.well-known/aauth-issuer"
             metadata = await fetch_auth_metadata(metadata_url)
-            token_endpoint = metadata.get("agent_token_endpoint")
+            token_endpoint = metadata.get("token_endpoint")
             if debug:
-                print(f"DEBUG AGENT:   Token endpoint: {token_endpoint}", file=sys.stderr, flush=True)
+                logger.debug(f"Token endpoint: {token_endpoint}")
         except Exception as e:
             if debug:
-                print(f"DEBUG AGENT:   Failed to fetch auth server metadata: {e}", file=sys.stderr, flush=True)
+                logger.debug(f"Failed to fetch auth server metadata: {e}")
             return None
-        
-        # Build request body with scope (no resource_token)
-        body_params = {
-            "request_type": "auth",
-            "scope": scope,
-            "redirect_uri": redirect_uri
-        }
-        body_text = "&".join([f"{k}={v}" for k, v in body_params.items()])
-        body_bytes = body_text.encode('utf-8')
-        
-        if debug:
-            print(f"DEBUG AGENT:   Request body: {body_text}", file=sys.stderr, flush=True)
-        
-        # Sign request with sig=jwks (agent server identity)
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        sig_headers = self.sign_request(
-            method="POST",
-            url=token_endpoint,
-            headers=headers,
-            body=body_bytes,
-            sig_scheme="jwks"
-        )
-        
-        request_headers = {**headers, **sig_headers}
-        
-        # Debug: Print HTTP request
-        if http_debug:
-            print("\n" + "=" * 80, file=sys.stderr)
-            print(f">>> AGENT REQUEST to {token_endpoint}", file=sys.stderr)
-            print("=" * 80, file=sys.stderr)
-            print(f"POST {token_endpoint} HTTP/1.1", file=sys.stderr)
-            for name, value in sorted(request_headers.items()):
-                display_value = value
-                if len(display_value) > 100:
-                    display_value = display_value[:97] + "..."
-                print(f"{name}: {display_value}", file=sys.stderr)
-            print(f"\n[Body ({len(body_bytes)} bytes)]", file=sys.stderr)
-            print(body_text, file=sys.stderr)
-            print("=" * 80 + "\n", file=sys.stderr)
-        
-        # Make request
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method="POST",
-                url=token_endpoint,
-                headers=request_headers,
-                content=body_bytes
-            )
-        
-        # Debug: Print HTTP response
-        if http_debug:
-            print("\n" + "=" * 80, file=sys.stderr)
-            print(f"<<< AGENT RESPONSE from {token_endpoint}", file=sys.stderr)
-            print("=" * 80, file=sys.stderr)
-            print(f"HTTP/1.1 {response.status_code} {response.reason_phrase}", file=sys.stderr)
-            for name, value in sorted(response.headers.items()):
-                display_value = value
-                if len(display_value) > 100:
-                    display_value = display_value[:97] + "..."
-                print(f"{name}: {display_value}", file=sys.stderr)
-            if response.content:
-                print(f"\n[Body ({len(response.content)} bytes)]", file=sys.stderr)
-                try:
-                    print(response.text, file=sys.stderr)
-                except:
-                    print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
-            print("=" * 80 + "\n", file=sys.stderr)
-        
-        if response.status_code != 200:
-            if debug:
-                print(f"DEBUG AGENT:   Self-authorization request failed: {response.status_code}", file=sys.stderr, flush=True)
-                try:
-                    error_data = response.json()
-                    print(f"DEBUG AGENT:   Error: {json.dumps(error_data, indent=2)}", file=sys.stderr, flush=True)
-                except:
-                    print(f"DEBUG AGENT:   Error: {response.text}", file=sys.stderr, flush=True)
-            return None
-        
-        # Parse response
-        try:
-            response_data = response.json()
-            
-            # Check for request_token (user consent required)
-            request_token = response_data.get("request_token")
-            if request_token:
-                if debug:
-                    print(f"DEBUG AGENT:   Request token received: {request_token[:50]}...", file=sys.stderr, flush=True)
-                    print(f"DEBUG AGENT:   User consent required, handling request_token...", file=sys.stderr, flush=True)
-                
-                # Handle user consent flow
-                auth_token = await self._handle_request_token(request_token, auth_server, redirect_uri)
-                return auth_token
-            
-            # Direct grant (autonomous authorization)
-            auth_token = response_data.get("auth_token")
-            refresh_token = response_data.get("refresh_token")
-            
-            if debug:
-                print(f"DEBUG AGENT:   Auth token received: {auth_token[:100]}...", file=sys.stderr, flush=True)
-                if refresh_token:
-                    print(f"DEBUG AGENT:   Refresh token received: {refresh_token[:100]}...", file=sys.stderr, flush=True)
-            
-            # Store tokens
-            self.auth_token = auth_token
-            self.refresh_token = refresh_token
-            
-            if debug:
-                print(f"DEBUG AGENT:   Tokens stored successfully", file=sys.stderr, flush=True)
-            
-            return auth_token
-        except Exception as e:
-            if debug:
-                print(f"DEBUG AGENT:   Failed to parse response: {e}", file=sys.stderr, flush=True)
-            return None
+
+        # Build JSON request body (self-access mode: scope, no resource_token)
+        body_dict = {"scope": scope}
+        return await self._send_token_request(token_endpoint, body_dict, auth_server)
     
     async def _request_auth_token(self, resource_token: str, auth_server: str) -> Optional[str]:
-        """Request auth token from auth server.
-        
+        """Request auth token from auth server (resource access mode).
+
         Args:
-            resource_token: Resource token from challenge
-            auth_server: Auth server identifier (HTTPS URL)
-            
+            resource_token: Resource token from AAuth challenge
+            auth_server: Auth server identifier
+
+        Returns:
+            Auth token string, or None if request failed
+        """
+        debug = _is_debug_enabled()
+
+        if debug:
+            logger.debug(f"Requesting auth token: auth_server={auth_server}")
+
+        # Fetch auth server metadata
+        try:
+            metadata_url = f"{auth_server}/.well-known/aauth-issuer"
+            metadata = await fetch_auth_metadata(metadata_url)
+            token_endpoint = metadata.get("token_endpoint")
+            if debug:
+                logger.debug(f"Token endpoint: {token_endpoint}")
+        except Exception as e:
+            if debug:
+                logger.debug(f"Failed to fetch auth server metadata: {e}")
+            return None
+
+        # Build JSON request body (resource access mode)
+        body_dict = {"resource_token": resource_token}
+        return await self._send_token_request(token_endpoint, body_dict, auth_server)
+
+    async def _send_token_request(
+        self,
+        token_endpoint: str,
+        body_dict: Dict[str, Any],
+        auth_server: str,
+    ) -> Optional[str]:
+        """Send a signed token request to the auth server and handle the response.
+
+        Handles both direct grant (200) and deferred response (202 + polling).
+
+        Args:
+            token_endpoint: Auth server token endpoint URL
+            body_dict: JSON request body
+            auth_server: Auth server identifier (for metadata lookups)
+
         Returns:
             Auth token string, or None if request failed
         """
         debug = _is_debug_enabled()
         http_debug = _is_http_debug_enabled()
-        
-        if debug:
-            print(f"DEBUG AGENT: Requesting auth token from auth server", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Auth server: {auth_server}", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Resource token: {resource_token[:100]}...", file=sys.stderr, flush=True)
-        
-        # Fetch auth server metadata to get token endpoint
-        try:
-            metadata_url = f"{auth_server}/.well-known/aauth-issuer"
-            metadata = await fetch_auth_metadata(metadata_url)
-            token_endpoint = metadata.get("agent_token_endpoint")
-            if debug:
-                print(f"DEBUG AGENT:   Token endpoint: {token_endpoint}", file=sys.stderr, flush=True)
-        except Exception as e:
-            if debug:
-                print(f"DEBUG AGENT:   Failed to fetch auth server metadata: {e}", file=sys.stderr, flush=True)
-            return None
-        
-        # Build request body (redirect_uri is REQUIRED per SPEC.md Section 9.3, even for autonomous flows)
-        # For Phase 3 autonomous flow, we use a placeholder redirect_uri since user interaction isn't needed
-        redirect_uri = f"{self.agent_id}/callback"  # Placeholder for Phase 3
-        
-        body_params = {
-            "request_type": "auth",
-            "resource_token": resource_token,
-            "redirect_uri": redirect_uri
-        }
-        body_text = "&".join([f"{k}={v}" for k, v in body_params.items()])
+
+        body_text = json.dumps(body_dict)
         body_bytes = body_text.encode('utf-8')
-        
-        if debug:
-            print(f"DEBUG AGENT:   redirect_uri: {redirect_uri} (required by spec, not used for Phase 3 autonomous)", file=sys.stderr, flush=True)
-        
-        if debug:
-            print(f"DEBUG AGENT:   Request body: {body_text}", file=sys.stderr, flush=True)
-        
-        # Sign request with sig=jwks (agent server identity)
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
+
+        # Sign request
+        headers = {"Content-Type": "application/json"}
         sig_headers = self.sign_request(
             method="POST",
             url=token_endpoint,
             headers=headers,
             body=body_bytes,
-            sig_scheme="jwks"
+            sig_scheme="jwks_uri",
         )
-        
         request_headers = {**headers, **sig_headers}
-        
-        # Debug: Print HTTP request
+
         if http_debug:
-            print("\n" + "=" * 80, file=sys.stderr)
-            print(f">>> AGENT REQUEST to {token_endpoint}", file=sys.stderr)
-            print("=" * 80, file=sys.stderr)
-            print(f"POST {token_endpoint} HTTP/1.1", file=sys.stderr)
-            for name, value in sorted(request_headers.items()):
-                display_value = value
-                if len(display_value) > 100:
-                    display_value = display_value[:97] + "..."
-                print(f"{name}: {display_value}", file=sys.stderr)
-            print(f"\n[Body ({len(body_bytes)} bytes)]", file=sys.stderr)
-            print(body_text, file=sys.stderr)
-            print("=" * 80 + "\n", file=sys.stderr)
-        
+            print(f"\n>>> AGENT TOKEN REQUEST to {token_endpoint}", file=sys.stderr)
+            print(f"Body: {body_text}", file=sys.stderr)
+
         # Make request
         async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method="POST",
-                url=token_endpoint,
+            response = await client.post(
+                token_endpoint,
                 headers=request_headers,
-                content=body_bytes
+                content=body_bytes,
             )
-        
-        # Debug: Print HTTP response
+
         if http_debug:
-            print("\n" + "=" * 80, file=sys.stderr)
-            print(f"<<< AGENT RESPONSE from {token_endpoint}", file=sys.stderr)
-            print("=" * 80, file=sys.stderr)
-            print(f"HTTP/1.1 {response.status_code} {response.reason_phrase}", file=sys.stderr)
-            for name, value in sorted(response.headers.items()):
-                display_value = value
-                if len(display_value) > 100:
-                    display_value = display_value[:97] + "..."
-                print(f"{name}: {display_value}", file=sys.stderr)
-            if response.content:
-                print(f"\n[Body ({len(response.content)} bytes)]", file=sys.stderr)
-                try:
-                    print(response.text, file=sys.stderr)
-                except:
-                    print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
-            print("=" * 80 + "\n", file=sys.stderr)
-        
-        if response.status_code != 200:
-            if debug:
-                print(f"DEBUG AGENT:   Auth token request failed: {response.status_code}", file=sys.stderr, flush=True)
-                try:
-                    error_data = response.json()
-                    print(f"DEBUG AGENT:   Error: {json.dumps(error_data, indent=2)}", file=sys.stderr, flush=True)
-                except:
-                    print(f"DEBUG AGENT:   Error: {response.text}", file=sys.stderr, flush=True)
-            return None
-        
-        # Parse response
-        try:
-            response_data = response.json()
-            
-            # Phase 4: Check for request_token (user consent required)
-            request_token = response_data.get("request_token")
-            if request_token:
-                if debug:
-                    print(f"DEBUG AGENT:   Request token received: {request_token[:50]}...", file=sys.stderr, flush=True)
-                    print(f"DEBUG AGENT:   User consent required, handling request_token...", file=sys.stderr, flush=True)
-                
-                # Handle user consent flow
-                redirect_uri = f"{self.agent_id}/callback"
-                auth_token = await self._handle_request_token(request_token, auth_server, redirect_uri)
-                return auth_token
-            
-            # Phase 3: Direct grant (autonomous authorization)
-            auth_token = response_data.get("auth_token")
-            refresh_token = response_data.get("refresh_token")
-            
-            if debug:
-                print(f"DEBUG AGENT:   Auth token received: {auth_token[:100]}...", file=sys.stderr, flush=True)
-                if refresh_token:
-                    print(f"DEBUG AGENT:   Refresh token received: {refresh_token[:100]}...", file=sys.stderr, flush=True)
-            
-            # Store tokens
+            print(f"<<< {response.status_code} {response.text[:200]}", file=sys.stderr)
+
+        # Direct grant (200)
+        if response.status_code == 200:
+            return self._process_token_response(response.json())
+
+        # Deferred response (202) → start polling
+        if response.status_code == 202:
+            return await self._handle_deferred_response(response, auth_server)
+
+        # Error
+        if debug:
+            logger.debug(f"Token request failed: {response.status_code} {response.text[:200]}")
+        return None
+
+    def _process_token_response(self, data: Dict[str, Any]) -> Optional[str]:
+        """Process a successful token response (200 OK)."""
+        auth_token = data.get("auth_token")
+        if auth_token:
             self.auth_token = auth_token
-            self.refresh_token = refresh_token
-            
-            if debug:
-                print(f"DEBUG AGENT:   Tokens stored successfully", file=sys.stderr, flush=True)
-            
-            return auth_token
-        except Exception as e:
-            if debug:
-                print(f"DEBUG AGENT:   Failed to parse response: {e}", file=sys.stderr, flush=True)
-            return None
-    
-    async def _handle_request_token(
-        self,
-        request_token: str,
-        auth_server: str,
-        redirect_uri: str
-    ) -> Optional[str]:
-        """Handle request_token response - complete user consent flow.
-        
-        Args:
-            request_token: Request token from auth server
-            auth_server: Auth server identifier
-            redirect_uri: Agent's callback URI
-            
-        Returns:
-            Auth token if successful, None otherwise
+            logger.debug(f"Auth token stored: {auth_token[:60]}...")
+        return auth_token
+
+    async def _handle_deferred_response(self, response: httpx.Response, auth_server: str) -> Optional[str]:
+        """Handle a 202 deferred response by polling the pending URL.
+
+        Uses the poller from aauth.agent.poller with synchronous polling
+        adapted for async context.
         """
         debug = _is_debug_enabled()
-        
-        if debug:
-            print(f"DEBUG AGENT: Handling request_token", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Auth server: {auth_server}", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Redirect URI: {redirect_uri}", file=sys.stderr, flush=True)
-        
-        # Fetch auth server metadata to get agent_auth_endpoint
-        try:
-            metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
-            auth_endpoint = metadata.get("agent_auth_endpoint")
-            
-            if not auth_endpoint:
-                if debug:
-                    print(f"DEBUG AGENT:   No agent_auth_endpoint in metadata", file=sys.stderr, flush=True)
-                return None
-            
+
+        body = response.json()
+        pending_url = body.get("location") or response.headers.get("location")
+        require = body.get("require")
+        code = body.get("code")
+
+        if not pending_url:
             if debug:
-                print(f"DEBUG AGENT:   Auth endpoint: {auth_endpoint}", file=sys.stderr, flush=True)
-            
-            # Construct redirect URL
-            redirect_url = f"{auth_endpoint}?request_token={request_token}&redirect_uri={redirect_uri}"
-            
-            if debug:
-                print(f"DEBUG AGENT:   Redirect URL: {redirect_url}", file=sys.stderr, flush=True)
-            
-            # Check if we should use user simulator or wait for manual interaction
-            if self.use_user_simulator:
-                if debug:
-                    print(f"DEBUG AGENT:   Using user simulator to complete flow...", file=sys.stderr, flush=True)
-                
-                # Use user simulator to complete the flow
-                from participants.user_simulator import UserSimulator
-                user_sim = UserSimulator()
-                
-                code = await user_sim.complete_flow(redirect_url, redirect_uri, auth_server)
-                
-                if not code:
-                    if debug:
-                        print(f"DEBUG AGENT:   Failed to obtain authorization code", file=sys.stderr, flush=True)
-                    return None
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Authorization code received: {code[:20]}...", file=sys.stderr, flush=True)
-                
-                # Exchange code for tokens
-                return await self._exchange_authorization_code(code, redirect_uri, auth_server)
-            else:
-                # Manual mode: Store request details and wait for user to complete consent
-                # Always print the URL (not just in debug mode) so user knows what to do
-                print(f"\n" + "=" * 80, file=sys.stderr)
-                print("MANUAL CONSENT REQUIRED", file=sys.stderr)
-                print("=" * 80, file=sys.stderr)
-                print(f"\nPlease open the following URL in your browser:", file=sys.stderr)
-                print(f"\n  {redirect_url}\n", file=sys.stderr)
-                print("After granting consent, the agent will automatically exchange the code.", file=sys.stderr)
-                print("Waiting for authorization code...", file=sys.stderr)
-                print("=" * 80 + "\n", file=sys.stderr)
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Manual mode - waiting for user to complete consent in browser", file=sys.stderr, flush=True)
-                
-                # Store pending request details
-                self.pending_request_token = request_token
-                self.pending_redirect_uri = redirect_uri
-                self.pending_auth_server = auth_server
-                
-                # Create threading.Event for cross-thread synchronization
-                # (agent server runs in separate thread with its own event loop)
-                self._manual_consent_event = threading.Event()
-                self._manual_consent_result = None
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Created _manual_consent_event: {self._manual_consent_event}", file=sys.stderr, flush=True)
-                    print(f"DEBUG AGENT:   Waiting for user to complete consent flow...", file=sys.stderr, flush=True)
-                
-                # Wait for callback to receive the code and exchange it
-                # Use run_in_executor to wait on threading.Event without blocking event loop
-                # Wait on threading.Event in a thread pool to avoid blocking the event loop
-                import asyncio
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = asyncio.get_event_loop()
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Using event loop: {loop}", file=sys.stderr, flush=True)
-                    print(f"DEBUG AGENT:   Calling run_in_executor to wait on event...", file=sys.stderr, flush=True)
-                
-                await loop.run_in_executor(None, self._manual_consent_event.wait)
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Event wait completed!", file=sys.stderr, flush=True)
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Consent flow completed", file=sys.stderr, flush=True)
-                
-                # Get the result (auth token or None)
-                result = self._manual_consent_result
-                self._manual_consent_event = None
-                self._manual_consent_result = None
-                
-                return result
-            
-        except Exception as e:
-            if debug:
-                print(f"DEBUG AGENT:   Error handling request_token: {e}", file=sys.stderr, flush=True)
+                logger.debug("No pending URL in 202 response")
             return None
-    
-    async def _exchange_authorization_code(
-        self,
-        code: str,
-        redirect_uri: str,
-        auth_server: str
-    ) -> Optional[str]:
-        """Exchange authorization code for auth token.
-        
-        Args:
-            code: Authorization code
-            redirect_uri: Redirect URI used in original request
-            auth_server: Auth server identifier
-            
-        Returns:
-            Auth token if successful, None otherwise
-        """
-        debug = _is_debug_enabled()
-        
+
         if debug:
-            print(f"DEBUG AGENT: Exchanging authorization code", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Code: {code[:20]}...", file=sys.stderr, flush=True)
-            print(f"DEBUG AGENT:   Auth server: {auth_server}", file=sys.stderr, flush=True)
-        
-        # Fetch token endpoint from metadata
-        try:
-            metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
-            token_endpoint = metadata.get("agent_token_endpoint")
-            
-            if not token_endpoint:
-                if debug:
-                    print(f"DEBUG AGENT:   No agent_token_endpoint in metadata", file=sys.stderr, flush=True)
-                return None
-            
-            # Build request body
-            body_data = {
-                "request_type": "code",
-                "code": code,
-                "redirect_uri": redirect_uri
-            }
-            body_text = "&".join([f"{k}={v}" for k, v in body_data.items()])
-            body_bytes = body_text.encode('utf-8')
-            
-            # Prepare headers for signing (sign_request will add Content-Digest)
-            request_headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            
-            # Sign request (this will modify request_headers to add Content-Digest)
-            sig_headers = self.sign_request(
-                method="POST",
-                url=token_endpoint,
-                headers=request_headers,
-                body=body_bytes,
-                sig_scheme="jwks"
-            )
-            
-            # Make request (sig_headers includes Signature-Input, Signature, Signature-Key)
-            # request_headers now includes Content-Digest (added by sign_request)
-            async with httpx.AsyncClient() as client:
-                headers = {
-                    **request_headers,  # Includes Content-Type and Content-Digest
-                    **sig_headers       # Includes Signature-Input, Signature, Signature-Key
-                }
-                
-                response = await client.post(
-                    token_endpoint,
-                    headers=headers,
-                    content=body_bytes
-                )
-            
-            if response.status_code != 200:
-                if debug:
-                    print(f"DEBUG AGENT:   Code exchange failed: {response.status_code}", file=sys.stderr, flush=True)
-                    try:
-                        error_data = response.json()
-                        print(f"DEBUG AGENT:   Error: {error_data}", file=sys.stderr, flush=True)
-                    except:
-                        print(f"DEBUG AGENT:   Error: {response.text}", file=sys.stderr, flush=True)
-                return None
-            
-            # Parse response
+            logger.debug(f"Deferred response: pending_url={pending_url}, require={require}, code={code}")
+
+        # If interaction required, direct user to interaction endpoint
+        if require == "interaction" and code:
             try:
-                response_data = response.json()
-                auth_token = response_data.get("auth_token")
-                refresh_token = response_data.get("refresh_token")
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Auth token received: {auth_token[:100]}...", file=sys.stderr, flush=True)
-                    if refresh_token:
-                        print(f"DEBUG AGENT:   Refresh token received: {refresh_token[:100]}...", file=sys.stderr, flush=True)
-                
-                # Store tokens
-                self.auth_token = auth_token
-                self.refresh_token = refresh_token
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Tokens stored successfully", file=sys.stderr, flush=True)
-                
-                return auth_token
+                metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
+                interaction_endpoint = metadata.get("interaction_endpoint")
+                if interaction_endpoint:
+                    interaction_url = f"{interaction_endpoint}?code={code}"
+
+                    if self.use_user_simulator:
+                        if debug:
+                            logger.debug(f"Using user simulator for interaction: {interaction_url}")
+                        from participants.user_simulator import UserSimulator
+                        user_sim = UserSimulator()
+                        await user_sim.complete_interaction(interaction_url, auth_server)
+                    else:
+                        print(f"\n{'='*60}", file=sys.stderr)
+                        print("USER INTERACTION REQUIRED", file=sys.stderr)
+                        print(f"Open: {interaction_url}", file=sys.stderr)
+                        print(f"Code: {code}", file=sys.stderr)
+                        print(f"{'='*60}\n", file=sys.stderr)
             except Exception as e:
                 if debug:
-                    print(f"DEBUG AGENT:   Failed to parse response: {e}", file=sys.stderr, flush=True)
-                return None
-                
-        except Exception as e:
-            if debug:
-                print(f"DEBUG AGENT:   Error exchanging code: {e}", file=sys.stderr, flush=True)
-            return None
-    
-    async def _handle_callback(self, request: Request):
-        """Handle OAuth callback with authorization code.
-        
-        This endpoint receives the redirect from the auth server after user consent.
-        """
-        from fastapi.responses import HTMLResponse
-        
-        debug = _is_debug_enabled()
-        
-        # Extract code from query parameters
-        code = request.query_params.get("code")
-        error = request.query_params.get("error")
-        error_description = request.query_params.get("error_description")
-        
-        if debug:
-            print(f"DEBUG AGENT: Callback received", file=sys.stderr, flush=True)
-            if code:
-                print(f"DEBUG AGENT:   Code: {code[:20]}...", file=sys.stderr, flush=True)
-            if error:
-                print(f"DEBUG AGENT:   Error: {error}", file=sys.stderr, flush=True)
-        
-        if error:
-            html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorization Failed</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 500px;
-            margin: 50px auto;
-            padding: 20px;
-        }}
-        .error {{
-            background: #fee;
-            border: 1px solid #fcc;
-            padding: 15px;
-            border-radius: 4px;
-            color: #c33;
-        }}
-    </style>
-</head>
-<body>
-    <h1>Authorization Failed</h1>
-    <div class="error">
-        <strong>Error:</strong> {error}<br>
-        {error_description if error_description else ''}
-    </div>
-</body>
-</html>"""
-            return HTMLResponse(content=html, status_code=400)
-        
-        if code:
-            # In manual mode, exchange the code for tokens
-            if debug:
-                print(f"DEBUG AGENT:   Callback received code, checking mode...", file=sys.stderr, flush=True)
-                print(f"DEBUG AGENT:     use_user_simulator: {self.use_user_simulator}", file=sys.stderr, flush=True)
-                print(f"DEBUG AGENT:     pending_redirect_uri: {self.pending_redirect_uri}", file=sys.stderr, flush=True)
-                print(f"DEBUG AGENT:     _manual_consent_event: {self._manual_consent_event}", file=sys.stderr, flush=True)
-            
-            if not self.use_user_simulator and self.pending_redirect_uri:
-                if debug:
-                    print(f"DEBUG AGENT:   Manual mode - exchanging authorization code for tokens", file=sys.stderr, flush=True)
-                
-                # Exchange code for tokens
-                auth_token = await self._exchange_authorization_code(
-                    code,
-                    self.pending_redirect_uri,
-                    self.pending_auth_server
-                )
-                
-                # Store result and signal the waiting coroutine
-                self._manual_consent_result = auth_token
-                
-                if debug:
-                    print(f"DEBUG AGENT:   Stored auth_token result, signaling event...", file=sys.stderr, flush=True)
-                
-                # Signal the event to wake up the waiting coroutine
-                if self._manual_consent_event:
-                    if debug:
-                        print(f"DEBUG AGENT:   Setting _manual_consent_event...", file=sys.stderr, flush=True)
-                    self._manual_consent_event.set()
-                    if debug:
-                        print(f"DEBUG AGENT:   Event set successfully", file=sys.stderr, flush=True)
-                else:
-                    if debug:
-                        print(f"DEBUG AGENT:   WARNING: _manual_consent_event is None!", file=sys.stderr, flush=True)
-                
-                # Clear pending state AFTER signaling
-                self.pending_request_token = None
-                self.pending_redirect_uri = None
-                self.pending_auth_server = None
-                
-                if auth_token:
-                    if debug:
-                        print(f"DEBUG AGENT:   ✓ Tokens obtained successfully!", file=sys.stderr, flush=True)
-                    html = """<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorization Successful</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 500px;
-            margin: 50px auto;
-            padding: 20px;
-        }}
-        .success {{
-            background: #efe;
-            border: 1px solid #cfc;
-            padding: 15px;
-            border-radius: 4px;
-            color: #3c3;
-        }}
-    </style>
-</head>
-<body>
-    <h1>Authorization Successful</h1>
-    <div class="success">
-        Authorization code received and exchanged for tokens. The agent can now access the resource.
-    </div>
-</body>
-</html>"""
-                else:
-                    html = """<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorization Error</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 500px;
-            margin: 50px auto;
-            padding: 20px;
-        }}
-        .error {{
-            background: #fee;
-            border: 1px solid #fcc;
-            padding: 15px;
-            border-radius: 4px;
-            color: #c33;
-        }}
-    </style>
-</head>
-<body>
-    <h1>Authorization Error</h1>
-    <div class="error">
-        Failed to exchange authorization code for tokens. Check the agent logs for details.
-    </div>
-</body>
-</html>"""
-                return HTMLResponse(content=html)
-            else:
-                # Automated mode - just return success page
-                html = """<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorization Successful</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 500px;
-            margin: 50px auto;
-            padding: 20px;
-        }}
-        .success {{
-            background: #efe;
-            border: 1px solid #cfc;
-            padding: 15px;
-            border-radius: 4px;
-            color: #3c3;
-        }}
-    </style>
-</head>
-<body>
-    <h1>Authorization Successful</h1>
-    <div class="success">
-        Authorization code received. The agent will exchange it for tokens automatically.
-    </div>
-</body>
-</html>"""
-            return HTMLResponse(content=html)
-        
-        return HTMLResponse(
-            content="<html><body><h1>Error</h1><p>No code or error parameter</p></body></html>",
-            status_code=400
+                    logger.debug(f"Error directing user to interaction: {e}")
+
+        # Poll pending URL using synchronous poller in executor
+        import asyncio
+        loop = asyncio.get_running_loop()
+
+        def _sign_and_send_get(url):
+            """Synchronous signed GET for the poller."""
+            sig_h = self.sign_request(method="GET", url=url, sig_scheme="jwks_uri")
+            with httpx.Client() as client:
+                return client.get(url, headers=sig_h)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: poll_pending_url(
+                pending_url=pending_url,
+                sign_and_send_get=_sign_and_send_get,
+                max_polls=60,
+                default_wait=2,
+            ),
         )
+
+        if result.success and result.auth_token:
+            self.auth_token = result.auth_token
+            if debug:
+                logger.debug(f"Polling succeeded, auth token obtained")
+            return result.auth_token
+
+        if debug:
+            logger.debug(f"Polling failed: {result.error} - {result.error_description}")
+        return None
+    
     
     async def _handle_delegate_token_request(self, request: Request):
         """Handle request from delegate for agent token (Phase 6: agent delegation).

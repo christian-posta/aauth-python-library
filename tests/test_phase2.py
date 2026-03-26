@@ -120,15 +120,15 @@ class TestSignatureGeneration:
         kid = "key-1"
         
         header = build_signature_key_header(
-            "jwks",
+            "jwks_uri",
             private_key,
-            label="sig1",
+            label="sig",
             id=agent_id,
             kid=kid
         )
         
-        assert header.startswith("sig1=(")
-        assert 'scheme=jwks' in header
+        assert header.startswith("sig=(")
+        assert 'scheme=jwks_uri' in header
         assert f'id="{agent_id}"' in header
         assert f'kid="{kid}"' in header
     
@@ -144,7 +144,7 @@ class TestSignatureGeneration:
             headers={},
             body=b"",
             private_key=private_key,
-            sig_scheme="jwks",
+            sig_scheme="jwks_uri",
             id=agent_id,
             kid=kid
         )
@@ -155,7 +155,7 @@ class TestSignatureGeneration:
         
         # Verify Signature-Key format
         sig_key = headers["Signature-Key"]
-        assert 'scheme=jwks' in sig_key
+        assert 'scheme=jwks_uri' in sig_key
         assert f'id="{agent_id}"' in sig_key
         assert f'kid="{kid}"' in sig_key
     
@@ -167,7 +167,7 @@ class TestSignatureGeneration:
         signature_key_header = build_signature_key_header(
             "hwk",
             private_key,
-            label="sig1"
+            label="sig"
         )
         
         # Build signature base with query
@@ -188,24 +188,6 @@ class TestSignatureGeneration:
         
         # Verify @query includes leading ?
         assert '"@query": ?param=value' in signature_base
-    
-    def test_sign_request_with_nonce(self):
-        """Test signing request with Nonce header (per SPEC.md Section 10.5)."""
-        private_key, _ = generate_ed25519_keypair()
-        
-        # Sign request with Nonce header
-        headers = sign_request(
-            method="POST",
-            target_uri="https://resource.example.com/data",
-            headers={"Nonce": "Y3VyaW91c2x5Y3VyaW91cw", "Content-Type": "application/json"},
-            body=b'{"action": "test"}',
-            private_key=private_key,
-            sig_scheme="hwk"
-        )
-        
-        # Verify nonce is in Signature-Input
-        assert "nonce" in headers["Signature-Input"]
-        assert "Nonce" in headers  # Header should be preserved
     
     def test_body_components_opt_in(self):
         """Test that body components are opt-in, not automatic."""
@@ -238,7 +220,7 @@ class TestSignatureGeneration:
         signature_key_header = build_signature_key_header(
             "hwk",
             private_key,
-            label="sig1"
+            label="sig"
         )
         
         # Should raise ValueError if signature_params is missing
@@ -272,7 +254,7 @@ class TestSignatureVerification:
             headers={},
             body=b"",
             private_key=private_key,
-            sig_scheme="jwks",
+            sig_scheme="jwks_uri",
             id=agent_id,
             kid=kid
         )
@@ -311,7 +293,7 @@ class TestSignatureVerification:
             headers={},
             body=b"",
             private_key=private_key,
-            sig_scheme="jwks",
+            sig_scheme="jwks_uri",
             id=agent_id,
             kid=kid
         )
@@ -446,12 +428,12 @@ class TestIntegration:
             # Request /data-jwks with sig=jwks
             response = await agent.request_resource(
                 "http://127.0.0.1:8002/data-jwks",
-                sig_scheme="jwks"
+                sig_scheme="jwks_uri"
             )
             
             assert response.status_code == 200
             data = response.json()
-            assert data["scheme"] == "jwks"
+            assert data["scheme"] == "jwks_uri"
             assert "agent_id" in data
         finally:
             pass
@@ -499,10 +481,10 @@ class TestIntegration:
             # Test /data-jwks with sig=jwks
             response_jwks = await agent.request_resource(
                 "http://127.0.0.1:8002/data-jwks",
-                sig_scheme="jwks"
+                sig_scheme="jwks_uri"
             )
             assert response_jwks.status_code == 200
-            assert response_jwks.json()["scheme"] == "jwks"
+            assert response_jwks.json()["scheme"] == "jwks_uri"
         finally:
             pass
 

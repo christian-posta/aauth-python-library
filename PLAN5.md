@@ -60,8 +60,8 @@ Phase 5 implements Section 3.5 from SPEC.md: an agent authenticates users to its
   - `request_type=auth`
   - `scope=<scope>` (no `resource_token`)
   - `redirect_uri=<redirect_uri>`
-- **Handle `request_token` response** (same as Phase 4)
-- **Complete user consent flow** (same as Phase 4)
+- **Handle 202 deferred response** (same as Phase 4: pending URL, interaction code, polling)
+- **Complete user consent at `/interact`** (same as Phase 4)
 - **Store auth token** for use in SSO and API access
 
 **Update `_request_auth_token()` method:**
@@ -76,9 +76,9 @@ Phase 5 implements Section 3.5 from SPEC.md: an agent authenticates users to its
 - **Setup**: Agent, Auth Server (with user consent enabled)
 - **Flow**:
   1. Agent requests self-authorization with `scope=profile email`
-  2. Auth server returns `request_token`
-  3. User simulator completes consent flow
-  4. Agent exchanges code for auth token
+  2. Auth server returns 202 + pending URL + interaction code
+  3. User simulator completes consent at `/interact`
+  4. Agent polls pending URL until `auth_token`
   5. **Verify auth token claims**:
      - `aud` = agent identifier
      - `agent` claim omitted

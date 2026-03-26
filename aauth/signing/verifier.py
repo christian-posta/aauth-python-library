@@ -88,13 +88,12 @@ def verify_signature(
                 }
                 public_key = jwk_to_public_key(jwk)
         
-        elif scheme == "jwks":
+        elif scheme in ("jwks", "jwks_uri"):
             if not jwks_fetcher:
-                raise SignatureError("sig=jwks requires jwks_fetcher")
+                raise SignatureError("sig=jwks_uri requires jwks_fetcher")
             
             agent_id = params.get("id")
             kid = params.get("kid")
-            well_known = params.get("well-known")
             jwks_param = params.get("jwks")
             
             # Per spec Section 10.7 Mode 2: jwks parameter MUST NOT be present
@@ -270,12 +269,15 @@ def verify_signature(
         path = parsed_uri.path or "/"
         query_string = parsed_uri.query if parsed_uri.query else None
         
-        # Extract signature params (the part after "sig1=") for @signature-params line
-        # Signature-Input format: sig1=("@method" "@authority" ...);created=...
-        # RFC 9421 Section 2.5: @signature-params is required
-        signature_params = signature_input_header[5:] if signature_input_header.startswith("sig1=") else signature_input_header
+        # Extract signature params (the part after "{label}=") for @signature-params line
+        # Signature-Input format: sig=("@method" "@authority" ...);created=...
+        prefix = f"{label}="
+        if signature_input_header.startswith(prefix):
+            signature_params = signature_input_header[len(prefix):]
+        else:
+            signature_params = signature_input_header
         if not signature_params:
-            return False  # Invalid - signature_params required
+            return False
         
         logger.debug(f"🔐 VERIFIER: Building signature base")
         logger.debug(f"🔐 VERIFIER: method={method}, authority={authority}, path={path}")

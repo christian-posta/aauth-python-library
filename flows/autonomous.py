@@ -9,7 +9,7 @@ import httpx
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
-from core import _is_debug_enabled, _is_jwt_token_debug_enabled
+from aauth.debug import _is_debug_enabled, _is_jwt_token_debug_enabled
 from aauth.tokens.auth_token import parse_token_claims
 
 
@@ -58,7 +58,7 @@ async def run_autonomous_flow(
     response = await agent.request_resource(
         resource_url=resource_url,
         method=method,
-        sig_scheme="jwks"  # Use agent identity
+        sig_scheme="jwks_uri"  # Use agent identity
     )
     
     if debug:

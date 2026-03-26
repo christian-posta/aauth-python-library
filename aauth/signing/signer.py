@@ -21,87 +21,75 @@ def sign_request(
     **kwargs
 ) -> Dict[str, str]:
     """Sign an HTTP request using HTTP Message Signatures (RFC 9421).
-    
+
     Args:
         method: HTTP method (GET, POST, etc.)
         target_uri: Target URI
         headers: Request headers dictionary (will be modified)
         body: Request body bytes (None if no body)
         private_key: Ed25519 private key
-        sig_scheme: Signature scheme - "hwk", "jwks", or "jwt"
+        sig_scheme: Signature scheme - "hwk", "jwks_uri", or "jwt"
+        additional_signature_components: Additional components to cover (from resource metadata)
         **kwargs: Additional parameters for signature schemes:
-            - For "jwks": id (required), kid (required), well-known (optional)
+            - For "jwks_uri": id (required), kid (required)
             - For "jwt": jwt (required)
-    
+
     Returns:
         Dictionary with Signature-Input, Signature, and Signature-Key headers
-        
+
     Raises:
         SignatureError: If signing fails
     """
     try:
-        # Parse URI for derived components
         parsed_uri = urlparse(target_uri)
         authority = parsed_uri.netloc
         path = parsed_uri.path or "/"
         query_string = parsed_uri.query if parsed_uri.query else None
-        
+
+        label = "sig"
+
         # Build Signature-Key header first (needed for signature-key component)
-        # Use label "sig1" to match Signature-Input and Signature headers
         signature_key_header = build_signature_key_header(
             sig_scheme=sig_scheme,
             private_key=private_key,
-            label="sig1",
+            label=label,
             **kwargs
         )
-        
-        # Add Signature-Key to headers (needed for signature-key component)
+
         headers["Signature-Key"] = signature_key_header
-        
-        # Determine body components to include (opt-in only, per SPEC_NOTES.md)
-        # Body components are NOT automatic - only included if explicitly requested
-        # via additional_signature_components parameter (typically from server metadata)
+
+        # Determine body components to include (opt-in only)
         body_components = []
         if body and additional_signature_components:
-            # Only add if explicitly requested via additional_signature_components
             for comp in additional_signature_components:
                 if comp in ("content-type", "content-digest"):
                     body_components.append(comp)
-            
-            # Add Content-Digest header if needed and not already present (RFC 9530)
-            # Only calculate Content-Digest if it's in body_components but not in headers
+
             if "content-digest" in body_components and "Content-Digest" not in headers:
                 content_digest = calculate_content_digest(body)
                 headers["Content-Digest"] = content_digest
-            
-            # Add content-type header if needed and not already present
+
             if "content-type" in body_components and "Content-Type" not in headers:
                 headers["Content-Type"] = "application/octet-stream"
-        
-        # Check for Nonce header (per SPEC.md Section 10.5)
-        # Nonce MUST be included if present, regardless of body or additional_signature_components
-        if "Nonce" in headers:
-            body_components.append("nonce")
-        
+
         # Determine covered components
         from ..signing.signature_base import _determine_covered_components
         covered_components = _determine_covered_components(
-            query_string, 
+            query_string,
             body,
             additional_components=body_components
         )
-        
-        # Build signature params using new function
+
+        # Build signature params (only created is required per spec Section 15.4)
         created = int(time.time())
         signature_params = build_signature_params(
             covered_components=covered_components,
             created=created
         )
-        
-        # Build Signature-Input header (needed for @signature-params in signature base)
-        signature_input_header = f"sig1={signature_params}"
-        
-        # Build signature base (now includes @signature-params per RFC 9421)
+
+        signature_input_header = f"{label}={signature_params}"
+
+        # Build signature base
         signature_base = build_signature_base(
             method=method,
             authority=authority,
@@ -113,21 +101,19 @@ def sign_request(
             covered_components=covered_components,
             signature_params=signature_params
         )
-        
+
         import logging
         logger = logging.getLogger("aauth.signing")
-        logger.debug(f"🔐 AAUTH LIBRARY SIGNATURE BASE:")
-        logger.debug(f"🔐 Signature base length: {len(signature_base)} bytes")
-        logger.debug(f"🔐 Signature base hex (first 200): {signature_base.encode('utf-8').hex()[:200]}...")
+        logger.debug(f"Signature base length: {len(signature_base)} bytes")
         for i, line in enumerate(signature_base.split('\n')):
-            logger.debug(f"🔐   Line {i}: {repr(line)}")
-        
+            logger.debug(f"  Line {i}: {repr(line)}")
+
         # Sign the signature base
         signature_bytes = private_key.sign(signature_base.encode('utf-8'))
-        
+
         # Build Signature header
-        signature_header = build_signature_header(signature_bytes, label="sig1")
-        
+        signature_header = build_signature_header(signature_bytes, label=label)
+
         return {
             "Signature-Input": signature_input_header,
             "Signature": signature_header,
@@ -135,4 +121,3 @@ def sign_request(
         }
     except Exception as e:
         raise SignatureError(f"Failed to sign request: {e}", details={"scheme": sig_scheme}) from e
-

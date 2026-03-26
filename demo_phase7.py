@@ -81,7 +81,7 @@ async def main():
     print("3. Resource 1 needs to call Resource 2 to fulfill the request", file=sys.stderr)
     print("4. Resource 1 receives 401 challenge from Resource 2 with resource_token", file=sys.stderr)
     print("5. Resource 1 exchanges upstream auth_token for downstream auth_token at Auth Server 2", file=sys.stderr)
-    print("6. Auth Server 2 validates upstream token, trusts Auth Server 1, issues token with 'act' claim", file=sys.stderr)
+    print("6. Auth Server 2 validates upstream token, trusts Auth Server 1, issues downstream auth token", file=sys.stderr)
     print("7. Resource 1 accesses Resource 2 with exchanged token", file=sys.stderr)
     print("8. Resource 1 returns aggregated response to Agent 1", file=sys.stderr)
     
@@ -227,7 +227,7 @@ async def main():
     print("TEST 2: Resource 1 Calls Resource 2 via Token Exchange", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
     print("Description: Resource 1 needs data from Resource 2. It exchanges the upstream token", file=sys.stderr)
-    print("             for a new token from Auth Server 2, which includes an 'act' claim.", file=sys.stderr)
+    print("             for a new downstream token from Auth Server 2.", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
     
     test2_passed = False
@@ -271,23 +271,22 @@ async def main():
     
     test_results.append(("TEST 2: Resource 1 Calls Resource 2", test2_passed, test2_error))
     
-    # Test 3: Verify 'act' claim in exchanged token
+    # Test 3: Verify exchanged token claims per updated spec
     print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST 3: Verify 'act' Claim in Exchanged Token", file=sys.stderr)
+    print("TEST 3: Verify Exchanged Token Claims", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
-    print("Description: Verify that the exchanged token contains an 'act' claim", file=sys.stderr)
-    print("             showing the delegation chain.", file=sys.stderr)
+    print("Description: Verify exchanged token has required claims from SPEC_UPDATED.", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
     
     test3_passed = False
     test3_error = None
     
     try:
-        print("📤 Performing token exchange to inspect 'act' claim...", file=sys.stderr, flush=True)
+        print("📤 Performing token exchange to inspect exchanged token claims...", file=sys.stderr, flush=True)
         
         # Get resource token from Resource 2 by sending a signed request with Resource 1's identity
         # This mimics what happens in call_downstream_resource
-        from core.httpsig import sign_request
+        from aauth.signing.signer import sign_request
         
         resource2_data_url = f"{resource2_id}/data-auth"
         sig_headers = sign_request(
@@ -296,10 +295,9 @@ async def main():
             headers={},
             body=b"",
             private_key=resource1.private_key,
-            sig_scheme="jwks",
+            sig_scheme="jwks_uri",
             id=resource1.resource_id,
             kid=resource1.kid,
-            **{"well-known": "aauth-resource"}
         )
         
         import httpx
@@ -309,10 +307,10 @@ async def main():
                 headers=sig_headers
             )
         
-        # Parse challenge to get resource_token
+        # Parse challenge to get resource_token (new AAuth format with Agent-Auth fallback)
         import re
-        agent_auth_header = initial_response.headers.get("Agent-Auth", "")
-        resource_token_match = re.search(r'resource_token="([^"]+)"', agent_auth_header)
+        aauth_header = initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
         
         if not resource_token_match:
             test3_error = "No resource_token in challenge from Resource 2"
@@ -341,30 +339,30 @@ async def main():
                 print(f"  agent: {payload.get('agent')}", file=sys.stderr, flush=True)
                 print(f"  sub: {payload.get('sub')}", file=sys.stderr, flush=True)
                 
-                act = payload.get("act")
-                if act:
-                    print(f"  act: {json.dumps(act, indent=4)}", file=sys.stderr, flush=True)
-                    
-                    # Verify act claim structure
-                    errors = []
-                    
-                    # act.agent should be the original agent (Agent 1)
-                    if act.get("agent") != agent1_id:
-                        errors.append(f"act.agent mismatch: expected {agent1_id}, got {act.get('agent')}")
-                    else:
-                        print(f"  ✓ act.agent correct: {act.get('agent')}", file=sys.stderr, flush=True)
-                    
-                    if errors:
-                        test3_error = "; ".join(errors)
-                        print(f"\n✗ TEST 3 FAILED: Act claim validation errors", file=sys.stderr)
-                        for error in errors:
-                            print(f"  - {error}", file=sys.stderr)
-                    else:
-                        test3_passed = True
-                        print(f"\n✓ TEST 3 PASSED: 'act' claim present and valid", file=sys.stderr)
+                errors = []
+                
+                # Required/conditional claims from SPEC_UPDATED section 9.1
+                if payload.get("iss") != auth2_id:
+                    errors.append(f"iss mismatch: expected {auth2_id}, got {payload.get('iss')}")
+                if payload.get("aud") != resource2_id:
+                    errors.append(f"aud mismatch: expected {resource2_id}, got {payload.get('aud')}")
+                if payload.get("agent") != resource1_id:
+                    errors.append(f"agent mismatch: expected {resource1_id}, got {payload.get('agent')}")
+                if "sub" not in payload and "scope" not in payload:
+                    errors.append("missing both sub and scope; at least one is required")
+                
+                # Legacy act claim is no longer spec-defined for call chaining in SPEC_UPDATED
+                if "act" in payload:
+                    errors.append("unexpected legacy 'act' claim present in exchanged token")
+                
+                if errors:
+                    test3_error = "; ".join(errors)
+                    print(f"\n✗ TEST 3 FAILED: claim validation errors", file=sys.stderr)
+                    for error in errors:
+                        print(f"  - {error}", file=sys.stderr)
                 else:
-                    test3_error = "'act' claim not present in exchanged token"
-                    print(f"\n✗ TEST 3 FAILED: {test3_error}", file=sys.stderr)
+                    test3_passed = True
+                    print(f"\n✓ TEST 3 PASSED: exchanged token claims are SPEC_UPDATED-compliant", file=sys.stderr)
         
     except Exception as e:
         test3_error = str(e)
@@ -373,7 +371,7 @@ async def main():
         import traceback
         traceback.print_exc()
     
-    test_results.append(("TEST 3: Verify 'act' Claim", test3_passed, test3_error))
+    test_results.append(("TEST 3: Verify Exchanged Token Claims", test3_passed, test3_error))
     
     # Print summary
     print("\n" + "=" * 80, file=sys.stderr)
