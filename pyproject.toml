@@ -41,8 +41,8 @@ dev = [
     "python-multipart>=0.0.6",
 ]
 
-[tool.setuptools]
-packages = ["aauth"]
+[tool.setuptools.packages.find]
+include = ["aauth*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]
