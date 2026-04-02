@@ -290,15 +290,15 @@ class Agent:
                     print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
         
-        # Handle auth token challenge (AAuth or Agent-Auth header)
+        # Handle auth token challenge (AAuth-Requirement, AAuth, or Agent-Auth header)
         if response.status_code == 401:
-            aauth_header = response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
+            aauth_header = response.headers.get("aauth-requirement", "") or response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
             if debug:
                 logger.debug(f"Received 401, challenge header: {aauth_header}")
 
             if aauth_header:
                 parsed = parse_aauth_header(aauth_header)
-                require = parsed.get("require", "")
+                require = parsed.get("requirement") or parsed.get("require", "")
                 # Fall back to old Agent-Auth format
                 if not require and "resource_token" in aauth_header:
                     import re as _re
@@ -545,8 +545,15 @@ class Agent:
 
         body = response.json()
         pending_url = body.get("location") or response.headers.get("location")
-        require = body.get("require")
-        code = body.get("code")
+        # Check AAuth-Requirement header first, then fall back to body
+        aauth_req_header = response.headers.get("aauth-requirement", "")
+        if aauth_req_header:
+            parsed_req = parse_aauth_header(aauth_req_header)
+            require = parsed_req.get("requirement") or parsed_req.get("require")
+            code = parsed_req.get("code") or body.get("code")
+        else:
+            require = body.get("require")
+            code = body.get("code")
 
         if not pending_url:
             if debug:
@@ -559,8 +566,14 @@ class Agent:
         # If interaction required, direct user to interaction endpoint
         if require == "interaction" and code:
             try:
-                metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
-                interaction_endpoint = metadata.get("interaction_endpoint")
+                # Prefer url from AAuth-Requirement header, fall back to metadata
+                interaction_endpoint = None
+                if aauth_req_header:
+                    parsed_req = parse_aauth_header(aauth_req_header)
+                    interaction_endpoint = parsed_req.get("url")
+                if not interaction_endpoint:
+                    metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
+                    interaction_endpoint = metadata.get("interaction_endpoint")
                 if interaction_endpoint:
                     interaction_url = f"{interaction_endpoint}?code={code}"
 

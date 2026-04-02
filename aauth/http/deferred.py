@@ -87,11 +87,11 @@ def build_pending_response_headers(
         "Content-Type": "application/json",
     }
 
-    # Build AAuth header if needed
+    # Build AAuth-Requirement header if needed
     if require == "interaction" and code:
-        headers["AAuth"] = f'require=interaction; code="{code}"'
+        headers["AAuth-Requirement"] = f'requirement=interaction; code="{code}"'
     elif require == "approval":
-        headers["AAuth"] = "require=approval"
+        headers["AAuth-Requirement"] = "requirement=approval"
 
     return headers
 

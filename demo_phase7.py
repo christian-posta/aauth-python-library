@@ -307,9 +307,9 @@ async def main():
                 headers=sig_headers
             )
         
-        # Parse challenge to get resource_token (new AAuth format with Agent-Auth fallback)
+        # Parse challenge to get resource_token (AAuth-Requirement with AAuth/Agent-Auth fallback)
         import re
-        aauth_header = initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        aauth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
         
         if not resource_token_match:

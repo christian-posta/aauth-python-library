@@ -11,17 +11,28 @@ from .errors import (
     MetadataError,
     JWKSError,
     build_error_response,
-    ERROR_INVALID_SIGNATURE,
-    ERROR_INVALID_AGENT_TOKEN,
-    ERROR_INVALID_RESOURCE_TOKEN,
-    ERROR_INVALID_AUTH_TOKEN,
-    ERROR_KEY_BINDING_FAILED,
+    # AAuth-Error header codes (draft-hardt-aauth-headers)
     ERROR_INVALID_REQUEST,
+    ERROR_INVALID_INPUT,
+    ERROR_INVALID_SIGNATURE,
+    ERROR_UNSUPPORTED_ALGORITHM,
+    ERROR_INVALID_KEY,
+    ERROR_UNKNOWN_KEY,
+    ERROR_INVALID_JWT,
+    ERROR_EXPIRED_JWT,
+    # Token endpoint error codes (draft-hardt-aauth-protocol)
+    ERROR_INVALID_AGENT_TOKEN,
+    ERROR_EXPIRED_AGENT_TOKEN,
+    ERROR_INVALID_RESOURCE_TOKEN,
+    ERROR_EXPIRED_RESOURCE_TOKEN,
+    ERROR_INVALID_AUTH_TOKEN,
     ERROR_SERVER_ERROR,
+    # Polling error codes (draft-hardt-aauth-protocol)
     ERROR_DENIED,
     ERROR_ABANDONED,
     ERROR_EXPIRED,
     ERROR_INVALID_CODE,
+    ERROR_SLOW_DOWN,
 )
 
 # Identifiers
@@ -77,11 +88,19 @@ from .headers.signature import build_signature_header, parse_signature
 from .headers.agent_auth import parse_agent_auth_header, build_agent_auth_challenge
 from .headers.aauth_header import (
     parse_aauth_header,
+    parse_aauth_requirement,
     build_pseudonym_challenge,
+    build_pseudonym_requirement,
     build_identity_challenge,
+    build_identity_requirement,
     build_auth_token_challenge,
+    build_auth_token_requirement,
     build_interaction_challenge,
+    build_interaction_requirement,
     build_approval_challenge,
+    build_approval_requirement,
+    build_aauth_error,
+    parse_aauth_error,
     REQUIRE_PSEUDONYM,
     REQUIRE_IDENTITY,
     REQUIRE_AUTH_TOKEN,
@@ -106,7 +125,7 @@ from .resource.token_issuer import ResourceTokenIssuer
 __all__ = [
     # Version
     "__version__",
-    
+
     # Errors and error codes
     "AAuthError",
     "SignatureError",
@@ -115,17 +134,25 @@ __all__ = [
     "MetadataError",
     "JWKSError",
     "build_error_response",
-    "ERROR_INVALID_SIGNATURE",
-    "ERROR_INVALID_AGENT_TOKEN",
-    "ERROR_INVALID_RESOURCE_TOKEN",
-    "ERROR_INVALID_AUTH_TOKEN",
-    "ERROR_KEY_BINDING_FAILED",
     "ERROR_INVALID_REQUEST",
+    "ERROR_INVALID_INPUT",
+    "ERROR_INVALID_SIGNATURE",
+    "ERROR_UNSUPPORTED_ALGORITHM",
+    "ERROR_INVALID_KEY",
+    "ERROR_UNKNOWN_KEY",
+    "ERROR_INVALID_JWT",
+    "ERROR_EXPIRED_JWT",
+    "ERROR_INVALID_AGENT_TOKEN",
+    "ERROR_EXPIRED_AGENT_TOKEN",
+    "ERROR_INVALID_RESOURCE_TOKEN",
+    "ERROR_EXPIRED_RESOURCE_TOKEN",
+    "ERROR_INVALID_AUTH_TOKEN",
     "ERROR_SERVER_ERROR",
     "ERROR_DENIED",
     "ERROR_ABANDONED",
     "ERROR_EXPIRED",
     "ERROR_INVALID_CODE",
+    "ERROR_SLOW_DOWN",
 
     # Identifiers
     "validate_server_identifier",
@@ -136,11 +163,11 @@ __all__ = [
     "_is_debug_enabled",
     "_is_http_debug_enabled",
     "_is_jwt_token_debug_enabled",
-    
+
     # HTTP abstraction
     "AAuthRequest",
     "AAuthResponse",
-    
+
     # Key management
     "generate_ed25519_keypair",
     "public_key_to_jwk",
@@ -150,7 +177,7 @@ __all__ = [
     "JWKSFetcher",
     "JWKSCache",
     "DefaultHTTPClient",
-    
+
     # HTTP Message Signing
     "sign_request",
     "verify_signature",
@@ -161,7 +188,7 @@ __all__ = [
     "ECDSA_P384_SHA384",
     "SUPPORTED_ALGORITHMS",
     "is_supported",
-    
+
     # Token handling
     "create_agent_token",
     "verify_agent_token",
@@ -169,7 +196,7 @@ __all__ = [
     "parse_token_claims",
     "verify_token",
     "create_resource_token",
-    
+
     # Header handling
     "build_signature_key_header",
     "parse_signature_key",
@@ -179,18 +206,27 @@ __all__ = [
     "parse_signature",
     "parse_agent_auth_header",
     "build_agent_auth_challenge",
-    
+    "parse_aauth_header",
+    "parse_aauth_requirement",
+    "build_pseudonym_requirement",
+    "build_identity_requirement",
+    "build_auth_token_requirement",
+    "build_interaction_requirement",
+    "build_approval_requirement",
+    "build_aauth_error",
+    "parse_aauth_error",
+
     # Metadata
     "generate_agent_metadata",
     "generate_resource_metadata",
     "generate_auth_metadata",
     "fetch_auth_metadata",
     "fetch_metadata",
-    
+
     # Agent role
     "AgentRequestSigner",
     "ChallengeHandler",
-    
+
     # Resource role
     "RequestVerifier",
     "ChallengeBuilder",

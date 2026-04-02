@@ -1,13 +1,20 @@
-"""Signature-Key header parsing and building for AAuth."""
+"""Signature-Key header parsing and building for AAuth.
+
+Supports schemes per draft-hardt-httpbis-signature-key:
+- hwk: Hardware/inline public key (pseudonymous)
+- jkt-jwt: Self-issued key delegation from hardware-backed enclave key (pseudonymous)
+- jwks_uri: Reference to JWKS endpoint (identity)
+- jwt: JWT containing public key in cnf claim (identity)
+"""
 
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from ..keys.jwk import public_key_to_jwk
 
 
 def build_signature_key_header(
     sig_scheme: str,
-    private_key,
+    private_key=None,
     label: str = "sig",
     **kwargs
 ) -> str:
@@ -17,12 +24,13 @@ def build_signature_key_header(
     The label must match the label used in Signature-Input and Signature headers.
 
     Args:
-        sig_scheme: Signature scheme ("hwk", "jwks_uri", "jwt")
+        sig_scheme: Signature scheme ("hwk", "jkt-jwt", "jwks_uri", "jwt")
         private_key: Private key (for hwk scheme)
         label: Signature label (default: "sig")
         **kwargs: Additional parameters:
             - For "hwk": None (key extracted from private_key)
-            - For "jwks_uri": id (required), kid (required)
+            - For "jkt-jwt": jwt (required) - the delegation JWT
+            - For "jwks_uri": id (required), kid (required), dwk (optional)
             - For "jwt": jwt (required)
 
     Returns:
@@ -35,17 +43,26 @@ def build_signature_key_header(
         public_key = private_key.public_key()
         jwk = public_key_to_jwk(public_key)
         return f'{label}=(scheme=hwk kty="{jwk["kty"]}" crv="{jwk["crv"]}" x="{jwk["x"]}")'
+    elif sig_scheme == "jkt-jwt":
+        jwt_token = kwargs.get("jwt")
+        if not jwt_token:
+            raise ValueError("scheme=jkt-jwt requires 'jwt' parameter")
+        return f'{label}=(scheme=jkt-jwt jwt="{jwt_token}")'
     elif sig_scheme == "jwks_uri":
         agent_id = kwargs.get("id")
         kid = kwargs.get("kid", "key-1")
+        dwk = kwargs.get("dwk")
         if not agent_id:
-            raise ValueError("sig=jwks_uri requires 'id' parameter")
-        header_parts = [f'scheme=jwks_uri', f'id="{agent_id}"', f'kid="{kid}"']
+            raise ValueError("scheme=jwks_uri requires 'id' parameter")
+        header_parts = [f'scheme=jwks_uri', f'id="{agent_id}"']
+        if dwk:
+            header_parts.append(f'dwk="{dwk}"')
+        header_parts.append(f'kid="{kid}"')
         return f'{label}=({" ".join(header_parts)})'
     elif sig_scheme == "jwt":
         jwt_token = kwargs.get("jwt")
         if not jwt_token:
-            raise ValueError("sig=jwt requires 'jwt' parameter")
+            raise ValueError("scheme=jwt requires 'jwt' parameter")
         return f'{label}=(scheme=jwt jwt="{jwt_token}")'
     else:
         raise ValueError(f"Unknown signature scheme: {sig_scheme}")

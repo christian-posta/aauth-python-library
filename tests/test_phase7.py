@@ -75,8 +75,8 @@ def auth_server2(auth2_id, auth1_id):
 class TestAuthTokenClaims:
     """Test auth token claim behavior per updated spec."""
     
-    def test_create_auth_token_with_txn_claim(self):
-        """Test that auth token can be created with txn claim."""
+    def test_create_auth_token_has_dwk_claim(self):
+        """Test that auth token includes dwk claim per updated spec."""
         private_key, public_key = generate_ed25519_keypair()
         cnf_jwk = public_key_to_jwk(public_key, kid="test-key")
 
@@ -89,18 +89,17 @@ class TestAuthTokenClaims:
             private_key=private_key,
             kid="auth-key-1",
             sub="user-123",
-            txn="txn-123"
         )
-        
+
         # Parse token
         claims = parse_token_claims(token)
         payload = claims["payload"]
-        
-        # Verify txn claim is present
-        assert payload["txn"] == "txn-123"
-    
-    def test_create_auth_token_without_txn(self):
-        """Test that auth token without txn claim works normally."""
+
+        # Verify dwk claim is present with correct value
+        assert payload["dwk"] == "aauth-issuer"
+
+    def test_create_auth_token_has_jti_claim(self):
+        """Test that auth token includes jti claim for replay detection."""
         private_key, public_key = generate_ed25519_keypair()
         cnf_jwk = public_key_to_jwk(public_key, kid="test-key")
 
@@ -114,13 +113,13 @@ class TestAuthTokenClaims:
             kid="auth-key-1",
             sub="user-123"
         )
-        
+
         # Parse token
         claims = parse_token_claims(token)
         payload = claims["payload"]
-        
-        # Verify txn claim is not present by default
-        assert "txn" not in payload
+
+        # Verify jti claim is present
+        assert "jti" in payload
 
 
 class TestFederationTrust:
@@ -257,8 +256,8 @@ async def test_token_exchange_returns_required_claims(
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
         
-        agent_auth_header = initial_response.headers.get("Agent-Auth", "")
-        resource_token_match = re.search(r'resource_token="([^"]+)"', agent_auth_header)
+        agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
         
         assert resource_token_match, f"Should have resource_token in challenge, got: {agent_auth_header}"
         resource_token = resource_token_match.group(1)
@@ -353,8 +352,8 @@ async def test_untrusted_auth_server_rejected(
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
         
-        agent_auth_header = initial_response.headers.get("Agent-Auth", "")
-        resource_token_match = re.search(r'resource_token="([^"]+)"', agent_auth_header)
+        agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
         
         assert resource_token_match, f"Should have resource_token in challenge"
         resource_token = resource_token_match.group(1)

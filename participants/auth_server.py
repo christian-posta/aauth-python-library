@@ -462,7 +462,6 @@ class AuthServer:
             logger.debug(f"agent_jwk extracted: {agent_jwk is not None}")
 
         # Determine resource_id and scope based on mode
-        resource_txn = None
         if agent_is_resource:
             resource_id = agent_id
             if not scope:
@@ -482,11 +481,8 @@ class AuthServer:
                 )
             resource_id = resource_claims.get("iss")
             scope = resource_claims.get("scope", "")
-            resource_txn = resource_claims.get("txn")
             if debug:
                 logger.debug(f"Resource access mode: resource_id={resource_id}, scope={scope}")
-                if resource_txn:
-                    logger.debug(f"Resource token txn: {resource_txn}")
 
         # Evaluate policy
         policy_result = self._evaluate_policy(agent_id, resource_id, scope)
@@ -514,7 +510,6 @@ class AuthServer:
                 agent_jwk=agent_key,
                 purpose=purpose,
                 agent_is_resource=agent_is_resource,
-                txn=resource_txn,
                 clarification_supported=agent_clarification_supported,
             )
 
@@ -525,14 +520,12 @@ class AuthServer:
                 content={"error": "denied", "error_description": policy_result.get("reason", "Access denied")}
             )
 
-        # Issue auth token (carry forward txn from resource token if present)
-        txn = resource_txn if not agent_is_resource else None
+        # Issue auth token (direct grant)
         auth_token = self._issue_auth_token(
             agent=agent_id,
             resource=resource_id,
             scope=scope,
             cnf_jwk=agent_key,
-            txn=txn,
         )
 
         if debug:
@@ -705,7 +698,6 @@ class AuthServer:
         agent_jwk: Dict[str, Any],
         purpose: Optional[str] = None,
         agent_is_resource: bool = False,
-        txn: Optional[str] = None,
         clarification_supported: bool = False,
     ) -> Response:
         """Create a pending request and return 202 with Location + interaction code.
@@ -727,7 +719,6 @@ class AuthServer:
             "purpose": purpose,
             "agent_is_resource": agent_is_resource,
             "interaction_code": interaction_code,
-            "txn": txn,
             "status": "pending",  # pending | approved | denied | expired
             "user_id": None,
             "created_at": int(time.time()),
@@ -786,7 +777,6 @@ class AuthServer:
             scope_val = pending["scope"]
             agent_jwk = pending["agent_jwk"]
             user_id = pending.get("user_id")
-            pending_txn = pending.get("txn")
 
             auth_token = self._issue_auth_token(
                 agent=agent_id,
@@ -794,7 +784,6 @@ class AuthServer:
                 scope=scope_val,
                 cnf_jwk=agent_jwk,
                 sub=user_id,
-                txn=pending_txn,
             )
 
             # Clean up pending request
@@ -1082,7 +1071,6 @@ class AuthServer:
         cnf_jwk: Dict[str, Any],
         sub: Optional[str] = None,
         agent_is_resource: bool = False,
-        txn: Optional[str] = None,
         **kwargs
     ) -> str:
         """Issue auth token per AAuth spec Section 9.1.
@@ -1094,7 +1082,6 @@ class AuthServer:
             cnf_jwk: Agent's public signing key (JWK format)
             sub: Optional user identifier
             agent_is_resource: Ignored (kept for caller compatibility during migration)
-            txn: Optional transaction identifier (carried forward from resource token)
 
         Returns:
             Signed auth token JWT string
@@ -1108,8 +1095,6 @@ class AuthServer:
             print(f"DEBUG AUTH:   Scope: {scope}", file=sys.stderr, flush=True)
             if sub:
                 print(f"DEBUG AUTH:   User (sub): {sub}", file=sys.stderr, flush=True)
-            if txn:
-                print(f"DEBUG AUTH:   Txn: {txn}", file=sys.stderr, flush=True)
 
         # Create auth token
         token = create_auth_token(
@@ -1122,7 +1107,6 @@ class AuthServer:
             kid=self.kid,
             exp=None,  # Default 1 hour
             sub=sub,
-            txn=txn,
         )
         
         if debug:
@@ -1575,7 +1559,6 @@ class AuthServer:
                 agent_jwk=resource_jwk_for_cnf,
                 purpose="Downstream access via interaction chaining",
                 agent_is_resource=True,
-                txn=resource_claims.get("txn"),
                 clarification_supported=False,
             )
 
