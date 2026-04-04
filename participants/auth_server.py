@@ -814,7 +814,9 @@ class AuthServer:
             if questions and len(history) < len(questions):
                 clarification = questions[len(history)]
 
-        body = build_pending_response_body(location=pending_url, clarification=clarification)
+        # Return interacting status if user has arrived at interaction endpoint
+        poll_status = pending.get("status", "pending")
+        body = build_pending_response_body(location=pending_url, clarification=clarification, status=poll_status)
         headers = build_pending_response_headers(location=pending_url, retry_after=2)
 
         return Response(
@@ -905,6 +907,9 @@ class AuthServer:
                 status_code=400,
                 content="<html><body><h1>Error</h1><p>Interaction code expired</p></body></html>",
             )
+
+        # Mark as interacting — user has arrived at the interaction endpoint
+        pending_details["status"] = "interacting"
 
         # Store callback URL if provided
         if callback:

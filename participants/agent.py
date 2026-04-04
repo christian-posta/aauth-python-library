@@ -312,12 +312,20 @@ class Agent:
 
                 if require == "auth-token":
                     resource_token_val = parsed.get("resource_token") or parsed.get("resource-token")
+                    # Auth server from header (backward compat) or from resource token aud claim
                     auth_server = parsed.get("auth_server") or parsed.get("auth-server")
+                    if not auth_server and resource_token_val:
+                        try:
+                            import jwt as jwt_lib
+                            rt_payload = jwt_lib.decode(resource_token_val, options={"verify_signature": False})
+                            auth_server = rt_payload.get("aud")
+                        except Exception:
+                            pass
 
                     if resource_token_val and auth_server:
                         self.resource_token = resource_token_val
                         if debug:
-                            logger.debug(f"Auth token challenge: auth_server={auth_server}")
+                            logger.debug(f"Auth token challenge: auth_server={auth_server} (from {'header' if parsed.get('auth_server') or parsed.get('auth-server') else 'resource token aud'})")
 
                         auth_token = await self._request_auth_token(resource_token_val, auth_server)
                         if auth_token:

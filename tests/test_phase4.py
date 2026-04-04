@@ -49,7 +49,7 @@ def test_create_pending_request_returns_202_with_interaction_code(auth_server):
     body = json.loads(resp.body.decode())
     assert body["status"] == "pending"
     assert body["location"]
-    assert body["require"] == "interaction"
+    assert body["requirement"] == "interaction"
     assert body["code"]
     assert len(auth_server.pending_requests) == 1
     pending_id = next(iter(auth_server.pending_requests))

@@ -743,7 +743,7 @@ class Resource:
             print(f"DEBUG RESOURCE: Issued resource token for agent_id={agent_id}, agent_jkt={agent_jkt[:20]}...", file=sys.stderr, flush=True)
         
         # Build AAuth challenge header
-        aauth_header = f'requirement=auth-token; resource-token="{resource_token}"; auth-server="{self.auth_server}"'
+        aauth_header = f'requirement=auth-token; resource-token="{resource_token}"'
 
         response = Response(
             status_code=401,
@@ -1466,28 +1466,37 @@ class Resource:
         if debug:
             print(f"DEBUG RESOURCE:   Received AAuth challenge: {aauth_header}", file=sys.stderr, flush=True)
 
-        # Extract resource-token and auth-server from challenge
-        # New format: require=auth-token; resource-token="..."; auth-server="..."
+        # Extract resource-token from challenge
+        # New format: requirement=auth-token; resource-token="..."
         # Old format: httpsig; auth-token; resource_token="..."; auth_server="..."
         import re
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
-        auth_server_match = re.search(r'auth[-_]server="([^"]+)"', aauth_header)
-        
+
         if not resource_token_match:
             if debug:
                 print(f"DEBUG RESOURCE:   No resource_token in challenge (may be identity challenge)", file=sys.stderr, flush=True)
             return initial_response
-        
+
         resource_token = resource_token_match.group(1)
+
+        # Discover auth server from resource token aud claim, fall back to header
+        auth_server_match = re.search(r'auth[-_]server="([^"]+)"', aauth_header)
         auth_server = auth_server_match.group(1) if auth_server_match else None
-        
+        if not auth_server:
+            try:
+                import jwt as jwt_lib
+                rt_payload = jwt_lib.decode(resource_token, options={"verify_signature": False})
+                auth_server = rt_payload.get("aud")
+            except Exception:
+                pass
+
         if debug:
             print(f"DEBUG RESOURCE:   Resource token: {resource_token[:100]}...", file=sys.stderr, flush=True)
             print(f"DEBUG RESOURCE:   Auth server: {auth_server}", file=sys.stderr, flush=True)
-        
+
         if not auth_server:
             if debug:
-                print(f"DEBUG RESOURCE:   No auth_server in challenge", file=sys.stderr, flush=True)
+                print(f"DEBUG RESOURCE:   No auth_server discoverable from challenge or resource token", file=sys.stderr, flush=True)
             return initial_response
         
         if not upstream_auth_token:
@@ -1722,12 +1731,22 @@ class Resource:
         aauth_header = challenge_response.headers.get("AAuth-Requirement", "") or challenge_response.headers.get("AAuth", "") or challenge_response.headers.get("Agent-Auth", "")
         import re
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
-        auth_server_match = re.search(r'auth[-_]server="([^"]+)"', aauth_header)
-        if not resource_token_match or not auth_server_match:
+        if not resource_token_match:
             return {"mode": "final_response", "response": challenge_response}
 
         resource_token = resource_token_match.group(1)
-        auth_server = auth_server_match.group(1)
+        # Discover auth server from resource token aud claim, fall back to header
+        auth_server_match = re.search(r'auth[-_]server="([^"]+)"', aauth_header)
+        auth_server = auth_server_match.group(1) if auth_server_match else None
+        if not auth_server:
+            try:
+                import jwt as jwt_lib
+                rt_payload = jwt_lib.decode(resource_token, options={"verify_signature": False})
+                auth_server = rt_payload.get("aud")
+            except Exception:
+                pass
+        if not auth_server:
+            return {"mode": "final_response", "response": challenge_response}
         token_endpoint = f"{auth_server}/token"
         request_data = {"resource_token": resource_token, "upstream_token": upstream_auth_token}
         request_body = json.dumps(request_data).encode("utf-8")

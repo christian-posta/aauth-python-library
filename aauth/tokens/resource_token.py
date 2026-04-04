@@ -47,7 +47,7 @@ def create_resource_token(
     payload = {
         "iss": iss,
         "aud": aud,
-        "dwk": "aauth-resource",
+        "dwk": "aauth-resource.json",
         "jti": str(uuid.uuid4()),
         "agent": agent,
         "agent_jkt": agent_jkt,

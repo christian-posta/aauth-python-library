@@ -103,11 +103,11 @@ async def main():
                 print(f"    jti: {payload.get('jti')}", file=sys.stderr)
                 print(f"    dwk: {payload.get('dwk', '(not present)')}", file=sys.stderr)
 
-                if payload.get("dwk") == "aauth-issuer" and "jti" in payload:
+                if payload.get("dwk") == "aauth-issuer.json" and "jti" in payload:
                     test1_passed = True
                     print(f"\n  ✓ dwk correctly set to 'aauth-issuer'", file=sys.stderr)
                     print(f"  ✓ jti present for replay detection", file=sys.stderr)
-                elif payload.get("dwk") != "aauth-issuer":
+                elif payload.get("dwk") != "aauth-issuer.json":
                     test1_error = f"dwk should be 'aauth-issuer', got: {payload.get('dwk')}"
                     print(f"\n  ✗ dwk incorrect: {payload.get('dwk')}", file=sys.stderr)
                 else:
@@ -164,7 +164,7 @@ async def main():
 
                 print(f"\n  Auth token dwk: {dwk or '(not present)'}", file=sys.stderr)
 
-                if dwk == "aauth-issuer":
+                if dwk == "aauth-issuer.json":
                     test2_passed = True
                     print(f"\n  ✓ Auth token dwk correctly set to 'aauth-issuer'", file=sys.stderr)
                     print(f"    Key discovery: {{iss}}/.well-known/{{dwk}}.json", file=sys.stderr)

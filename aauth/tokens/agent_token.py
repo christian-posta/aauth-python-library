@@ -47,7 +47,7 @@ def create_agent_token(
     payload = {
         "iss": iss,
         "sub": sub,
-        "dwk": "aauth-agent",
+        "dwk": "aauth-agent.json",
         "jti": str(uuid.uuid4()),
         "cnf": {"jwk": cnf_jwk},
         "iat": now,

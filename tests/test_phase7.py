@@ -96,7 +96,7 @@ class TestAuthTokenClaims:
         payload = claims["payload"]
 
         # Verify dwk claim is present with correct value
-        assert payload["dwk"] == "aauth-issuer"
+        assert payload["dwk"] == "aauth-issuer.json"
 
     def test_create_auth_token_has_jti_claim(self):
         """Test that auth token includes jti claim for replay detection."""

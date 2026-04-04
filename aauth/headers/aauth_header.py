@@ -117,18 +117,22 @@ def build_identity_requirement() -> str:
 
 def build_auth_token_requirement(
     resource_token: str,
-    auth_server: str
+    auth_server: str = None,
 ) -> str:
     """Build AAuth-Requirement requiring an auth token.
 
+    Per spec, the auth server is discovered from the resource token's aud claim,
+    not from a separate parameter. The auth_server parameter is accepted for
+    backward compatibility but not included in the header.
+
     Args:
         resource_token: Resource token JWT string
-        auth_server: Auth server URL
+        auth_server: Deprecated - auth server discovered from resource token aud
 
     Returns:
-        AAuth-Requirement header value with resource-token and auth-server
+        AAuth-Requirement header value with resource-token
     """
-    return f'requirement=auth-token; resource-token="{resource_token}"; auth-server="{auth_server}"'
+    return f'requirement=auth-token; resource-token="{resource_token}"'
 
 
 def build_interaction_requirement(url: str, code: str) -> str:

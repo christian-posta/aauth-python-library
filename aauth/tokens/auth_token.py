@@ -58,7 +58,7 @@ def create_auth_token(
     payload = {
         "iss": iss,
         "aud": aud,
-        "dwk": "aauth-issuer",
+        "dwk": "aauth-issuer.json",
         "jti": str(uuid.uuid4()),
         "cnf": {"jwk": cnf_jwk},
         "iat": now,

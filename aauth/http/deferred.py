@@ -38,6 +38,7 @@ def build_pending_response_body(
     require: Optional[str] = None,
     code: Optional[str] = None,
     clarification: Optional[str] = None,
+    status: str = "pending",
 ) -> Dict[str, Any]:
     """Build the JSON body for a 202 Accepted pending response.
 
@@ -46,16 +47,17 @@ def build_pending_response_body(
         require: Requirement level ("interaction" or "approval")
         code: Interaction code (required when require="interaction")
         clarification: User's question during clarification chat
+        status: Status string - "pending" or "interacting" (user arrived at interaction endpoint)
 
     Returns:
         Response body dictionary
     """
     body = {
-        "status": "pending",
+        "status": status,
         "location": location,
     }
     if require:
-        body["require"] = require
+        body["requirement"] = require
     if code:
         body["code"] = code
     if clarification:
@@ -131,16 +133,22 @@ def build_polling_error_body(error: str, description: Optional[str] = None) -> D
 def parse_pending_response(body: Dict[str, Any]) -> Dict[str, Any]:
     """Parse a pending response body from a server.
 
+    Per spec, status can be "pending" or "interacting" (user arrived at interaction
+    endpoint). Agents MUST treat unrecognized status values as "pending".
+
     Args:
         body: Response JSON body
 
     Returns:
-        Parsed response with keys: status, location, require, code, clarification
+        Parsed response with keys: status, requirement, code, clarification, location
     """
+    status = body.get("status", "pending")
+    if status not in ("pending", "interacting"):
+        status = "pending"
     return {
-        "status": body.get("status"),
+        "status": status,
         "location": body.get("location"),
-        "require": body.get("require"),
+        "requirement": body.get("requirement") or body.get("require"),
         "code": body.get("code"),
         "clarification": body.get("clarification"),
     }
