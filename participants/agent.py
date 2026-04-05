@@ -292,7 +292,7 @@ class Agent:
         
         # Handle auth token challenge (AAuth-Requirement, AAuth, or Agent-Auth header)
         if response.status_code == 401:
-            aauth_header = response.headers.get("aauth-requirement", "") or response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
+            aauth_header = response.headers.get("signature-requirement", "") or response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
             if debug:
                 logger.debug(f"Received 401, challenge header: {aauth_header}")
 
@@ -554,7 +554,7 @@ class Agent:
         body = response.json()
         pending_url = body.get("location") or response.headers.get("location")
         # Check AAuth-Requirement header first, then fall back to body
-        aauth_req_header = response.headers.get("aauth-requirement", "")
+        aauth_req_header = response.headers.get("signature-requirement", "")
         if aauth_req_header:
             parsed_req = parse_aauth_header(aauth_req_header)
             require = parsed_req.get("requirement") or parsed_req.get("require")

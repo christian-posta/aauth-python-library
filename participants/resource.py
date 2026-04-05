@@ -260,7 +260,7 @@ class Resource:
             
             response = Response(
                 status_code=401,
-                headers={"AAuth-Requirement": agent_auth_value},
+                headers={"Signature-Requirement": agent_auth_value},
                 content="Missing signature headers"
             )
             if _is_http_debug_enabled():
@@ -275,7 +275,7 @@ class Resource:
             
             response = Response(
                 status_code=401,
-                headers={"AAuth-Requirement": agent_auth_value},
+                headers={"Signature-Requirement": agent_auth_value},
                 content=f"Invalid Signature-Key header: {e}"
             )
             if _is_http_debug_enabled():
@@ -319,7 +319,7 @@ class Resource:
                                 agent_auth_value = "requirement=identity"
                                 response = Response(
                                     status_code=401,
-                                    headers={"AAuth-Requirement": agent_auth_value},
+                                    headers={"Signature-Requirement": agent_auth_value},
                                     content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                                 )
                                 if _is_http_debug_enabled():
@@ -333,7 +333,7 @@ class Resource:
                             agent_auth_value = "requirement=identity"
                             response = Response(
                                 status_code=401,
-                                headers={"AAuth-Requirement": agent_auth_value},
+                                headers={"Signature-Requirement": agent_auth_value},
                                 content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                             )
                             if _is_http_debug_enabled():
@@ -347,7 +347,7 @@ class Resource:
                         agent_auth_value = "requirement=identity"
                         response = Response(
                             status_code=401,
-                            headers={"AAuth-Requirement": agent_auth_value},
+                            headers={"Signature-Requirement": agent_auth_value},
                             content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                         )
                         if _is_http_debug_enabled():
@@ -375,7 +375,7 @@ class Resource:
                     
                     response = Response(
                         status_code=401,
-                        headers={"AAuth-Requirement": agent_auth_value},
+                        headers={"Signature-Requirement": agent_auth_value},
                         content=f"Invalid signature scheme: expected {required_scheme}, got {scheme}"
                     )
                     if _is_http_debug_enabled():
@@ -458,7 +458,7 @@ class Resource:
                     print("DEBUG RESOURCE: Signature verification failed", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"AAuth-Requirement": "requirement=pseudonym"},
+                    headers={"Signature-Requirement": "requirement=pseudonym"},
                     content="Invalid signature"
                 )
                 if _is_http_debug_enabled():
@@ -486,7 +486,7 @@ class Resource:
             if jwks_param:
                 response = Response(
                     status_code=401,
-                    headers={"AAuth-Requirement": "requirement=identity"},
+                    headers={"Signature-Requirement": "requirement=identity"},
                     content="Invalid Signature-Key: jwks parameter must not be present for sig=jwks"
                 )
                 if _is_http_debug_enabled():
@@ -496,7 +496,7 @@ class Resource:
             if not agent_id or not kid:
                 response = Response(
                     status_code=401,
-                    headers={"AAuth-Requirement": "requirement=identity"},
+                    headers={"Signature-Requirement": "requirement=identity"},
                     content="Missing id or kid in Signature-Key for sig=jwks"
                 )
                 if _is_http_debug_enabled():
@@ -529,7 +529,7 @@ class Resource:
                     print("DEBUG RESOURCE: Signature verification failed", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"AAuth-Requirement": "requirement=pseudonym"},
+                    headers={"Signature-Requirement": "requirement=pseudonym"},
                     content="Invalid signature"
                 )
                 if _is_http_debug_enabled():
@@ -557,7 +557,7 @@ class Resource:
             if not jwt_token:
                 response = Response(
                     status_code=401,
-                    headers={"AAuth-Requirement": "requirement=identity"},
+                    headers={"Signature-Requirement": "requirement=identity"},
                     content="Missing jwt parameter in Signature-Key for sig=jwt"
                 )
                 if _is_http_debug_enabled():
@@ -577,7 +577,7 @@ class Resource:
                     print(f"DEBUG RESOURCE:   Failed to parse token header: {e}", file=sys.stderr, flush=True)
                 response = Response(
                     status_code=401,
-                    headers={"AAuth-Requirement": "requirement=identity"},
+                    headers={"Signature-Requirement": "requirement=identity"},
                     content="Invalid JWT token"
                 )
                 if _is_http_debug_enabled():
@@ -596,7 +596,7 @@ class Resource:
                 if not agent_token_valid:
                     response = Response(
                         status_code=401,
-                        headers={"AAuth-Requirement": "requirement=identity"},
+                        headers={"Signature-Requirement": "requirement=identity"},
                         content="Invalid or expired agent token"
                     )
                     if _is_http_debug_enabled():
@@ -628,7 +628,7 @@ class Resource:
                 if not auth_token_valid:
                     response = Response(
                         status_code=401,
-                        headers={"AAuth-Requirement": "requirement=auth-token"},
+                        headers={"Signature-Requirement": "requirement=auth-token"},
                         content="Invalid or expired auth token"
                     )
                     if _is_http_debug_enabled():
@@ -654,7 +654,7 @@ class Resource:
                 # Unknown token type
                 response = Response(
                     status_code=401,
-                    headers={"AAuth-Requirement": "requirement=identity"},
+                    headers={"Signature-Requirement": "requirement=identity"},
                     content=f"Unsupported token type: {typ}"
                 )
                 if _is_http_debug_enabled():
@@ -664,7 +664,7 @@ class Resource:
         else:
             response = Response(
                 status_code=401,
-                headers={"AAuth-Requirement": "requirement=pseudonym"},
+                headers={"Signature-Requirement": "requirement=pseudonym"},
                 content=f"Unsupported signature scheme: {scheme}"
             )
             if _is_http_debug_enabled():
@@ -731,7 +731,7 @@ class Resource:
                 print(f"DEBUG RESOURCE: Cannot issue resource token - missing agent identity or key", file=sys.stderr, flush=True)
             return Response(
                 status_code=401,
-                headers={"AAuth-Requirement": "requirement=identity"},
+                headers={"Signature-Requirement": "requirement=identity"},
                 content="Agent identity required for authorization"
             )
         
@@ -747,7 +747,7 @@ class Resource:
 
         response = Response(
             status_code=401,
-            headers={"AAuth-Requirement": aauth_header},
+            headers={"Signature-Requirement": aauth_header},
             content="Authorization required"
         )
         
@@ -1240,7 +1240,7 @@ class Resource:
         if not signature_input_header or not signature_header or not signature_key_header:
             return JSONResponse(
                 status_code=401,
-                headers={"AAuth-Requirement": "requirement=identity"},
+                headers={"Signature-Requirement": "requirement=identity"},
                 content={"error": "invalid_request", "error_description": "Missing signature headers"}
             )
         
@@ -1252,7 +1252,7 @@ class Resource:
         except Exception as e:
             return JSONResponse(
                 status_code=401,
-                headers={"AAuth-Requirement": "requirement=identity"},
+                headers={"Signature-Requirement": "requirement=identity"},
                 content={"error": "invalid_request", "error_description": f"Invalid Signature-Key: {e}"}
             )
         
@@ -1260,7 +1260,7 @@ class Resource:
         if scheme not in ("jwks", "jwks_uri"):
             return JSONResponse(
                 status_code=401,
-                headers={"AAuth-Requirement": "requirement=identity"},
+                headers={"Signature-Requirement": "requirement=identity"},
                 content={"error": "invalid_request", "error_description": "Resource token endpoint requires sig=jwks"}
             )
         
@@ -1269,7 +1269,7 @@ class Resource:
         if not agent_id:
             return JSONResponse(
                 status_code=401,
-                headers={"AAuth-Requirement": "requirement=identity"},
+                headers={"Signature-Requirement": "requirement=identity"},
                 content={"error": "invalid_request", "error_description": "Could not extract agent identifier"}
             )
         
@@ -1294,7 +1294,7 @@ class Resource:
         if not is_valid:
             return JSONResponse(
                 status_code=401,
-                headers={"AAuth-Requirement": "requirement=identity"},
+                headers={"Signature-Requirement": "requirement=identity"},
                 content={"error": "invalid_signature", "error_description": "Signature verification failed"}
             )
         
@@ -1462,7 +1462,7 @@ class Resource:
             return initial_response
         
         # Parse AAuth challenge from response (with Agent-Auth fallback)
-        aauth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        aauth_header = initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         if debug:
             print(f"DEBUG RESOURCE:   Received AAuth challenge: {aauth_header}", file=sys.stderr, flush=True)
 
@@ -1728,7 +1728,7 @@ class Resource:
         if challenge_response.status_code != 401:
             return {"mode": "final_response", "response": challenge_response}
 
-        aauth_header = challenge_response.headers.get("AAuth-Requirement", "") or challenge_response.headers.get("AAuth", "") or challenge_response.headers.get("Agent-Auth", "")
+        aauth_header = challenge_response.headers.get("Signature-Requirement", "") or challenge_response.headers.get("AAuth", "") or challenge_response.headers.get("Agent-Auth", "")
         import re
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
         if not resource_token_match:

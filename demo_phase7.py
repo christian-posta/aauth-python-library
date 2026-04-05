@@ -309,7 +309,7 @@ async def main():
         
         # Parse challenge to get resource_token (AAuth-Requirement with AAuth/Agent-Auth fallback)
         import re
-        aauth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        aauth_header = initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', aauth_header)
         
         if not resource_token_match:

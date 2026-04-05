@@ -91,9 +91,9 @@ def build_pending_response_headers(
 
     # Build AAuth-Requirement header if needed
     if require == "interaction" and code:
-        headers["AAuth-Requirement"] = f'requirement=interaction; code="{code}"'
+        headers["Signature-Requirement"] = f'requirement=interaction; code="{code}"'
     elif require == "approval":
-        headers["AAuth-Requirement"] = "requirement=approval"
+        headers["Signature-Requirement"] = "requirement=approval"
 
     return headers
 

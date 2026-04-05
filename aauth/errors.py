@@ -1,7 +1,7 @@
 """Custom exceptions and error codes for AAuth."""
 
 
-# --- AAuth-Error Header Codes (401 responses, per draft-hardt-aauth-headers) ---
+# --- Signature-Error Header Codes (401 responses, per draft-hardt-httpbis-signature-key) ---
 
 ERROR_INVALID_REQUEST = "invalid_request"
 ERROR_INVALID_INPUT = "invalid_input"
@@ -37,7 +37,7 @@ def build_error_response(error: str, description: str = None, **extras) -> dict:
     """Build a standard AAuth token endpoint error response body (JSON).
 
     For authentication errors (401), use build_aauth_error() in aauth_header.py
-    to construct the AAuth-Error header instead.
+    to construct the Signature-Error header instead.
 
     Args:
         error: Error code (one of the token endpoint or polling ERROR_* constants)
@@ -79,7 +79,7 @@ class TokenError(AAuthError):
 
 
 class ChallengeError(AAuthError):
-    """AAuth-Requirement parsing or building error."""
+    """Signature-Requirement parsing or building error."""
 
     def __init__(self, message: str, challenge_type: str = None, details: dict = None):
         super().__init__(message)
