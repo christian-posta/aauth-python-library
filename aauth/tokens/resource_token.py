@@ -18,7 +18,6 @@ def create_resource_token(
     private_key: Ed25519PrivateKey,
     kid: str,
     exp: Optional[int] = None,
-    txn: Optional[str] = None,
 ) -> str:
     """Create a resource token (resource+jwt) per AAuth spec Section 8.1.
 
@@ -31,7 +30,6 @@ def create_resource_token(
         private_key: Resource's Ed25519 private key for signing
         kid: Key ID for signing key
         exp: Expiration timestamp (Unix time). Defaults to 10 minutes from now.
-        txn: Optional transaction identifier for correlation
 
     Returns:
         Signed JWT string (resource+jwt)
@@ -49,6 +47,7 @@ def create_resource_token(
     payload = {
         "iss": iss,
         "aud": aud,
+        "dwk": "aauth-resource.json",
         "jti": str(uuid.uuid4()),
         "agent": agent,
         "agent_jkt": agent_jkt,
@@ -56,9 +55,6 @@ def create_resource_token(
         "iat": now,
         "exp": exp,
     }
-
-    if txn is not None:
-        payload["txn"] = txn
 
     return jwt.encode(
         payload,

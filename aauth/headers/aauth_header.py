@@ -1,140 +1,327 @@
-"""AAuth HTTP response header parsing and building.
+"""Signature-Requirement and Signature-Error HTTP response header parsing and building.
 
-Per spec Section 6, the AAuth header is a Structured Fields Dictionary (RFC 8941)
-with a `require` key indicating the requirement level.
+Per draft-hardt-httpbis-signature-key, the Signature-Requirement header is a
+Structured Fields Dictionary (RFC 8941) with a `requirement` key indicating
+the requirement level. The Signature-Error header is a Structured Fields
+Dictionary with an `error` key indicating the error code.
+
+Base requirement levels (pseudonym, identity) are defined in the Signature-Key spec.
+Additional levels (auth-token, interaction, approval) are registered by the AAuth
+protocol spec (draft-hardt-aauth-protocol).
 """
 
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from ..errors import ChallengeError
 
 
-# Requirement levels
+# Requirement levels (base: pseudonym, identity from Signature-Key spec)
+# (extended: auth-token, interaction, approval from AAuth protocol spec)
 REQUIRE_PSEUDONYM = "pseudonym"
 REQUIRE_IDENTITY = "identity"
 REQUIRE_AUTH_TOKEN = "auth-token"
 REQUIRE_INTERACTION = "interaction"
 REQUIRE_APPROVAL = "approval"
 
+# Signature-Error codes (from draft-hardt-httpbis-signature-key)
+ERROR_INVALID_REQUEST = "invalid_request"
+ERROR_INVALID_INPUT = "invalid_input"
+ERROR_INVALID_SIGNATURE = "invalid_signature"
+ERROR_UNSUPPORTED_ALGORITHM = "unsupported_algorithm"
+ERROR_INVALID_KEY = "invalid_key"
+ERROR_UNKNOWN_KEY = "unknown_key"
+ERROR_INVALID_JWT = "invalid_jwt"
+ERROR_EXPIRED_JWT = "expired_jwt"
 
-def parse_aauth_header(header_value: str) -> Dict[str, Any]:
-    """Parse AAuth response header.
+
+def parse_signature_requirement(header_value: str) -> Dict[str, Any]:
+    """Parse Signature-Requirement response header.
 
     Formats:
-        AAuth: require=pseudonym
-        AAuth: require=identity
-        AAuth: require=auth-token; resource-token="..."; auth-server="..."
-        AAuth: require=interaction; code="ABCD1234"
-        AAuth: require=approval
+        Signature-Requirement: requirement=pseudonym
+        Signature-Requirement: requirement=identity
+        Signature-Requirement: requirement=identity, algorithms=("EdDSA" "ES256")
+        Signature-Requirement: requirement=auth-token; resource-token="..."
+        Signature-Requirement: requirement=interaction; url="..."; code="ABCD1234"
+        Signature-Requirement: requirement=approval
 
     Args:
-        header_value: AAuth header value
+        header_value: Signature-Requirement header value
 
     Returns:
         Dictionary with:
-        - require: str (pseudonym|identity|auth-token|interaction|approval)
+        - requirement: str
         - resource_token: Optional[str]
-        - auth_server: Optional[str]
+        - url: Optional[str]
         - code: Optional[str]
+        - algorithms: Optional[List[str]]
+        - required_input: Optional[List[str]]
 
     Raises:
         ChallengeError: If header format is invalid
     """
     try:
         result = {
-            "require": None,
+            "requirement": None,
             "resource_token": None,
             "auth_server": None,
+            "url": None,
             "code": None,
+            "algorithms": None,
+            "required_input": None,
         }
 
-        # Extract require value
-        require_match = re.search(r'require=([\w-]+)', header_value)
+        # Extract requirement value
+        require_match = re.search(r'requirement=([\w-]+)', header_value)
         if not require_match:
-            raise ChallengeError("AAuth header must include 'require' parameter")
+            raise ChallengeError("Signature-Requirement header must include 'requirement' parameter")
 
-        result["require"] = require_match.group(1)
+        result["requirement"] = require_match.group(1)
 
         # Extract resource-token parameter
         rt_match = re.search(r'resource-token="([^"]+)"', header_value)
         if rt_match:
             result["resource_token"] = rt_match.group(1)
 
-        # Extract auth-server parameter
+        # Extract auth-server parameter (backward compat)
         as_match = re.search(r'auth-server="([^"]+)"', header_value)
         if as_match:
             result["auth_server"] = as_match.group(1)
+
+        # Extract url parameter
+        url_match = re.search(r'url="([^"]+)"', header_value)
+        if url_match:
+            result["url"] = url_match.group(1)
 
         # Extract code parameter
         code_match = re.search(r'code="([^"]+)"', header_value)
         if code_match:
             result["code"] = code_match.group(1)
 
+        # Extract inner list parameters (algorithms, required_input)
+        for param_name in ("algorithms", "required_input"):
+            list_match = re.search(rf'{param_name}=\(([^)]+)\)', header_value)
+            if list_match:
+                inner = list_match.group(1)
+                result[param_name] = re.findall(r'"([^"]+)"', inner)
+
         return result
 
     except ChallengeError:
         raise
     except Exception as e:
-        raise ChallengeError(f"Failed to parse AAuth header: {e}") from e
+        raise ChallengeError(f"Failed to parse Signature-Requirement header: {e}") from e
 
 
-def build_pseudonym_challenge() -> str:
-    """Build AAuth challenge requiring pseudonymous signature.
-
-    Returns:
-        AAuth header value: require=pseudonym
-    """
-    return "require=pseudonym"
-
-
-def build_identity_challenge() -> str:
-    """Build AAuth challenge requiring verified agent identity.
-
-    Returns:
-        AAuth header value: require=identity
-    """
-    return "require=identity"
-
-
-def build_auth_token_challenge(
-    resource_token: str,
-    auth_server: str
+def build_pseudonym_requirement(
+    algorithms: Optional[List[str]] = None,
+    required_input: Optional[List[str]] = None,
 ) -> str:
-    """Build AAuth challenge requiring an auth token.
+    """Build Signature-Requirement requiring pseudonymous signature.
+
+    Args:
+        algorithms: Optional list of acceptable signing algorithms
+        required_input: Optional list of required covered components
+
+    Returns:
+        Signature-Requirement header value
+    """
+    parts = ["requirement=pseudonym"]
+    if algorithms:
+        inner = " ".join(f'"{a}"' for a in algorithms)
+        parts.append(f"algorithms=({inner})")
+    if required_input:
+        inner = " ".join(f'"{c}"' for c in required_input)
+        parts.append(f"required_input=({inner})")
+    return ", ".join(parts)
+
+
+def build_identity_requirement(
+    algorithms: Optional[List[str]] = None,
+    required_input: Optional[List[str]] = None,
+) -> str:
+    """Build Signature-Requirement requiring verified agent identity.
+
+    Args:
+        algorithms: Optional list of acceptable signing algorithms
+        required_input: Optional list of required covered components
+
+    Returns:
+        Signature-Requirement header value
+    """
+    parts = ["requirement=identity"]
+    if algorithms:
+        inner = " ".join(f'"{a}"' for a in algorithms)
+        parts.append(f"algorithms=({inner})")
+    if required_input:
+        inner = " ".join(f'"{c}"' for c in required_input)
+        parts.append(f"required_input=({inner})")
+    return ", ".join(parts)
+
+
+def build_auth_token_requirement(
+    resource_token: str,
+    auth_server: str = None,
+) -> str:
+    """Build Signature-Requirement requiring an auth token.
+
+    Per spec, the auth server is discovered from the resource token's aud claim.
 
     Args:
         resource_token: Resource token JWT string
-        auth_server: Auth server URL
+        auth_server: Deprecated - auth server discovered from resource token aud
 
     Returns:
-        AAuth header value with resource-token and auth-server
+        Signature-Requirement header value with resource-token
     """
-    return f'require=auth-token; resource-token="{resource_token}"; auth-server="{auth_server}"'
+    return f'requirement=auth-token; resource-token="{resource_token}"'
 
 
-def build_interaction_challenge(code: str) -> str:
-    """Build AAuth response indicating user interaction is required.
+def build_interaction_requirement(url: str, code: str) -> str:
+    """Build Signature-Requirement indicating user interaction is required.
 
     Args:
+        url: Interaction URL (HTTPS, no query or fragment)
         code: Interaction code (short alphanumeric)
 
     Returns:
-        AAuth header value with interaction code
+        Signature-Requirement header value with url and interaction code
     """
-    return f'require=interaction; code="{code}"'
+    return f'requirement=interaction; url="{url}"; code="{code}"'
 
 
-def build_approval_challenge() -> str:
-    """Build AAuth response indicating approval is pending.
+def build_approval_requirement() -> str:
+    """Build Signature-Requirement indicating approval is pending.
 
     Returns:
-        AAuth header value: require=approval
+        Signature-Requirement header value: requirement=approval
     """
-    return "require=approval"
+    return "requirement=approval"
+
+
+# --- Signature-Error header ---
+
+def build_signature_error(
+    error: str,
+    required_input: Optional[List[str]] = None,
+    supported_algorithms: Optional[List[str]] = None,
+) -> str:
+    """Build Signature-Error header value per draft-hardt-httpbis-signature-key.
+
+    Args:
+        error: Error code (one of the ERROR_* constants)
+        required_input: For invalid_input - list of required covered components
+        supported_algorithms: For unsupported_algorithm - list of supported algorithms
+
+    Returns:
+        Signature-Error header value
+    """
+    parts = [f"error={error}"]
+
+    if required_input and error == ERROR_INVALID_INPUT:
+        inner = " ".join(f'"{c}"' for c in required_input)
+        parts.append(f"required_input=({inner})")
+
+    if supported_algorithms and error == ERROR_UNSUPPORTED_ALGORITHM:
+        inner = " ".join(f'"{a}"' for a in supported_algorithms)
+        parts.append(f"supported_algorithms=({inner})")
+
+    return ", ".join(parts)
+
+
+def parse_signature_error(header_value: str) -> Dict[str, Any]:
+    """Parse Signature-Error header value.
+
+    Args:
+        header_value: Signature-Error header value
+
+    Returns:
+        Dictionary with:
+        - error: str (error code)
+        - required_input: Optional[List[str]]
+        - supported_algorithms: Optional[List[str]]
+    """
+    result: Dict[str, Any] = {
+        "error": None,
+        "required_input": None,
+        "supported_algorithms": None,
+    }
+
+    error_match = re.search(r'error=([\w_]+)', header_value)
+    if error_match:
+        result["error"] = error_match.group(1)
+
+    for param_name in ("required_input", "supported_algorithms"):
+        list_match = re.search(rf'{param_name}=\(([^)]+)\)', header_value)
+        if list_match:
+            inner = list_match.group(1)
+            result[param_name] = re.findall(r'"([^"]+)"', inner)
+
+    return result
 
 
 # --- Backward compatibility aliases ---
-# These map the old Agent-Auth API to the new AAuth header API
+
+# Old name aliases
+parse_aauth_requirement = parse_signature_requirement
+parse_aauth_error = parse_signature_error
+build_aauth_error = build_signature_error
+build_pseudonym_challenge = build_pseudonym_requirement
+build_identity_challenge = build_identity_requirement
+build_auth_token_challenge = build_auth_token_requirement
+build_approval_challenge = build_approval_requirement
+
+
+def build_interaction_challenge(code: str, url: Optional[str] = None) -> str:
+    """Build interaction requirement (backward-compatible signature)."""
+    if url:
+        return build_interaction_requirement(url, code)
+    return f'requirement=interaction; code="{code}"'
+
+
+def parse_aauth_header(header_value: str) -> Dict[str, Any]:
+    """Parse Signature-Requirement header (backward-compatible name).
+
+    Accepts old 'require=', 'requirement=' formats.
+    """
+    if "requirement=" in header_value:
+        parsed = parse_signature_requirement(header_value)
+        parsed["require"] = parsed["requirement"]
+        return parsed
+    elif "require=" in header_value:
+        result = {
+            "requirement": None,
+            "require": None,
+            "resource_token": None,
+            "auth_server": None,
+            "url": None,
+            "code": None,
+        }
+        require_match = re.search(r'require=([\w-]+)', header_value)
+        if require_match:
+            result["requirement"] = require_match.group(1)
+            result["require"] = require_match.group(1)
+
+        rt_match = re.search(r'resource-token="([^"]+)"', header_value)
+        if rt_match:
+            result["resource_token"] = rt_match.group(1)
+
+        as_match = re.search(r'auth-server="([^"]+)"', header_value)
+        if as_match:
+            result["auth_server"] = as_match.group(1)
+
+        url_match = re.search(r'url="([^"]+)"', header_value)
+        if url_match:
+            result["url"] = url_match.group(1)
+
+        code_match = re.search(r'code="([^"]+)"', header_value)
+        if code_match:
+            result["code"] = code_match.group(1)
+
+        return result
+    else:
+        raise ChallengeError("Header must include 'requirement' or 'require' parameter")
+
 
 def build_agent_auth_challenge(
     require_signature: bool = True,
@@ -144,33 +331,28 @@ def build_agent_auth_challenge(
     auth_server: Optional[str] = None,
     **kwargs
 ) -> str:
-    """Build AAuth challenge header (backward-compatible API).
-
-    Maps old Agent-Auth parameters to new AAuth header format.
-    """
+    """Build Signature-Requirement header (backward-compatible API)."""
     if require_auth_token and resource_token and auth_server:
-        return build_auth_token_challenge(resource_token, auth_server)
+        return build_auth_token_requirement(resource_token, auth_server)
     elif require_identity:
-        return build_identity_challenge()
+        return build_identity_requirement()
     else:
-        return build_pseudonym_challenge()
+        return build_pseudonym_requirement()
 
 
 def parse_agent_auth_header(header_value: str) -> Dict[str, Any]:
-    """Parse AAuth header with backward-compatible result format.
-
-    Returns dict compatible with old Agent-Auth parser.
-    """
+    """Parse Signature-Requirement header with backward-compatible result format."""
     parsed = parse_aauth_header(header_value)
 
-    # Map to old format for backward compatibility
     result = {
         "httpsig": True,
-        "identity": parsed["require"] == REQUIRE_IDENTITY,
-        "auth_token": parsed["require"] == REQUIRE_AUTH_TOKEN,
+        "identity": parsed["requirement"] == REQUIRE_IDENTITY,
+        "auth_token": parsed["requirement"] == REQUIRE_AUTH_TOKEN,
         "resource_token": parsed.get("resource_token"),
         "auth_server": parsed.get("auth_server"),
-        "require": parsed["require"],
+        "require": parsed["requirement"],
+        "requirement": parsed["requirement"],
+        "url": parsed.get("url"),
         "code": parsed.get("code"),
     }
     return result

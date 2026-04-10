@@ -31,8 +31,8 @@ async def main():
     print("3. Auth server issues auth token", file=sys.stderr)
     print("4. Agent retries resource request with auth token", file=sys.stderr)
     print("5. Resource validates auth token and grants access", file=sys.stderr)
-    print("\nTest 1: Standard flow (no txn)", file=sys.stderr)
-    print("Test 2: Flow with txn for request correlation (spec Section 8.1, 9.1)", file=sys.stderr)
+    print("\nTest 1: Standard flow", file=sys.stderr)
+    print("Test 2: Verify dwk claims in tokens (spec Section 7.1, 8.1, 9.1)", file=sys.stderr)
     print("\nDebug output is enabled by default.", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
 
@@ -42,8 +42,7 @@ async def main():
     auth_id = "http://127.0.0.1:8003"
 
     agent = Agent(agent_id, port=8001)
-    # Resource WITHOUT txn for Test 1
-    resource = Resource(resource_id, port=8002, auth_server=auth_id, enable_txn=False)
+    resource = Resource(resource_id, port=8002, auth_server=auth_id)
     auth_server = AuthServer(auth_id, port=8003)
 
     # Start servers in background threads
@@ -69,13 +68,13 @@ async def main():
     test_results = []
 
     # =========================================================================
-    # Test 1: Standard autonomous authorization flow (no txn)
+    # Test 1: Standard autonomous authorization flow
     # =========================================================================
     print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST 1: Autonomous Authorization Flow (no txn)", file=sys.stderr)
+    print("TEST 1: Autonomous Authorization Flow", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
-    print("Description: Standard flow. The resource token has no txn claim,", file=sys.stderr)
-    print("             so the auth token should also have no txn claim.", file=sys.stderr)
+    print("Description: Standard flow. Verifies auth token is issued with", file=sys.stderr)
+    print("             correct dwk and jti claims per updated spec.", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
 
     test1_passed = False
@@ -99,18 +98,21 @@ async def main():
             if auth_token:
                 claims = parse_token_claims(auth_token)
                 payload = claims["payload"]
-                has_txn = "txn" in payload
 
                 print(f"\n  Auth token claims:", file=sys.stderr)
                 print(f"    jti: {payload.get('jti')}", file=sys.stderr)
-                print(f"    txn: {'(not present)' if not has_txn else payload['txn']}", file=sys.stderr)
+                print(f"    dwk: {payload.get('dwk', '(not present)')}", file=sys.stderr)
 
-                if not has_txn:
+                if payload.get("dwk") == "aauth-issuer.json" and "jti" in payload:
                     test1_passed = True
-                    print(f"\n  ✓ txn correctly absent (resource did not include txn)", file=sys.stderr)
+                    print(f"\n  ✓ dwk correctly set to 'aauth-issuer'", file=sys.stderr)
+                    print(f"  ✓ jti present for replay detection", file=sys.stderr)
+                elif payload.get("dwk") != "aauth-issuer.json":
+                    test1_error = f"dwk should be 'aauth-issuer', got: {payload.get('dwk')}"
+                    print(f"\n  ✗ dwk incorrect: {payload.get('dwk')}", file=sys.stderr)
                 else:
-                    test1_error = "txn should not be present when resource has enable_txn=False"
-                    print(f"\n  ✗ txn unexpectedly present: {payload['txn']}", file=sys.stderr)
+                    test1_error = "jti should be present in auth token"
+                    print(f"\n  ✗ jti missing from auth token", file=sys.stderr)
             else:
                 test1_error = "No auth token stored on agent"
         else:
@@ -124,22 +126,19 @@ async def main():
         traceback.print_exc()
 
     status = "✓ PASSED" if test1_passed else "✗ FAILED"
-    print(f"\n{status}: TEST 1: Autonomous Authorization Flow (no txn)", file=sys.stderr)
-    test_results.append(("TEST 1: Autonomous Authorization (no txn)", test1_passed, test1_error))
+    print(f"\n{status}: TEST 1: Autonomous Authorization Flow", file=sys.stderr)
+    test_results.append(("TEST 1: Autonomous Authorization", test1_passed, test1_error))
 
     # =========================================================================
-    # Test 2: Autonomous authorization flow WITH txn
+    # Test 2: Verify dwk claims in tokens
     # =========================================================================
     print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST 2: Autonomous Authorization Flow (with txn)", file=sys.stderr)
+    print("TEST 2: Verify dwk Claims in Tokens", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
-    print("Description: Resource includes txn in resource token for request", file=sys.stderr)
-    print("             correlation. Auth server carries txn forward into auth", file=sys.stderr)
-    print("             token per spec Section 16.2.3.", file=sys.stderr)
+    print("Description: Verify that all token types include the correct dwk", file=sys.stderr)
+    print("             claim for key discovery (per spec Section 7.1, 8.1, 9.1).", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
 
-    # Enable txn on the resource for this test
-    resource.enable_txn = True
     # Clear agent's stored auth token so autonomous flow runs fresh
     agent.auth_token = None
 
@@ -156,35 +155,22 @@ async def main():
         )
 
         if response.status_code == 200:
-            data = response.json()
-            print(f"\n  Access granted: {data.get('message')}", file=sys.stderr)
-
-            # Inspect the auth token
+            # Verify auth token has dwk
             auth_token = agent.auth_token
             if auth_token:
                 claims = parse_token_claims(auth_token)
                 payload = claims["payload"]
-                auth_txn = payload.get("txn")
+                dwk = payload.get("dwk")
 
-                print(f"\n  Auth token claims:", file=sys.stderr)
-                print(f"    jti: {payload.get('jti')}", file=sys.stderr)
-                print(f"    txn: {auth_txn or '(not present)'}", file=sys.stderr)
+                print(f"\n  Auth token dwk: {dwk or '(not present)'}", file=sys.stderr)
 
-                if auth_txn:
-                    # Verify it's a valid UUID (that's what we generate)
-                    import uuid
-                    try:
-                        uuid.UUID(auth_txn)
-                        test2_passed = True
-                        print(f"\n  ✓ txn present and valid: {auth_txn}", file=sys.stderr)
-                        print(f"    This txn correlates the resource token, auth token,", file=sys.stderr)
-                        print(f"    and original request across all parties and audit logs.", file=sys.stderr)
-                    except ValueError:
-                        test2_error = f"txn is not a valid UUID: {auth_txn}"
-                        print(f"\n  ✗ txn format invalid: {auth_txn}", file=sys.stderr)
+                if dwk == "aauth-issuer.json":
+                    test2_passed = True
+                    print(f"\n  ✓ Auth token dwk correctly set to 'aauth-issuer'", file=sys.stderr)
+                    print(f"    Key discovery: {{iss}}/.well-known/{{dwk}}.json", file=sys.stderr)
                 else:
-                    test2_error = "txn should be present when resource has enable_txn=True"
-                    print(f"\n  ✗ txn missing from auth token", file=sys.stderr)
+                    test2_error = f"Auth token dwk should be 'aauth-issuer', got: {dwk}"
+                    print(f"\n  ✗ Incorrect dwk: {dwk}", file=sys.stderr)
             else:
                 test2_error = "No auth token stored on agent"
         else:
@@ -197,12 +183,9 @@ async def main():
         import traceback
         traceback.print_exc()
 
-    # Reset txn flag
-    resource.enable_txn = False
-
     status = "✓ PASSED" if test2_passed else "✗ FAILED"
-    print(f"\n{status}: TEST 2: Autonomous Authorization Flow (with txn)", file=sys.stderr)
-    test_results.append(("TEST 2: Autonomous Authorization (with txn)", test2_passed, test2_error))
+    print(f"\n{status}: TEST 2: Verify dwk Claims", file=sys.stderr)
+    test_results.append(("TEST 2: Verify dwk Claims", test2_passed, test2_error))
 
     # =========================================================================
     # Summary

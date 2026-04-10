@@ -290,15 +290,15 @@ class Agent:
                     print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
         
-        # Handle auth token challenge (AAuth or Agent-Auth header)
+        # Handle auth token challenge (AAuth-Requirement, AAuth, or Agent-Auth header)
         if response.status_code == 401:
-            aauth_header = response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
+            aauth_header = response.headers.get("signature-requirement", "") or response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
             if debug:
                 logger.debug(f"Received 401, challenge header: {aauth_header}")
 
             if aauth_header:
                 parsed = parse_aauth_header(aauth_header)
-                require = parsed.get("require", "")
+                require = parsed.get("requirement") or parsed.get("require", "")
                 # Fall back to old Agent-Auth format
                 if not require and "resource_token" in aauth_header:
                     import re as _re
@@ -312,12 +312,20 @@ class Agent:
 
                 if require == "auth-token":
                     resource_token_val = parsed.get("resource_token") or parsed.get("resource-token")
+                    # Auth server from header (backward compat) or from resource token aud claim
                     auth_server = parsed.get("auth_server") or parsed.get("auth-server")
+                    if not auth_server and resource_token_val:
+                        try:
+                            import jwt as jwt_lib
+                            rt_payload = jwt_lib.decode(resource_token_val, options={"verify_signature": False})
+                            auth_server = rt_payload.get("aud")
+                        except Exception:
+                            pass
 
                     if resource_token_val and auth_server:
                         self.resource_token = resource_token_val
                         if debug:
-                            logger.debug(f"Auth token challenge: auth_server={auth_server}")
+                            logger.debug(f"Auth token challenge: auth_server={auth_server} (from {'header' if parsed.get('auth_server') or parsed.get('auth-server') else 'resource token aud'})")
 
                         auth_token = await self._request_auth_token(resource_token_val, auth_server)
                         if auth_token:
@@ -545,8 +553,15 @@ class Agent:
 
         body = response.json()
         pending_url = body.get("location") or response.headers.get("location")
-        require = body.get("require")
-        code = body.get("code")
+        # Check AAuth-Requirement header first, then fall back to body
+        aauth_req_header = response.headers.get("signature-requirement", "")
+        if aauth_req_header:
+            parsed_req = parse_aauth_header(aauth_req_header)
+            require = parsed_req.get("requirement") or parsed_req.get("require")
+            code = parsed_req.get("code") or body.get("code")
+        else:
+            require = body.get("require")
+            code = body.get("code")
 
         if not pending_url:
             if debug:
@@ -559,8 +574,14 @@ class Agent:
         # If interaction required, direct user to interaction endpoint
         if require == "interaction" and code:
             try:
-                metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
-                interaction_endpoint = metadata.get("interaction_endpoint")
+                # Prefer url from AAuth-Requirement header, fall back to metadata
+                interaction_endpoint = None
+                if aauth_req_header:
+                    parsed_req = parse_aauth_header(aauth_req_header)
+                    interaction_endpoint = parsed_req.get("url")
+                if not interaction_endpoint:
+                    metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
+                    interaction_endpoint = metadata.get("interaction_endpoint")
                 if interaction_endpoint:
                     interaction_url = f"{interaction_endpoint}?code={code}"
 

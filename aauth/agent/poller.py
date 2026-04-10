@@ -135,16 +135,35 @@ def poll_pending_url(
                 error_description=body.get("error_description"),
             )
 
-        # Transient: 202 Pending — continue polling
+        # Transient: 429 Too Many Requests (slow_down)
+        if status == 429:
+            default_wait += 5  # Per spec: increase interval by 5 seconds
+            retry_after = default_wait
+            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
+            if retry_header:
+                try:
+                    retry_after = max(int(retry_header), default_wait)
+                except (ValueError, TypeError):
+                    pass
+            logger.debug(f"Received 429 slow_down, increasing poll interval to {retry_after}s")
+            time.sleep(retry_after)
+            continue
+
+        # Transient: 202 Pending or Interacting — continue polling
         if status == 202:
             body = response.json()
-            require = body.get("require")
+            require = body.get("requirement") or body.get("require")
             code = body.get("code")
             clarification = body.get("clarification")
+            poll_status = body.get("status", "pending")
 
             # Handle interaction requirement (first time only)
             if require == "interaction" and code and on_interaction and attempt == 0:
                 on_interaction(pending_url, code)
+
+            # When status=interacting, user has arrived — stop prompting
+            if poll_status == "interacting":
+                logger.debug("User has arrived at interaction endpoint (status=interacting)")
 
             # Handle clarification question
             if clarification and on_clarification and sign_and_send_post:

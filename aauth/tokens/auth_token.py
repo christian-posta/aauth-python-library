@@ -19,7 +19,6 @@ def create_auth_token(
     scope: Optional[str] = None,
     sub: Optional[str] = None,
     exp: Optional[int] = None,
-    txn: Optional[str] = None,
 ) -> str:
     """Create an auth token (auth+jwt) per AAuth spec Section 9.1.
 
@@ -33,7 +32,6 @@ def create_auth_token(
         scope: Authorized scopes (at least one of scope or sub MUST be present)
         sub: User identifier (at least one of scope or sub MUST be present)
         exp: Expiration timestamp. Defaults to 1 hour from now.
-        txn: Transaction identifier (copied from resource token if present)
 
     Returns:
         Signed JWT string (auth+jwt)
@@ -60,6 +58,7 @@ def create_auth_token(
     payload = {
         "iss": iss,
         "aud": aud,
+        "dwk": "aauth-issuer.json",
         "jti": str(uuid.uuid4()),
         "cnf": {"jwk": cnf_jwk},
         "iat": now,
@@ -74,8 +73,6 @@ def create_auth_token(
         payload["sub"] = sub
     if scope:
         payload["scope"] = scope
-    if txn is not None:
-        payload["txn"] = txn
     return jwt.encode(
         payload,
         private_key,
