@@ -1,6 +1,8 @@
 """Tests for Phase 4: User Delegation."""
 
+import asyncio
 import json
+import threading
 
 import pytest
 from starlette.testclient import TestClient
@@ -115,15 +117,29 @@ async def test_agent_supports_deferred_token_flow(agent):
     assert hasattr(agent, "_request_auth_token")
 
 
-# Integration test (requires running servers)
+# Integration test
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_user_delegation_flow_integration(agent, resource, auth_server, user_simulator):
-    """Integration test for complete user delegation flow.
+    """Integration test for complete user delegation flow."""
+    def run_server(server):
+        try:
+            server.run()
+        except Exception:
+            pass
 
-    This test requires all servers to be running.
-    Run with: pytest -m integration
-    """
+    # Start all three servers
+    threads = [
+        threading.Thread(target=run_server, args=(agent,), daemon=True),
+        threading.Thread(target=run_server, args=(resource,), daemon=True),
+        threading.Thread(target=run_server, args=(auth_server,), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+
+    # Wait for servers to start
+    await asyncio.sleep(2)
+
     response = await run_user_delegated_flow(
         agent=agent,
         resource=resource,

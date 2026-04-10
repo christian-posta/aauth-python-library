@@ -41,11 +41,15 @@ def auth_server(auth_id):
 @pytest.mark.asyncio
 async def test_agent_is_resource_flow(agent, auth_server, agent_id, auth_id):
     """Test that agent can request authorization to itself."""
+    # Start agent server so auth server can fetch JWKS for signature verification
+    agent_thread = threading.Thread(target=run_server, args=(agent,), daemon=True)
+    agent_thread.start()
+
     # Start auth server in background
     auth_thread = threading.Thread(target=run_server, args=(auth_server,), daemon=True)
     auth_thread.start()
-    
-    # Wait for server to start
+
+    # Wait for servers to start
     await asyncio.sleep(1)
     
     try:
@@ -86,11 +90,15 @@ async def test_agent_is_resource_flow(agent, auth_server, agent_id, auth_id):
 @pytest.mark.asyncio
 async def test_auth_token_claims_when_agent_is_resource(agent, auth_server, agent_id, auth_id):
     """Test that auth token has correct claims when agent is resource."""
+    # Start agent server so auth server can fetch JWKS for signature verification
+    agent_thread = threading.Thread(target=run_server, args=(agent,), daemon=True)
+    agent_thread.start()
+
     # Start auth server in background
     auth_thread = threading.Thread(target=run_server, args=(auth_server,), daemon=True)
     auth_thread.start()
-    
-    # Wait for server to start
+
+    # Wait for servers to start
     await asyncio.sleep(1)
     
     try:
@@ -112,7 +120,7 @@ async def test_auth_token_claims_when_agent_is_resource(agent, auth_server, agen
         header = claims["header"]
         
         # Verify token type
-        assert header.get("typ") == "auth+jwt", "Token type should be auth+jwt"
+        assert header.get("typ") == "aa-auth+jwt", "Token type should be aa-auth+jwt"
         
         # Verify aud = agent identifier
         assert payload.get("aud") == agent_id

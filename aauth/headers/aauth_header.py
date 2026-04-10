@@ -11,7 +11,7 @@ protocol spec (draft-hardt-aauth-protocol).
 """
 
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Mapping, Union
 from ..errors import ChallengeError
 
 
@@ -22,6 +22,13 @@ REQUIRE_IDENTITY = "identity"
 REQUIRE_AUTH_TOKEN = "auth-token"
 REQUIRE_INTERACTION = "interaction"
 REQUIRE_APPROVAL = "approval"
+REQUIRE_CLARIFICATION = "clarification"
+REQUIRE_CLAIMS = "claims"
+
+# HTTP header field names (spec: Signature-Key draft + AAuth protocol)
+HEADER_SIGNATURE_REQUIREMENT = "Signature-Requirement"
+HEADER_AAUTH_REQUIREMENT = "AAuth-Requirement"
+HEADER_SIGNATURE_ERROR = "Signature-Error"
 
 # Signature-Error codes (from draft-hardt-httpbis-signature-key)
 ERROR_INVALID_REQUEST = "invalid_request"
@@ -163,7 +170,7 @@ def build_auth_token_requirement(
     resource_token: str,
     auth_server: str = None,
 ) -> str:
-    """Build Signature-Requirement requiring an auth token.
+    """Build AAuth-Requirement value requiring an auth token (use header AAuth-Requirement).
 
     Per spec, the auth server is discovered from the resource token's aud claim.
 
@@ -172,31 +179,94 @@ def build_auth_token_requirement(
         auth_server: Deprecated - auth server discovered from resource token aud
 
     Returns:
-        Signature-Requirement header value with resource-token
+        Header *value* for ``AAuth-Requirement`` with resource-token
     """
     return f'requirement=auth-token; resource-token="{resource_token}"'
 
 
 def build_interaction_requirement(url: str, code: str) -> str:
-    """Build Signature-Requirement indicating user interaction is required.
+    """Build AAuth-Requirement value for user interaction (use header AAuth-Requirement).
 
     Args:
         url: Interaction URL (HTTPS, no query or fragment)
         code: Interaction code (short alphanumeric)
 
     Returns:
-        Signature-Requirement header value with url and interaction code
+        Header *value* for ``AAuth-Requirement``
     """
     return f'requirement=interaction; url="{url}"; code="{code}"'
 
 
 def build_approval_requirement() -> str:
-    """Build Signature-Requirement indicating approval is pending.
-
-    Returns:
-        Signature-Requirement header value: requirement=approval
-    """
+    """Build AAuth-Requirement value for approval pending."""
     return "requirement=approval"
+
+
+def build_clarification_requirement() -> str:
+    """Build AAuth-Requirement value for clarification (body carries question)."""
+    return "requirement=clarification"
+
+
+def build_claims_requirement() -> str:
+    """Build AAuth-Requirement value for claims (body carries required_claims)."""
+    return "requirement=claims"
+
+
+def build_aauth_mission_header(manager: str, s256: str) -> str:
+    """Build ``AAuth-Mission`` request header value (spec Section 8.2)."""
+    return f'manager="{manager}"; s256="{s256}"'
+
+
+def parse_aauth_mission_header(header_value: str) -> Dict[str, Optional[str]]:
+    """Parse ``AAuth-Mission`` header into manager URL and s256 hash."""
+    result: Dict[str, Optional[str]] = {"manager": None, "s256": None}
+    m = re.search(r'manager="([^"]+)"', header_value)
+    if m:
+        result["manager"] = m.group(1)
+    s = re.search(r's256="([^"]+)"', header_value)
+    if s:
+        result["s256"] = s.group(1)
+    return result
+
+
+def aauth_protocol_requirement_levels() -> frozenset:
+    """Requirement levels that MUST use the ``AAuth-Requirement`` response header."""
+    return frozenset(
+        {
+            REQUIRE_AUTH_TOKEN,
+            REQUIRE_INTERACTION,
+            REQUIRE_APPROVAL,
+            REQUIRE_CLARIFICATION,
+            REQUIRE_CLAIMS,
+        }
+    )
+
+
+def requirement_header_for_level(requirement_level: str) -> str:
+    """Return the correct response header name for a requirement level."""
+    if requirement_level in (REQUIRE_PSEUDONYM, REQUIRE_IDENTITY):
+        return HEADER_SIGNATURE_REQUIREMENT
+    return HEADER_AAUTH_REQUIREMENT
+
+
+def get_challenge_header_value(headers: Union[Mapping[str, Any], None]) -> str:
+    """Extract requirement header value from a mapping of HTTP response headers.
+
+    Checks ``AAuth-Requirement``, ``Signature-Requirement``, and legacy ``AAuth`` /
+    ``Agent-Auth``. Keys are matched case-insensitively.
+    """
+    if headers is None:
+        return ""
+    if not hasattr(headers, "items"):
+        return ""
+    # Case-insensitive lookup (httpx uses lowercased keys)
+    lower = {str(k).lower(): v for k, v in headers.items()}
+    return (
+        lower.get("aauth-requirement", "")
+        or lower.get("signature-requirement", "")
+        or lower.get("aauth", "")
+        or lower.get("agent-auth", "")
+    )
 
 
 # --- Signature-Error header ---

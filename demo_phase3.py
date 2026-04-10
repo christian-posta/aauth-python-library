@@ -31,6 +31,7 @@ async def main():
     print("3. Auth server issues auth token", file=sys.stderr)
     print("4. Agent retries resource request with auth token", file=sys.stderr)
     print("5. Resource validates auth token and grants access", file=sys.stderr)
+    print("(Mission Manager path: see demo_phase5.py, demo_phase11.py.)", file=sys.stderr)
     print("\nTest 1: Standard flow", file=sys.stderr)
     print("Test 2: Verify dwk claims in tokens (spec Section 7.1, 8.1, 9.1)", file=sys.stderr)
     print("\nDebug output is enabled by default.", file=sys.stderr)

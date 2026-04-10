@@ -1,4 +1,9 @@
-"""Autonomous authorization flow orchestrator for Phase 3."""
+"""Autonomous authorization flow orchestrator (Phase 3+).
+
+If ``agent.mm_url`` is set, the agent requests **auth tokens** from the Mission
+Manager's ``token_endpoint`` (MM forwards to the AS). Otherwise the agent calls
+the auth server **token_endpoint** directly.
+"""
 
 import asyncio
 import sys

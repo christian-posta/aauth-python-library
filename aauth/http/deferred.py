@@ -8,7 +8,9 @@ until a terminal response is received.
 import uuid
 import string
 import random
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
+from ..headers.aauth_header import HEADER_AAUTH_REQUIREMENT
 
 
 def generate_pending_id() -> str:
@@ -39,6 +41,9 @@ def build_pending_response_body(
     code: Optional[str] = None,
     clarification: Optional[str] = None,
     status: str = "pending",
+    required_claims: Optional[List[str]] = None,
+    clarification_timeout: Optional[int] = None,
+    clarification_options: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Build the JSON body for a 202 Accepted pending response.
 
@@ -62,6 +67,12 @@ def build_pending_response_body(
         body["code"] = code
     if clarification:
         body["clarification"] = clarification
+    if required_claims:
+        body["required_claims"] = required_claims
+    if clarification_timeout is not None:
+        body["timeout"] = clarification_timeout
+    if clarification_options:
+        body["options"] = clarification_options
     return body
 
 
@@ -70,6 +81,7 @@ def build_pending_response_headers(
     retry_after: int = 0,
     require: Optional[str] = None,
     code: Optional[str] = None,
+    required_claims: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     """Build response headers for a 202 Accepted pending response.
 
@@ -89,11 +101,14 @@ def build_pending_response_headers(
         "Content-Type": "application/json",
     }
 
-    # Build AAuth-Requirement header if needed
+    # Build AAuth-Requirement header if needed (protocol-level deferred requirements)
     if require == "interaction" and code:
-        headers["Signature-Requirement"] = f'requirement=interaction; code="{code}"'
+        headers[HEADER_AAUTH_REQUIREMENT] = f'requirement=interaction; code="{code}"'
     elif require == "approval":
-        headers["Signature-Requirement"] = "requirement=approval"
+        headers[HEADER_AAUTH_REQUIREMENT] = "requirement=approval"
+    elif require == "claims" and required_claims:
+        inner = " ".join(f'"{c}"' for c in required_claims)
+        headers[HEADER_AAUTH_REQUIREMENT] = f"requirement=claims; required_claims=({inner})"
 
     return headers
 

@@ -1,4 +1,4 @@
-"""Demo script for Phase 7: Token Exchange."""
+"""Demo script for Phase 7: MM–AS federation & token / upstream exchange."""
 
 import asyncio
 import sys
@@ -61,7 +61,7 @@ async def main():
     """Run Phase 7 demo."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Phase 7: Token Exchange Demo")
+    parser = argparse.ArgumentParser(description="Phase 7: MM–AS federation & token exchange Demo")
     parser.add_argument(
         "--manual",
         action="store_true",
@@ -70,7 +70,7 @@ async def main():
     args = parser.parse_args()
     
     print("\n" + "=" * 80, file=sys.stderr)
-    print("Phase 7: Token Exchange Demo", file=sys.stderr)
+    print("Phase 7: MM–AS federation & token exchange Demo", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
     
     print("\nMODE: Automated", file=sys.stderr)

@@ -47,6 +47,7 @@ class AuthServer:
         port: int = 8003,
         require_user_consent: bool = False,
         trusted_auth_servers: Optional[List[str]] = None,
+        trusted_mission_managers: Optional[List[str]] = None,
         clarification_questions: Optional[List[str]] = None,
         max_clarification_rounds: int = 5,
     ):
@@ -56,6 +57,8 @@ class AuthServer:
             auth_id: Auth server identifier (HTTPS URL)
             port: Port to run auth server on
             trusted_auth_servers: List of trusted auth server identifiers for call chaining
+            trusted_mission_managers: If set, ``POST /token`` may be called by an MM (HTTPSig ``jwks_uri``)
+                with JSON body ``resource_token`` and ``agent_token`` (federation path).
             require_user_consent: If True, require user consent for all requests (Phase 4 demo mode)
             clarification_questions: Optional queued clarification prompts for demo flows.
             max_clarification_rounds: Maximum clarification answers accepted.
@@ -80,6 +83,7 @@ class AuthServer:
 
         # Federation trust - list of trusted auth servers for call chaining
         self.trusted_auth_servers: List[str] = trusted_auth_servers if trusted_auth_servers else []
+        self.trusted_mission_managers: List[str] = trusted_mission_managers if trusted_mission_managers else []
 
         # Create FastAPI app
         self.app = FastAPI(title="AAuth Auth Server")
@@ -213,7 +217,18 @@ class AuthServer:
         if mode == "token_refresh":
             return await self._handle_token_refresh(request, params_dict, body_bytes)
         # resource_access and self_access share the same authorization flow
-        
+
+        # MM federation: trusted MM calls AS with resource_token + agent_token (HTTPSig jwks_uri = MM)
+        if mode == "resource_access" and self.trusted_mission_managers:
+            try:
+                pk = parse_signature_key(request.headers.get("signature-key", ""))
+                sch = pk.get("scheme")
+                mm_id = (pk.get("params") or {}).get("id")
+                if sch in ("jwks", "jwks_uri") and mm_id and mm_id.rstrip("/") in {x.rstrip("/") for x in self.trusted_mission_managers}:
+                    return await self._handle_mm_federated_token_request(request, params_dict, body_bytes)
+            except Exception:
+                pass
+
         # Verify agent's HTTPSig signature
         headers_dict = dict(request.headers)
         method = request.method
@@ -286,10 +301,10 @@ class AuthServer:
                     content={"error": "invalid_request", "error_description": f"Invalid JWT token: {e}"}
                 )
             
-            if typ == "agent+jwt":
+            if typ == "aa-agent+jwt":
                 # Phase 6: Agent token (delegated identity)
                 if debug:
-                    print(f"DEBUG AUTH:   Validating agent token (agent+jwt)", file=sys.stderr, flush=True)
+                    print(f"DEBUG AUTH:   Validating agent token (aa-agent+jwt)", file=sys.stderr, flush=True)
                 
                 # Create JWKS fetcher for agent server
                 def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
@@ -340,7 +355,7 @@ class AuthServer:
                         content={"error": "invalid_token", "error_description": f"Invalid agent token: {e}"}
                     )
             
-            elif typ == "auth+jwt":
+            elif typ == "aa-auth+jwt":
                 # Phase 3/4/5: Auth token (for token exchange or refresh)
                 # This is handled elsewhere, but we shouldn't reach here for initial token requests
                 if debug:
@@ -541,7 +556,210 @@ class AuthServer:
             print("=" * 80 + "\n", file=sys.stderr)
 
         return JSONResponse(content=response_data)
-    
+
+    async def _handle_mm_federated_token_request(
+        self,
+        request: Request,
+        params_dict: Dict[str, Any],
+        body_bytes: bytes,
+    ) -> Response:
+        """AS token endpoint when called by a trusted Mission Manager (spec MM–AS federation)."""
+        debug = _is_debug_enabled()
+        headers_dict = dict(request.headers)
+        method = request.method
+        target_uri = str(request.url)
+        signature_input_header = headers_dict.get("signature-input", "")
+        signature_header = headers_dict.get("signature", "")
+        signature_key_header = headers_dict.get("signature-key", "")
+
+        def mm_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+            try:
+                import httpx
+                for path in ("/.well-known/aauth-mission.json", "/.well-known/aauth-mission"):
+                    r = httpx.get(f"{issuer_url.rstrip('/')}{path}", timeout=10.0)
+                    if r.status_code == 200:
+                        ju = r.json().get("jwks_uri")
+                        if not ju:
+                            return None
+                        jr = httpx.get(ju, timeout=10.0)
+                        jr.raise_for_status()
+                        return jr.json()
+            except Exception:
+                return None
+            return None
+
+        ok = verify_signature(
+            method=method,
+            target_uri=target_uri,
+            headers=headers_dict,
+            body=body_bytes,
+            signature_input_header=signature_input_header,
+            signature_header=signature_header,
+            signature_key_header=signature_key_header,
+            jwks_fetcher=mm_jwks_fetcher,
+        )
+        if not ok:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_signature", "error_description": "MM signature verification failed"},
+            )
+
+        agent_token_str = params_dict.get("agent_token")
+        resource_token_str = params_dict.get("resource_token")
+        if not resource_token_str:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "resource_token required"},
+            )
+
+        from aauth.tokens.agent_token import verify_agent_token
+
+        cnf_jwk = None
+        agent_id_for_policy = None
+
+        if agent_token_str:
+            def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+                try:
+                    import httpx
+                    from aauth.metadata.auth_server import fetch_metadata
+                    metadata_url = f"{issuer_url}/.well-known/aauth-agent.json"
+                    metadata = fetch_metadata(metadata_url)
+                    jwks_uri = metadata.get("jwks_uri")
+                    if not jwks_uri:
+                        return None
+                    response = httpx.get(jwks_uri, timeout=10.0)
+                    response.raise_for_status()
+                    return response.json()
+                except Exception:
+                    return None
+
+            try:
+                agent_claims = verify_agent_token(
+                    token=agent_token_str,
+                    jwks_fetcher=agent_jwks_fetcher,
+                    expected_aud=None,
+                )
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "invalid_agent_token", "error_description": str(e)},
+                )
+
+            cnf_jwk = agent_claims.get("cnf", {}).get("jwk")
+            agent_id_for_policy = agent_claims.get("iss")
+            if not cnf_jwk or not agent_id_for_policy:
+                return JSONResponse(status_code=400, content={"error": "invalid_agent_token"})
+
+            try:
+                resource_claims = await self._verify_resource_token(
+                    resource_token_str, agent_id_for_policy, cnf_jwk
+                )
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "invalid_resource_token", "error_description": str(e)},
+                )
+        else:
+            # MM-signed request without separate agent_token JWT: verify resource token and
+            # resolve agent signing key from agent JWKS using ``agent_jkt`` thumbprint.
+            try:
+                import jwt as pyjwt
+
+                unverified = pyjwt.decode(
+                    resource_token_str, options={"verify_signature": False}
+                )
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_resource_token",
+                        "error_description": str(e),
+                    },
+                )
+            agent_id_for_policy = unverified.get("agent")
+            thumb = unverified.get("agent_jkt")
+            if not agent_id_for_policy:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "invalid_resource_token", "error_description": "missing agent claim"},
+                )
+            cnf_jwk = self._fetch_agent_jwk_by_jkt(agent_id_for_policy, thumb)
+            if not cnf_jwk:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_resource_token",
+                        "error_description": "Could not resolve agent JWK for agent_jkt",
+                    },
+                )
+            try:
+                resource_claims = await self._verify_resource_token(
+                    resource_token_str, agent_id_for_policy, cnf_jwk
+                )
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "invalid_resource_token", "error_description": str(e)},
+                )
+
+        resource_id = resource_claims.get("iss")
+        scope = resource_claims.get("scope", "")
+        purpose = params_dict.get("purpose")
+        policy_result = self._evaluate_policy(agent_id_for_policy, resource_id, scope)
+        agent_clarification_supported = self._agent_supports_clarification(agent_id_for_policy, debug)
+
+        if policy_result.get("requires_user_consent"):
+            return self._create_pending_request(
+                agent_id=agent_id_for_policy,
+                resource_id=resource_id,
+                scope=scope,
+                agent_jwk=cnf_jwk,
+                purpose=purpose,
+                agent_is_resource=False,
+                clarification_supported=agent_clarification_supported,
+            )
+
+        if not policy_result.get("allowed"):
+            return JSONResponse(
+                status_code=403,
+                content={"error": "denied", "error_description": policy_result.get("reason", "Access denied")},
+            )
+
+        auth_token = self._issue_auth_token(
+            agent=agent_id_for_policy,
+            resource=resource_id,
+            scope=scope,
+            cnf_jwk=cnf_jwk,
+        )
+        return JSONResponse(content=build_success_response(auth_token))
+
+    def _fetch_agent_jwk_by_jkt(
+        self, agent_id: str, agent_jkt: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve agent signing JWK from agent JWKS using ``agent_jkt`` thumbprint."""
+        if not agent_jkt:
+            return None
+        try:
+            import httpx
+
+            metadata_url = f"{agent_id}/.well-known/aauth-agent.json"
+            metadata = fetch_resource_metadata(metadata_url)
+            jwks_uri = metadata.get("jwks_uri")
+            if not jwks_uri:
+                return None
+            response = httpx.get(jwks_uri, timeout=10.0)
+            response.raise_for_status()
+            jwks = response.json()
+            for key in jwks.get("keys", []):
+                try:
+                    if calculate_jwk_thumbprint(key) == agent_jkt:
+                        return key
+                except Exception:
+                    continue
+        except Exception:
+            return None
+        return None
+
     async def _verify_resource_token(self, token: str, expected_agent: str, agent_jwk: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Verify resource token per AAuth spec Section 6.5.
         
@@ -590,7 +808,7 @@ class AuthServer:
             claims = verify_token(
                 token=token,
                 jwks_fetcher=resource_jwks_fetcher,
-                expected_typ="resource+jwt",
+                expected_typ="aa-resource+jwt",
                 expected_aud=self.auth_id  # Resource token audience must be this auth server
             )
         except Exception as e:
@@ -1223,10 +1441,10 @@ class AuthServer:
                 content={"error": "invalid_token", "error_description": f"Invalid upstream token: {e}"}
             )
         
-        if upstream_typ != "auth+jwt":
+        if upstream_typ != "aa-auth+jwt":
             return JSONResponse(
                 status_code=401,
-                content={"error": "invalid_token", "error_description": f"Token exchange requires auth+jwt, got {upstream_typ}"}
+                content={"error": "invalid_token", "error_description": f"Token exchange requires aa-auth+jwt, got {upstream_typ}"}
             )
         
         # Parse upstream token claims (without verification first)
@@ -1375,7 +1593,7 @@ class AuthServer:
             resource_claims = verify_token(
                 resource_token,
                 resource_jwks_fetcher,
-                expected_typ="resource+jwt",
+                expected_typ="aa-resource+jwt",
                 expected_aud=self.auth_id
             )
             

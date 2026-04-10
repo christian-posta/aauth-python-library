@@ -13,6 +13,7 @@ async def run_phase1_demo():
     """Run Phase 1 demo: Agent signs request, resource validates."""
     print("=" * 60)
     print("Phase 1 Demo: Pseudonymous Flow (sig=hwk)")
+    print("401 challenges use Signature-Requirement: requirement=pseudonym (or identity).")
     print("=" * 60)
     
     # Create participants

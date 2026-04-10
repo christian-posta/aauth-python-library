@@ -84,7 +84,7 @@ async def test_agent_token_creation(agent_server, delegate, agent_server_id, del
         header = claims["header"]
         
         # Verify token type
-        assert header.get("typ") == "agent+jwt", "Token type should be agent+jwt"
+        assert header.get("typ") == "aa-agent+jwt", "Token type should be aa-agent+jwt"
         
         # Verify issuer is agent server
         assert payload.get("iss") == agent_server_id, "iss should be agent server identifier"

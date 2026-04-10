@@ -140,10 +140,10 @@ class RequestVerifier:
                     header = pyjwt.get_unverified_header(jwt_token)
                     typ = header.get("typ")
                     
-                    if typ == "agent+jwt":
+                    if typ == "aa-agent+jwt":
                         result["agent_id"] = payload.get("iss")
                         result["agent_delegate"] = payload.get("sub")
-                    elif typ == "auth+jwt":
+                    elif typ == "aa-auth+jwt":
                         result["agent_id"] = payload.get("agent")
                         result["agent_delegate"] = payload.get("agent_delegate")
                         result["user_sub"] = payload.get("sub")

@@ -69,6 +69,6 @@ class ResourceTokenIssuer:
         except Exception as e:
             raise TokenError(
                 f"Failed to issue resource token: {e}",
-                token_type="resource+jwt"
+                token_type="aa-resource+jwt"
             ) from e
 

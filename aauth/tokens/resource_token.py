@@ -18,8 +18,9 @@ def create_resource_token(
     private_key: Ed25519PrivateKey,
     kid: str,
     exp: Optional[int] = None,
+    mission: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Create a resource token (resource+jwt) per AAuth spec Section 8.1.
+    """Create a resource token (aa-resource+jwt) per AAuth spec Section 8.1.
 
     Args:
         iss: Resource identifier (HTTPS URL)
@@ -30,16 +31,17 @@ def create_resource_token(
         private_key: Resource's Ed25519 private key for signing
         kid: Key ID for signing key
         exp: Expiration timestamp (Unix time). Defaults to 10 minutes from now.
+        mission: Optional ``{"manager": url, "s256": hash}`` when mission-aware.
 
     Returns:
-        Signed JWT string (resource+jwt)
+        Signed JWT string (aa-resource+jwt)
     """
     now = int(time.time())
     if exp is None:
         exp = now + 600  # 10 minutes
 
     header = {
-        "typ": "resource+jwt",
+        "typ": "aa-resource+jwt",
         "alg": "EdDSA",
         "kid": kid
     }
@@ -55,6 +57,8 @@ def create_resource_token(
         "iat": now,
         "exp": exp,
     }
+    if mission is not None:
+        payload["mission"] = mission
 
     return jwt.encode(
         payload,

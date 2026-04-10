@@ -142,11 +142,11 @@ def verify_signature(
                 return False
             
             typ = header.get("typ")
-            if typ not in ("agent+jwt", "auth+jwt"):
+            if typ not in ("aa-agent+jwt", "aa-auth+jwt"):
                 return False
             
             # Validate JWT and extract cnf.jwk
-            if typ == "agent+jwt":
+            if typ == "aa-agent+jwt":
                 # Verify agent token
                 try:
                     agent_claims = verify_agent_token(
@@ -159,7 +159,7 @@ def verify_signature(
                 except Exception:
                     return False
             
-            elif typ == "auth+jwt":
+            elif typ == "aa-auth+jwt":
                 # Extract cnf.jwk from payload
                 cnf = payload.get("cnf")
                 if not cnf:

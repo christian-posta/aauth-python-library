@@ -1,4 +1,4 @@
-"""Demo script for Phase 8: Clarification Chat."""
+"""Demo script for Phase 8: Clarification Chat (AAuth-Requirement: requirement=clarification)."""
 
 import asyncio
 import sys

@@ -1,4 +1,9 @@
-"""User delegation flow orchestrator for Phase 4."""
+"""User delegation flow orchestrator for Phase 4.
+
+When ``agent.mm_url`` is set, token **POST**s go to the Mission Manager; the
+user simulator should complete interaction at the MM or AS as returned in the
+202 response (see ``Agent._handle_deferred_response``).
+"""
 
 import asyncio
 import sys

@@ -34,6 +34,7 @@ async def main():
     
     print("\n" + "=" * 80, file=sys.stderr)
     print("Phase 6: Agent Delegation Demo", file=sys.stderr)
+    print("Delegates use sig=jwt with aa-agent+jwt; production flows may route tokens via MM.", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
     
     print("\nMODE: Automated", file=sys.stderr)
@@ -114,9 +115,9 @@ async def main():
             # Verify claims
             errors = []
             
-            # Check typ = agent+jwt
-            if header.get("typ") != "agent+jwt":
-                errors.append(f"typ mismatch: expected agent+jwt, got {header.get('typ')}")
+            # Check typ = aa-agent+jwt
+            if header.get("typ") != "aa-agent+jwt":
+                errors.append(f"typ mismatch: expected aa-agent+jwt, got {header.get('typ')}")
             else:
                 print(f"  ✓ typ claim correct: {header.get('typ')}", file=sys.stderr, flush=True)
             
@@ -191,7 +192,7 @@ async def main():
             print(f"  Response: {json.dumps(response_data, indent=2)}", file=sys.stderr, flush=True)
             
             # Verify response indicates agent token was used
-            if response_data.get("token_type") == "agent+jwt":
+            if response_data.get("token_type") == "aa-agent+jwt":
                 print(f"  ✓ Resource recognized agent token", file=sys.stderr, flush=True)
                 test2_passed = True
             elif response_data.get("scheme") == "jwt":

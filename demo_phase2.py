@@ -16,6 +16,8 @@ async def main():
     """Run Phase 2 demo."""
     print("=" * 80)
     print("Phase 2 Demo: Agent Identity via JWKS")
+    print("Resource challenges for identity use Signature-Requirement (pseudonym/identity).")
+    print("Agent tokens use typ aa-agent+jwt (see library create_agent_token / verify).")
     print("=" * 80)
     print()
     

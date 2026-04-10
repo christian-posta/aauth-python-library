@@ -24,7 +24,7 @@ from aauth.signing.signer import sign_request
 from aauth.metadata.agent import generate_agent_metadata
 from aauth.metadata.auth_server import fetch_auth_metadata
 from aauth.agent.poller import poll_pending_url, PollingResult
-from aauth.headers.aauth_header import parse_aauth_header
+from aauth.headers.aauth_header import parse_aauth_header, get_challenge_header_value
 from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
 import json
 import re
@@ -44,6 +44,7 @@ class Agent:
         port: int = 8001,
         use_user_simulator: bool = True,
         clarification_supported: bool = True,
+        mm_url: Optional[str] = None,
     ):
         """Initialize agent.
         
@@ -53,11 +54,15 @@ class Agent:
             use_user_simulator: If True, use user simulator for automated consent flow.
                                If False, pause and wait for manual browser interaction.
             clarification_supported: Whether this agent supports clarification chat.
+            mm_url: Optional Mission Manager base URL; when set, auth token requests
+                go to MM (which federates to the AS) instead of directly to the AS.
         """
         self.agent_id = agent_id
         self.port = port
         self.use_user_simulator = use_user_simulator
         self.clarification_supported = clarification_supported
+        self.mm_url = mm_url.rstrip("/") if mm_url else None
+        self.approved_mission: Optional[Dict[str, Any]] = None
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "key-1"
         
@@ -115,7 +120,7 @@ class Agent:
                 "aud": "optional-audience"
             }
             
-            Returns agent token (agent+jwt).
+            Returns agent token (aa-agent+jwt).
             """
             return await self._handle_delegate_token_request(request)
         
@@ -292,7 +297,7 @@ class Agent:
         
         # Handle auth token challenge (AAuth-Requirement, AAuth, or Agent-Auth header)
         if response.status_code == 401:
-            aauth_header = response.headers.get("signature-requirement", "") or response.headers.get("aauth", "") or response.headers.get("agent-auth", "")
+            aauth_header = get_challenge_header_value(response.headers)
             if debug:
                 logger.debug(f"Received 401, challenge header: {aauth_header}")
 
@@ -410,12 +415,18 @@ class Agent:
     # NOTE: _handle_auth_challenge removed. AAuth header parsing now uses
     # parse_aauth_header() directly in request_resource().
     
-    async def request_self_authorization(self, scope: str, auth_server: str) -> Optional[str]:
+    async def request_self_authorization(
+        self,
+        scope: str,
+        auth_server: str,
+        redirect_uri: Optional[str] = None,
+    ) -> Optional[str]:
         """Request authorization directly from auth server (agent is resource / SSO).
 
         Args:
             scope: Space-separated scope values (e.g., "profile email")
             auth_server: Auth server identifier
+            redirect_uri: Optional callback (reserved for interaction UX; ignored by reference AS)
 
         Returns:
             Auth token string, or None if request failed
@@ -439,14 +450,19 @@ class Agent:
 
         # Build JSON request body (self-access mode: scope, no resource_token)
         body_dict = {"scope": scope}
+        if redirect_uri:
+            body_dict["redirect_uri"] = redirect_uri
         return await self._send_token_request(token_endpoint, body_dict, auth_server)
     
     async def _request_auth_token(self, resource_token: str, auth_server: str) -> Optional[str]:
         """Request auth token from auth server (resource access mode).
 
+        When ``mm_url`` is configured, sends the request to the Mission Manager's
+        ``token_endpoint`` (HTTPSig ``jwks_uri``); MM forwards to the AS.
+
         Args:
             resource_token: Resource token from AAuth challenge
-            auth_server: Auth server identifier
+            auth_server: Auth server identifier (``aud`` of the resource token)
 
         Returns:
             Auth token string, or None if request failed
@@ -454,9 +470,28 @@ class Agent:
         debug = _is_debug_enabled()
 
         if debug:
-            logger.debug(f"Requesting auth token: auth_server={auth_server}")
+            logger.debug(
+                f"Requesting auth token: auth_server={auth_server} mm_url={self.mm_url}"
+            )
 
-        # Fetch auth server metadata
+        if self.mm_url:
+            try:
+                from aauth.metadata.mission_manager import fetch_mm_metadata_async
+
+                metadata = await fetch_mm_metadata_async(self.mm_url)
+                token_endpoint = metadata.get("token_endpoint")
+                if debug:
+                    logger.debug(f"MM token endpoint: {token_endpoint}")
+            except Exception as e:
+                if debug:
+                    logger.debug(f"Failed to fetch mission manager metadata: {e}")
+                return None
+            if not token_endpoint:
+                return None
+            body_dict = {"resource_token": resource_token}
+            return await self._send_token_request(token_endpoint, body_dict, self.mm_url)
+
+        # Fetch auth server metadata (direct agent → AS)
         try:
             metadata_url = f"{auth_server}/.well-known/aauth-issuer"
             metadata = await fetch_auth_metadata(metadata_url)
@@ -471,6 +506,95 @@ class Agent:
         # Build JSON request body (resource access mode)
         body_dict = {"resource_token": resource_token}
         return await self._send_token_request(token_endpoint, body_dict, auth_server)
+
+    async def propose_mission(self, proposal: str) -> Optional[Dict[str, Any]]:
+        """POST ``mission_proposal`` to the configured Mission Manager; cache approved mission."""
+        if not self.mm_url:
+            return None
+        from aauth.metadata.mission_manager import fetch_mm_metadata_async
+
+        try:
+            meta = await fetch_mm_metadata_async(self.mm_url)
+            mission_endpoint = meta.get("mission_endpoint")
+            if not mission_endpoint:
+                return None
+        except Exception:
+            return None
+
+        body_bytes = json.dumps({"mission_proposal": proposal}).encode("utf-8")
+        base_headers = {"Content-Type": "application/json"}
+        sig_headers = self.sign_request(
+            method="POST",
+            url=mission_endpoint,
+            headers=base_headers,
+            body=body_bytes,
+            sig_scheme="jwks_uri",
+        )
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                mission_endpoint,
+                headers={**base_headers, **sig_headers, "Prefer": "wait=30"},
+                content=body_bytes,
+            )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        mission = (data.get("mission") or {}) if isinstance(data, dict) else {}
+        s256 = mission.get("s256")
+        if not s256:
+            return None
+        self.approved_mission = {
+            "manager": self.mm_url,
+            "s256": s256,
+            "approved": mission.get("approved", ""),
+        }
+        return self.approved_mission
+
+    async def request_resource_token_proactively(
+        self,
+        resource_base_url: str,
+        scope: str,
+    ) -> Optional[str]:
+        """POST to resource ``authorization_endpoint`` (from metadata) for a resource token."""
+        base = resource_base_url.rstrip("/")
+        meta_url = f"{base}/.well-known/aauth-resource"
+        async with httpx.AsyncClient() as client:
+            r = await client.get(meta_url)
+            if r.status_code != 200:
+                authz = f"{base}/authorize"
+            else:
+                md = r.json()
+                authz = md.get("authorization_endpoint") or f"{base}/authorize"
+
+        body_bytes = json.dumps({"scope": scope}).encode("utf-8")
+        base_headers = {"Content-Type": "application/json"}
+        if self.approved_mission:
+            from aauth.headers.aauth_header import build_aauth_mission_header
+
+            base_headers["AAuth-Mission"] = build_aauth_mission_header(
+                self.approved_mission["manager"],
+                self.approved_mission["s256"],
+            )
+        sig_headers = self.sign_request(
+            method="POST",
+            url=authz,
+            headers=base_headers,
+            body=body_bytes,
+            sig_scheme="jwks_uri",
+        )
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                authz,
+                headers={**base_headers, **sig_headers, "Prefer": "wait=30"},
+                content=body_bytes,
+            )
+        if resp.status_code != 200:
+            return None
+        payload = resp.json()
+        tok = payload.get("resource_token")
+        if tok:
+            self.resource_token = tok
+        return tok
 
     async def _send_token_request(
         self,
@@ -506,6 +630,7 @@ class Agent:
             sig_scheme="jwks_uri",
         )
         request_headers = {**headers, **sig_headers}
+        request_headers["Prefer"] = "wait=30"
 
         if http_debug:
             print(f"\n>>> AGENT TOKEN REQUEST to {token_endpoint}", file=sys.stderr)
@@ -554,7 +679,7 @@ class Agent:
         body = response.json()
         pending_url = body.get("location") or response.headers.get("location")
         # Check AAuth-Requirement header first, then fall back to body
-        aauth_req_header = response.headers.get("signature-requirement", "")
+        aauth_req_header = get_challenge_header_value(response.headers)
         if aauth_req_header:
             parsed_req = parse_aauth_header(aauth_req_header)
             require = parsed_req.get("requirement") or parsed_req.get("require")
@@ -580,8 +705,13 @@ class Agent:
                     parsed_req = parse_aauth_header(aauth_req_header)
                     interaction_endpoint = parsed_req.get("url")
                 if not interaction_endpoint:
-                    metadata = await fetch_auth_metadata(f"{auth_server}/.well-known/aauth-issuer")
-                    interaction_endpoint = metadata.get("interaction_endpoint")
+                    if self.mm_url and auth_server.rstrip("/") == self.mm_url.rstrip("/"):
+                        interaction_endpoint = f"{self.mm_url.rstrip('/')}/interact"
+                    else:
+                        metadata = await fetch_auth_metadata(
+                            f"{auth_server}/.well-known/aauth-issuer"
+                        )
+                        interaction_endpoint = metadata.get("interaction_endpoint")
                 if interaction_endpoint:
                     interaction_url = f"{interaction_endpoint}?code={code}"
 
@@ -608,6 +738,7 @@ class Agent:
         def _sign_and_send_get(url):
             """Synchronous signed GET for the poller."""
             sig_h = self.sign_request(method="GET", url=url, sig_scheme="jwks_uri")
+            sig_h = {**sig_h, "Prefer": "wait=15"}
             with httpx.Client() as client:
                 return client.get(url, headers=sig_h)
 

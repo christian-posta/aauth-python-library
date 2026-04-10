@@ -103,11 +103,14 @@ This project implements the AAuth protocol incrementally, phase by phase. See **
 - **Phase 2**: Agent identity (JWKS-based identity verification)
 - **Phase 3**: Autonomous authorization (full token flow)
 - **Phase 4**: User delegation (202 + pending URL, interaction code, polling — SPEC_UPDATED Section 4.5.4)
-- **Phase 5**: Agent is Resource (SSO and unified token flow)
+- **Phase 5**: Missions (MM proposal/approval, `AAuth-Mission`, mission claims in tokens)
 - **Phase 6**: Agent Delegation (agent tokens for distributed instances)
-- **Phase 7**: Token Exchange (multi-hop resource access with delegation chain)
+- **Phase 7**: MM–AS federation & call chaining (multi-hop / `upstream_token`)
 - **Phase 8**: Clarification Chat (deferred polling with clarification responses)
 - **Phase 9**: Interaction Chaining (downstream interaction bubbled via Resource 1)
+- **Phase 10**: Resource `authorization_endpoint` / proactive `POST /authorize`
+- **Phase 11**: MM–AS trust establishment (trusted MM → AS token path)
+- **Phase 12**: Mission lifecycle (proposal → tokens → completion)
 
 ## Quick Start
 
@@ -164,18 +167,12 @@ python demo_phase4.py
 python demo_phase4.py --manual
 ```
 
-#### Phase 5: Agent is Resource
+#### Phase 5: Missions
 
-Demonstrates agent authenticating users to itself for SSO and API access:
+Demonstrates mission proposal to a Mission Manager, `s256` approval digest, and mission context on resource tokens:
 
-**Automated mode** (uses user simulator):
 ```bash
 python demo_phase5.py
-```
-
-**Manual mode** (browser-based testing):
-```bash
-python demo_phase5.py --manual
 ```
 
 #### Phase 6: Agent Delegation
@@ -187,9 +184,9 @@ Demonstrates agent delegation where agent servers issue agent tokens to delegate
 python demo_phase6.py
 ```
 
-#### Phase 7: Token Exchange
+#### Phase 7: MM–AS federation & token exchange
 
-Demonstrates multi-hop resource access where a resource exchanges an upstream auth token to access a downstream resource:
+Demonstrates trusted Mission Manager forwarding to an authorization server and multi-hop / `upstream_token` patterns:
 
 **Automated mode**:
 ```bash
@@ -214,6 +211,24 @@ Demonstrates downstream interaction bubbling via Resource 1, keeping downstream 
 python demo_phase9.py
 ```
 
+#### Phase 10: Resource authorization endpoint
+
+```bash
+python demo_phase10.py
+```
+
+#### Phase 11: MM–AS trust
+
+```bash
+python demo_phase11.py
+```
+
+#### Phase 12: Mission lifecycle
+
+```bash
+python demo_phase12.py
+```
+
 ## Testing
 
 Run all tests:
@@ -232,6 +247,9 @@ pytest tests/test_phase6.py -v
 pytest tests/test_phase7.py -v
 pytest tests/test_phase8.py -v
 pytest tests/test_phase9.py -v
+pytest tests/test_phase10.py -v
+pytest tests/test_phase11.py -v
+pytest tests/test_phase12.py -v
 ```
 
 ## Phase Overview
@@ -268,17 +286,15 @@ See [PHASE3-autonomous-authz.md](PHASE3-autonomous-authz.md) for detailed docume
 
 See [PHASE4-user-delegation.md](PHASE4-user-delegation.md) for detailed documentation.
 
-### Phase 5: Agent is Resource
-- Agent requests authorization directly with `scope` (no `resource_token`)
-- Agent identifier matches resource identifier (agent authenticates users to itself)
-- Auth token has `aud` = agent identifier and `agent` claim omitted
-- Unified token serves both SSO (user identity) and API access purposes
-- Solves OIDC limitation where ID tokens and access tokens are separate
+### Phase 5: Missions
+- Agents propose missions to a **Mission Manager**; MM returns an approved digest **`s256`**
+- Agents send **`AAuth-Mission`** on authorization requests; resource tokens may embed **`mission`**
+- Auth tokens can carry the same mission object for policy alignment
 
-See [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md) for detailed documentation.
+See [PHASE5-missions.md](PHASE5-missions.md) for detailed documentation. Legacy self-access / agent-as-audience notes: [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md).
 
 ### Phase 6: Agent Delegation
-- Agent servers issue agent tokens (`agent+jwt`) to agent delegates
+- Agent servers issue agent tokens (`aa-agent+jwt`) to agent delegates
 - Delegates use `scheme=jwt` with agent tokens to sign requests
 - Resources and auth servers validate agent tokens per SPEC.md Section 5.7
 - Delegates share agent server's identity but use ephemeral keys
@@ -287,13 +303,10 @@ See [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md) for detailed docu
 
 See [PHASE6-agent-delegation.md](PHASE6-agent-delegation.md) for detailed documentation.
 
-### Phase 7: Token Exchange
-- Resources can act as agents to access downstream resources
-- Upstream auth tokens are exchanged for downstream auth tokens
-- Downstream auth server validates upstream token and federation trust
-- Exchanged tokens include `act` claim showing the delegation chain
-- User context (`sub`) is preserved through the chain
-- Enables autonomous multi-hop resource access
+### Phase 7: MM–AS federation & token exchange
+- Mission Manager brokers agent token requests to authorization servers the resource trusts
+- AS may require **claims**, **interaction**, or **payment** before issuing tokens
+- Resources can act as agents for downstream access; **`upstream_token`** call-chaining
 
 See [PHASE7-token-exchange.md](PHASE7-token-exchange.md) for detailed documentation.
 
@@ -311,6 +324,17 @@ See [PHASE8-clarification-chat.md](PHASE8-clarification-chat.md) for detailed do
 - Resource 1 polls downstream pending URL and returns terminal outcome upstream
 
 See [PHASE9-interaction-chaining.md](PHASE9-interaction-chaining.md) for detailed documentation.
+
+### Phase 10: Resource authorization endpoint
+- Resource metadata publishes **`authorization_endpoint`**
+- Agents **`POST`** JSON `{"scope": ...}` for proactive resource tokens (no prior 401)
+
+### Phase 11: MM–AS trust
+- AS lists trusted Mission Managers; MM signs token **`POST`**s with **`jwks_uri`**
+- AS verifies MM signature and validates **`resource_token`** (and optional **`agent_token`**)
+
+### Phase 12: Mission lifecycle
+- Mission proposal, approval, optional clarification, and use of approved missions in token flows
 
 ## Running Individual Participants
 
@@ -558,7 +582,8 @@ aauth/
 - [PHASE2-identity-jwks.md](PHASE2-identity-jwks.md) - Phase 2 implementation details
 - [PHASE3-autonomous-authz.md](PHASE3-autonomous-authz.md) - Phase 3 implementation details
 - [PHASE4-user-delegation.md](PHASE4-user-delegation.md) - Phase 4 implementation details
-- [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md) - Phase 5 implementation details
+- [PHASE5-missions.md](PHASE5-missions.md) - Phase 5 (missions) implementation details
+- [PHASE5-agent-is-resource.md](PHASE5-agent-is-resource.md) - Legacy “agent as audience” notes
 - [PHASE6-agent-delegation.md](PHASE6-agent-delegation.md) - Phase 6 implementation details
 - [PHASE7-token-exchange.md](PHASE7-token-exchange.md) - Phase 7 implementation details
 - [PHASE8-clarification-chat.md](PHASE8-clarification-chat.md) - Phase 8 implementation details

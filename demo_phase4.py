@@ -34,6 +34,7 @@ async def main():
     
     print("\n" + "=" * 80, file=sys.stderr)
     print("Phase 4: User Delegation Demo", file=sys.stderr)
+    print("Optional: set Agent(mm_url=...) so token POSTs go to a Mission Manager.", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
     
     if args.manual:

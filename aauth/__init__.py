@@ -100,21 +100,36 @@ from .headers.aauth_header import (
     build_interaction_requirement,
     build_approval_challenge,
     build_approval_requirement,
+    build_clarification_requirement,
+    build_claims_requirement,
+    build_aauth_mission_header,
+    parse_aauth_mission_header,
+    requirement_header_for_level,
+    get_challenge_header_value,
     build_aauth_error,
     build_signature_error,
     parse_aauth_error,
     parse_signature_error,
+    HEADER_SIGNATURE_REQUIREMENT,
+    HEADER_AAUTH_REQUIREMENT,
     REQUIRE_PSEUDONYM,
     REQUIRE_IDENTITY,
     REQUIRE_AUTH_TOKEN,
     REQUIRE_INTERACTION,
     REQUIRE_APPROVAL,
+    REQUIRE_CLARIFICATION,
+    REQUIRE_CLAIMS,
 )
 
 # Metadata
 from .metadata.agent import generate_agent_metadata
 from .metadata.resource import generate_resource_metadata
 from .metadata.auth_server import generate_auth_metadata, fetch_auth_metadata, fetch_metadata
+from .metadata.mission_manager import (
+    generate_mm_metadata,
+    fetch_mm_metadata,
+    fetch_mm_metadata_async,
+)
 
 # Agent role
 from .agent.signer import AgentRequestSigner
@@ -217,10 +232,25 @@ __all__ = [
     "build_auth_token_requirement",
     "build_interaction_requirement",
     "build_approval_requirement",
+    "build_clarification_requirement",
+    "build_claims_requirement",
+    "build_aauth_mission_header",
+    "parse_aauth_mission_header",
+    "requirement_header_for_level",
+    "get_challenge_header_value",
     "build_aauth_error",
     "build_signature_error",
     "parse_aauth_error",
     "parse_signature_error",
+    "REQUIRE_PSEUDONYM",
+    "REQUIRE_IDENTITY",
+    "REQUIRE_AUTH_TOKEN",
+    "REQUIRE_INTERACTION",
+    "REQUIRE_APPROVAL",
+    "REQUIRE_CLARIFICATION",
+    "REQUIRE_CLAIMS",
+    "HEADER_SIGNATURE_REQUIREMENT",
+    "HEADER_AAUTH_REQUIREMENT",
 
     # Metadata
     "generate_agent_metadata",
@@ -228,6 +258,9 @@ __all__ = [
     "generate_auth_metadata",
     "fetch_auth_metadata",
     "fetch_metadata",
+    "generate_mm_metadata",
+    "fetch_mm_metadata",
+    "fetch_mm_metadata_async",
 
     # Agent role
     "AgentRequestSigner",

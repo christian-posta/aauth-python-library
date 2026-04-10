@@ -1,6 +1,8 @@
-# Phase 5: Agent is Resource
+# Phase 5 (legacy): Agent is Resource
 
-Phase 5 implements **agent as audience** (SPEC_UPDATED.md Section 4.5.5): the agent requests an auth token for **itself** using **`scope`** only (no `resource_token`). The auth token uses **`aud`** = agent identifier and omits the **`agent`** claim. User consent still uses the same **deferred** mechanism as Phase 4: **202**, pending URL, **interaction code**, **`/interact`**, and **polling** — not `request_token` or authorization code exchange.
+> **Note:** The main Phase 5 narrative is now **missions** — see **[PHASE5-missions.md](PHASE5-missions.md)**. This file retains the older **agent-as-audience** write-up for **`request_self_authorization()`** / scope-only token requests.
+
+Phase 5 originally highlighted **agent as audience** (SPEC_UPDATED.md Section 4.5.5): the agent requests an auth token for **itself** using **`scope`** only (no `resource_token`). The auth token uses **`aud`** = agent identifier and omits the **`agent`** claim. User consent still uses the same **deferred** mechanism as Phase 4: **202**, pending URL, **interaction code**, **`/interact`**, and **polling** — not `request_token` or authorization code exchange.
 
 ## Flow description
 

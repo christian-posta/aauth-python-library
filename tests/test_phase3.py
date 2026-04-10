@@ -41,7 +41,7 @@ class TestTokenGeneration:
         
         # Parse token to verify claims
         claims = parse_token_claims(token)
-        assert claims["header"]["typ"] == "resource+jwt"
+        assert claims["header"]["typ"] == "aa-resource+jwt"
         assert claims["payload"]["iss"] == "https://resource.example"
         assert claims["payload"]["aud"] == "https://auth.example"
         assert claims["payload"]["agent"] == "https://agent.example"
@@ -69,7 +69,7 @@ class TestTokenGeneration:
         
         # Parse token to verify claims
         claims = parse_token_claims(token)
-        assert claims["header"]["typ"] == "auth+jwt"
+        assert claims["header"]["typ"] == "aa-auth+jwt"
         assert claims["payload"]["iss"] == "https://auth.example"
         assert claims["payload"]["aud"] == "https://resource.example"
         assert claims["payload"]["agent"] == "https://agent.example"
@@ -158,7 +158,7 @@ class TestTokenVerification:
         claims = verify_token(
             token=token,
             jwks_fetcher=resource_jwks_fetcher,
-            expected_typ="resource+jwt",
+            expected_typ="aa-resource+jwt",
             expected_aud="https://auth.example"
         )
         
@@ -198,7 +198,7 @@ class TestTokenVerification:
         claims = verify_token(
             token=token,
             jwks_fetcher=auth_jwks_fetcher,
-            expected_typ="auth+jwt",
+            expected_typ="aa-auth+jwt",
             expected_aud="https://resource.example"
         )
         
@@ -237,7 +237,7 @@ class TestTokenVerification:
             verify_token(
                 token=token,
                 jwks_fetcher=jwks_fetcher,
-                expected_typ="resource+jwt"
+                expected_typ="aa-resource+jwt"
             )
 
 

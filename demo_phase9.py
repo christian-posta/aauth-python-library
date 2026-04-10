@@ -20,7 +20,7 @@ async def main():
     print("\n" + "=" * 80, file=sys.stderr)
     print("Phase 9: Interaction Chaining Demo", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
-    print("\nThis demo shows downstream interaction bubbling via Resource 1:", file=sys.stderr)
+    print("\nThis demo shows downstream interaction bubbling via Resource 1 (MM optional):", file=sys.stderr)
     print("1. Agent requests Resource 1 /data-chain-auth", file=sys.stderr)
     print("2. Resource 1 calls Resource 2 and triggers downstream auth", file=sys.stderr)
     print("3. Downstream Auth Server returns 202 interaction required", file=sys.stderr)

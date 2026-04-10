@@ -222,3 +222,14 @@ def poll_pending_url(
         error="max_polls_exceeded",
         error_description=f"Exceeded maximum {max_polls} poll attempts",
     )
+
+
+def cancel_pending_request(
+    sign_and_send_delete: Callable[[str], Any],
+    pending_url: str,
+) -> Any:
+    """Send DELETE to a pending URL to cancel the request (spec Section 11.4.3).
+
+    The caller must provide ``sign_and_send_delete`` that performs a signed DELETE.
+    """
+    return sign_and_send_delete(pending_url)

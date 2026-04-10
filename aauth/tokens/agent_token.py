@@ -19,7 +19,7 @@ def create_agent_token(
     aud: Optional[str] = None,
     aud_sub: Optional[str] = None,
 ) -> str:
-    """Create an agent token (agent+jwt) per AAuth spec Section 7.1.
+    """Create an agent token (aa-agent+jwt) per AAuth spec Section 7.1.
 
     Args:
         iss: Agent server identifier (HTTPS URL) - also the agent identifier
@@ -32,14 +32,14 @@ def create_agent_token(
         aud_sub: Optional user identifier hint for the auth server in aud
 
     Returns:
-        Signed JWT string (agent+jwt)
+        Signed JWT string (aa-agent+jwt)
     """
     now = int(time.time())
     if exp is None:
         exp = now + 3600  # 1 hour
 
     header = {
-        "typ": "agent+jwt",
+        "typ": "aa-agent+jwt",
         "alg": "EdDSA",
         "kid": kid
     }
@@ -89,38 +89,38 @@ def verify_agent_token(
         header = jwt.get_unverified_header(token)
         payload = jwt.decode(token, options={"verify_signature": False})
     except Exception as e:
-        raise TokenError(f"Failed to parse agent token: {e}", token_type="agent+jwt")
+        raise TokenError(f"Failed to parse agent token: {e}", token_type="aa-agent+jwt")
 
     # Check typ
     typ = header.get("typ")
-    if typ != "agent+jwt":
+    if typ != "aa-agent+jwt":
         raise TokenError(
-            f"Invalid token type: expected agent+jwt, got {typ}",
-            token_type="agent+jwt"
+            f"Invalid token type: expected aa-agent+jwt, got {typ}",
+            token_type="aa-agent+jwt"
         )
 
     # Check required claims
     kid_header = header.get("kid")
     if not kid_header:
-        raise TokenError("Token header missing 'kid'", token_type="agent+jwt")
+        raise TokenError("Token header missing 'kid'", token_type="aa-agent+jwt")
 
     iss = payload.get("iss")
     if not iss:
-        raise TokenError("Token payload missing 'iss'", token_type="agent+jwt")
+        raise TokenError("Token payload missing 'iss'", token_type="aa-agent+jwt")
 
     if "jti" not in payload:
-        raise TokenError("Token missing required 'jti' claim", token_type="agent+jwt")
+        raise TokenError("Token missing required 'jti' claim", token_type="aa-agent+jwt")
 
     sub = payload.get("sub")
     if not sub:
-        raise TokenError("Token missing 'sub' claim (agent delegate identifier)", token_type="agent+jwt")
+        raise TokenError("Token missing 'sub' claim (agent delegate identifier)", token_type="aa-agent+jwt")
 
     # Fetch agent server's JWKS and verify signature
     jwks = jwks_fetcher(iss)
     if not jwks:
         raise TokenError(
             f"Failed to fetch JWKS from {iss}",
-            token_type="agent+jwt",
+            token_type="aa-agent+jwt",
             details={"iss": iss}
         )
 
@@ -134,7 +134,7 @@ def verify_agent_token(
     if not signing_key:
         raise TokenError(
             f"Signing key with kid={kid_header} not found in JWKS",
-            token_type="agent+jwt",
+            token_type="aa-agent+jwt",
             details={"kid": kid_header, "iss": iss}
         )
 
@@ -147,9 +147,9 @@ def verify_agent_token(
             options={"verify_signature": True, "verify_exp": False, "verify_aud": False}
         )
     except jwt.InvalidSignatureError as e:
-        raise TokenError(f"JWT signature verification failed: {e}", token_type="agent+jwt")
+        raise TokenError(f"JWT signature verification failed: {e}", token_type="aa-agent+jwt")
     except Exception as e:
-        raise TokenError(f"Failed to verify JWT signature: {e}", token_type="agent+jwt")
+        raise TokenError(f"Failed to verify JWT signature: {e}", token_type="aa-agent+jwt")
 
     # Verify exp
     exp = payload.get("exp")
@@ -157,7 +157,7 @@ def verify_agent_token(
         if int(time.time()) >= exp:
             raise jwt.ExpiredSignatureError("Token has expired")
     else:
-        raise TokenError("Token missing 'exp' claim", token_type="agent+jwt")
+        raise TokenError("Token missing 'exp' claim", token_type="aa-agent+jwt")
 
     # Verify aud if present
     aud = payload.get("aud")
@@ -169,14 +169,14 @@ def verify_agent_token(
         if not aud_matches:
             raise TokenError(
                 f"Invalid audience: expected {expected_aud}, got {aud}",
-                token_type="agent+jwt"
+                token_type="aa-agent+jwt"
             )
 
     # Verify cnf.jwk
     cnf = payload.get("cnf")
     if not cnf:
-        raise TokenError("Token missing 'cnf' claim", token_type="agent+jwt")
+        raise TokenError("Token missing 'cnf' claim", token_type="aa-agent+jwt")
     if not cnf.get("jwk"):
-        raise TokenError("Token missing 'cnf.jwk' claim", token_type="agent+jwt")
+        raise TokenError("Token missing 'cnf.jwk' claim", token_type="aa-agent+jwt")
 
     return payload
