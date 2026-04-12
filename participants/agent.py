@@ -31,6 +31,7 @@ import re
 import threading
 import time
 import asyncio
+from urllib.parse import urlparse
 
 logger = logging.getLogger("aauth.agent")
 
@@ -390,7 +391,9 @@ class Agent:
                     return poll_response
 
                 poll_body = poll_response.json()
-                if not interacted and poll_body.get("require") == "interaction":
+                if not interacted and (
+                    poll_body.get("requirement") or poll_body.get("require")
+                ) == "interaction":
                     poll_code = poll_body.get("code")
                     poll_interaction_endpoint = poll_body.get("interaction_endpoint") or interaction_endpoint
                     if poll_code and poll_interaction_endpoint and self.use_user_simulator:
@@ -699,7 +702,7 @@ class Agent:
             require = parsed_req.get("requirement") or parsed_req.get("require")
             code = parsed_req.get("code") or body.get("code")
         else:
-            require = body.get("require")
+            require = body.get("requirement") or body.get("require")
             code = body.get("code")
 
         if not pending_url:
@@ -720,12 +723,38 @@ class Agent:
                     interaction_endpoint = parsed_req.get("url")
                 if not interaction_endpoint:
                     if self.mm_url and auth_server.rstrip("/") == self.mm_url.rstrip("/"):
-                        interaction_endpoint = f"{self.mm_url.rstrip('/')}/interact"
+                        # Token POST went to the MM; pending + consent still live on the AS that
+                        # issued the 202 (pending URL host or resource token aud), not on the MM.
+                        as_base = None
+                        if pending_url:
+                            as_base = f"{urlparse(pending_url).scheme}://{urlparse(pending_url).netloc}"
+                        if not as_base and getattr(self, "resource_token", None):
+                            try:
+                                import jwt as jwt_lib
+
+                                as_base = jwt_lib.decode(
+                                    self.resource_token, options={"verify_signature": False}
+                                ).get("aud")
+                            except Exception:
+                                pass
+                        if as_base:
+                            try:
+                                metadata = await fetch_auth_metadata(
+                                    f"{as_base.rstrip('/')}/.well-known/aauth-issuer"
+                                )
+                                interaction_endpoint = metadata.get("interaction_endpoint")
+                            except Exception:
+                                interaction_endpoint = None
+                        if not interaction_endpoint and as_base:
+                            interaction_endpoint = f"{as_base.rstrip('/')}/interact"
                     else:
-                        metadata = await fetch_auth_metadata(
-                            f"{auth_server}/.well-known/aauth-issuer"
-                        )
-                        interaction_endpoint = metadata.get("interaction_endpoint")
+                        try:
+                            metadata = await fetch_auth_metadata(
+                                f"{auth_server}/.well-known/aauth-issuer"
+                            )
+                            interaction_endpoint = metadata.get("interaction_endpoint")
+                        except Exception:
+                            interaction_endpoint = None
                 if interaction_endpoint:
                     interaction_url = f"{interaction_endpoint}?code={code}"
 
@@ -734,7 +763,8 @@ class Agent:
                             logger.debug(f"Using user simulator for interaction: {interaction_url}")
                         from participants.user_simulator import UserSimulator
                         user_sim = UserSimulator()
-                        await user_sim.complete_interaction(interaction_url, auth_server)
+                        # Do not pass MM as auth_server_base; consent UI is on the AS host in interaction_url.
+                        await user_sim.complete_interaction(interaction_url, None)
                     else:
                         print(f"\n{'='*60}", file=sys.stderr)
                         print("USER INTERACTION REQUIRED", file=sys.stderr)

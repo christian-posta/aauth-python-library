@@ -1,8 +1,9 @@
 """User delegation flow orchestrator for Phase 4.
 
-When ``agent.mm_url`` is set, token **POST**s go to the Mission Manager; the
-user simulator should complete interaction at the MM or AS as returned in the
-202 response (see ``Agent._handle_deferred_response``).
+Per SPEC, agents POST resource tokens to the Mission Manager ``token_endpoint``;
+the MM federates with the AS. Token **POST**s go to the MM when ``agent.mm_url``
+is set. The user simulator completes interaction at the URL in the 202 response
+(typically the AS ``/interact`` endpoint; see ``Agent._handle_deferred_response``).
 """
 
 import asyncio
@@ -15,7 +16,11 @@ from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
 from participants.user_simulator import UserSimulator
-from aauth.debug import _is_debug_enabled, _is_jwt_token_debug_enabled
+from aauth.debug import (
+    _is_debug_enabled,
+    _is_jwt_token_debug_enabled,
+    print_stderr_localhost_port_map,
+)
 from aauth.tokens.auth_token import parse_token_claims
 
 
@@ -29,10 +34,10 @@ async def run_user_delegated_flow(
 ) -> httpx.Response:
     """Run the complete user delegation flow (automated with user simulator).
 
-    Flow (SPEC_UPDATED.md Sections 4.5.4, 10):
+    Flow (SPEC: MM token endpoint + deferred responses):
     1. Agent requests resource (401 + resource token in AAuth header)
-    2. Agent POSTs resource token to auth server token endpoint → 202 + Location + interaction code
-    3. User simulator completes consent at auth server /interact
+    2. Agent POSTs resource token to MM ``/token``; MM federates to AS → may return 202 + Location + code
+    3. User simulator completes consent at AS ``/interact`` (or interaction URL from 202)
     4. Agent polls pending URL (GET) until 200 with auth_token
     5. Agent retries resource request with auth token
     6. Resource validates auth token and grants access
@@ -57,6 +62,13 @@ async def run_user_delegated_flow(
         print(f"Agent: {agent.agent_id}", file=sys.stderr)
         print(f"Resource: {resource.resource_id}", file=sys.stderr)
         print(f"Auth Server: {auth_server.auth_id}", file=sys.stderr)
+        if getattr(agent, "mm_url", None):
+            print(f"Mission Manager: {agent.mm_url} (agent POSTs token requests here)", file=sys.stderr)
+        else:
+            print(
+                "Mission Manager: (not set — agent would call AS token endpoint directly; spec expects MM)",
+                file=sys.stderr,
+            )
         print(f"Resource URL: {resource_url}", file=sys.stderr)
         print("=" * 80 + "\n", file=sys.stderr)
     
@@ -86,6 +98,7 @@ async def run_user_delegated_flow(
     # so we can access it from agent.resource_token even if the response is already 200 (after retry)
     jwt_token_debug = _is_jwt_token_debug_enabled()
     if jwt_token_debug and agent.resource_token:
+        print_stderr_localhost_port_map(agent, resource, auth_server)
         print("\n" + "=" * 80, file=sys.stderr, flush=True)
         print("RESOURCE TOKEN (decoded)", file=sys.stderr, flush=True)
         print("=" * 80, file=sys.stderr, flush=True)
@@ -109,6 +122,7 @@ async def run_user_delegated_flow(
     
     # Decode and print auth token (if JWT token debug is enabled)
     if jwt_token_debug and agent.auth_token:
+        print_stderr_localhost_port_map(agent, resource, auth_server)
         print("\n" + "=" * 80, file=sys.stderr, flush=True)
         print("AUTH TOKEN (decoded)", file=sys.stderr, flush=True)
         print("=" * 80, file=sys.stderr, flush=True)
