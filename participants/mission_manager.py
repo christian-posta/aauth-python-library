@@ -341,3 +341,9 @@ class MissionManager:
                         p["status"] = "approved"
                     break
         return HTMLResponse("<html><body>ok</body></html>")
+
+    def run(self) -> None:
+        """Run the Mission Manager (same pattern as ``Agent`` / ``Resource``)."""
+        import uvicorn
+
+        uvicorn.run(self.app, host="0.0.0.0", port=self.port)

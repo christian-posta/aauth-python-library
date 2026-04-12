@@ -14,7 +14,11 @@ import httpx
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AuthServer
-from aauth.debug import _is_debug_enabled, _is_jwt_token_debug_enabled
+from aauth.debug import (
+    _is_debug_enabled,
+    _is_jwt_token_debug_enabled,
+    print_stderr_localhost_port_map,
+)
 from aauth.tokens.auth_token import parse_token_claims
 
 
@@ -29,8 +33,9 @@ async def run_autonomous_flow(
     
     Flow:
     1. Agent requests resource (gets resource token challenge)
-    2. Agent presents resource token to auth server
-    3. Auth server issues auth token
+    2. Agent presents resource token to its MM's ``token_endpoint`` (or to the AS
+       directly if ``agent.mm_url`` is unset)
+    3. MM federates to the AS when applicable; auth server issues auth token
     4. Agent retries resource request with auth token
     5. Resource validates auth token and grants access
     
@@ -53,6 +58,10 @@ async def run_autonomous_flow(
         print(f"Agent: {agent.agent_id}", file=sys.stderr)
         print(f"Resource: {resource.resource_id}", file=sys.stderr)
         print(f"Auth Server: {auth_server.auth_id}", file=sys.stderr)
+        if getattr(agent, "mm_url", None):
+            print(f"Mission Manager: {agent.mm_url} (token requests go here)", file=sys.stderr)
+        else:
+            print("Mission Manager: (not set — agent calls AS token endpoint directly)", file=sys.stderr)
         print(f"Resource URL: {resource_url}", file=sys.stderr)
         print("=" * 80 + "\n", file=sys.stderr)
     
@@ -82,6 +91,7 @@ async def run_autonomous_flow(
     # so we can access it from agent.resource_token even if the response is already 200 (after retry)
     jwt_token_debug = _is_jwt_token_debug_enabled()
     if jwt_token_debug and agent.resource_token:
+        print_stderr_localhost_port_map(agent, resource, auth_server)
         print("\n" + "=" * 80, file=sys.stderr, flush=True)
         print("RESOURCE TOKEN (decoded)", file=sys.stderr, flush=True)
         print("=" * 80, file=sys.stderr, flush=True)
@@ -98,7 +108,18 @@ async def run_autonomous_flow(
     # Step 2-4: Agent should have automatically handled the challenge
     # (request_resource handles 401 responses and retries with auth token)
     if debug:
-        print("\nSteps 2-4: Agent automatically handled challenge and retried with auth token", file=sys.stderr, flush=True)
+        if getattr(agent, "mm_url", None):
+            print(
+                "\nSteps 2-4: Agent obtained auth token (via MM → AS) and retried resource request",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(
+                "\nSteps 2-4: Agent obtained auth token (direct AS) and retried resource request",
+                file=sys.stderr,
+                flush=True,
+            )
         if agent.auth_token:
             print(f"Agent now has auth token: {agent.auth_token[:100]}...", file=sys.stderr, flush=True)
         else:
@@ -106,6 +127,7 @@ async def run_autonomous_flow(
     
     # Decode and print auth token (if JWT token debug is enabled)
     if jwt_token_debug and agent.auth_token:
+        print_stderr_localhost_port_map(agent, resource, auth_server)
         print("\n" + "=" * 80, file=sys.stderr, flush=True)
         print("AUTH TOKEN (decoded)", file=sys.stderr, flush=True)
         print("=" * 80, file=sys.stderr, flush=True)

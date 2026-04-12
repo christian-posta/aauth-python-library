@@ -452,8 +452,10 @@ class Agent:
         body_dict = {"scope": scope}
         if redirect_uri:
             body_dict["redirect_uri"] = redirect_uri
-        return await self._send_token_request(token_endpoint, body_dict, auth_server)
-    
+        return await self._send_token_request(
+            token_endpoint, body_dict, auth_server, token_request_via="as"
+        )
+
     async def _request_auth_token(self, resource_token: str, auth_server: str) -> Optional[str]:
         """Request auth token from auth server (resource access mode).
 
@@ -489,7 +491,9 @@ class Agent:
             if not token_endpoint:
                 return None
             body_dict = {"resource_token": resource_token}
-            return await self._send_token_request(token_endpoint, body_dict, self.mm_url)
+            return await self._send_token_request(
+                token_endpoint, body_dict, self.mm_url, token_request_via="mm"
+            )
 
         # Fetch auth server metadata (direct agent → AS)
         try:
@@ -505,7 +509,9 @@ class Agent:
 
         # Build JSON request body (resource access mode)
         body_dict = {"resource_token": resource_token}
-        return await self._send_token_request(token_endpoint, body_dict, auth_server)
+        return await self._send_token_request(
+            token_endpoint, body_dict, auth_server, token_request_via="as"
+        )
 
     async def propose_mission(self, proposal: str) -> Optional[Dict[str, Any]]:
         """POST ``mission_proposal`` to the configured Mission Manager; cache approved mission."""
@@ -601,15 +607,18 @@ class Agent:
         token_endpoint: str,
         body_dict: Dict[str, Any],
         auth_server: str,
+        *,
+        token_request_via: str = "as",
     ) -> Optional[str]:
-        """Send a signed token request to the auth server and handle the response.
+        """Send a signed token request to obtain an **auth** token and handle the response.
 
         Handles both direct grant (200) and deferred response (202 + polling).
 
         Args:
-            token_endpoint: Auth server token endpoint URL
+            token_endpoint: Token endpoint URL (MM or AS ``/token``)
             body_dict: JSON request body
-            auth_server: Auth server identifier (for metadata lookups)
+            auth_server: Peer identifier for deferred-response / polling (MM or AS URL)
+            token_request_via: ``"mm"`` when posting to the Mission Manager, ``"as"`` when posting to the AS
 
         Returns:
             Auth token string, or None if request failed
@@ -633,7 +642,12 @@ class Agent:
         request_headers["Prefer"] = "wait=30"
 
         if http_debug:
-            print(f"\n>>> AGENT TOKEN REQUEST to {token_endpoint}", file=sys.stderr)
+            via = "Mission Manager" if token_request_via == "mm" else "Authorization Server"
+            print(
+                f"\n>>> Outgoing: request auth token (agent → {via})",
+                file=sys.stderr,
+            )
+            print(f"    POST {token_endpoint}", file=sys.stderr)
             print(f"Body: {body_text}", file=sys.stderr)
 
         # Make request

@@ -171,8 +171,29 @@ class AuthServer:
         body_text = body_bytes.decode('utf-8') if body_bytes else ""
 
         if http_debug:
+            banner = "Incoming: POST /token (Authorization Server)"
+            try:
+                sk = request.headers.get("signature-key", "")
+                if sk:
+                    pk = parse_signature_key(sk)
+                    sch = pk.get("scheme")
+                    sid = (pk.get("params") or {}).get("id", "")
+                    if sch in ("jwks", "jwks_uri") and sid:
+                        trusted = {x.rstrip("/") for x in self.trusted_mission_managers}
+                        if trusted and sid.rstrip("/") in trusted:
+                            banner = (
+                                "Incoming: POST /token — Mission Manager → AS federation "
+                                f"(Signature-Key id={sid})"
+                            )
+                        else:
+                            banner = (
+                                "Incoming: POST /token — direct from agent "
+                                f"(Signature-Key id={sid})"
+                            )
+            except Exception:
+                pass
             print("\n" + "=" * 80, file=sys.stderr)
-            print(">>> AUTH SERVER TOKEN REQUEST received", file=sys.stderr)
+            print(f">>> {banner}", file=sys.stderr)
             print("=" * 80, file=sys.stderr)
             print(f"{request.method} {request.url.path} HTTP/1.1", file=sys.stderr)
             for name, value in sorted(request.headers.items()):
