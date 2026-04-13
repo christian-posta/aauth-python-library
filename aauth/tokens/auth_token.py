@@ -67,8 +67,8 @@ def create_auth_token(
         "exp": exp,
     }
 
-    # Omit agent claim when agent == aud (self-access / agent-is-resource)
-    if agent and agent != aud:
+    # agent is REQUIRED per spec Section 9.1
+    if agent:
         payload["agent"] = agent
 
     if sub:

@@ -233,14 +233,13 @@ class AuthServer:
             logger.debug(f"Token endpoint mode: {mode}")
 
         # Route to handler based on mode
-        if mode == "call_chaining":
-            return await self._handle_call_chaining(request, params_dict, body_bytes)
         if mode == "token_refresh":
             return await self._handle_token_refresh(request, params_dict, body_bytes)
         # resource_access and self_access share the same authorization flow
 
-        # MM federation: trusted MM calls AS with resource_token + agent_token (HTTPSig jwks_uri = MM)
-        if mode == "resource_access" and self.trusted_mission_managers:
+        # MM federation: trusted MM calls AS with resource_token (+ optional upstream_token)
+        # This covers both "resource_access" mode and "call_chaining" mode when caller is MM.
+        if mode in ("resource_access", "call_chaining") and self.trusted_mission_managers:
             try:
                 pk = parse_signature_key(request.headers.get("signature-key", ""))
                 sch = pk.get("scheme")
@@ -249,6 +248,10 @@ class AuthServer:
                     return await self._handle_mm_federated_token_request(request, params_dict, body_bytes)
             except Exception:
                 pass
+
+        # Direct call chaining (no MM involved)
+        if mode == "call_chaining":
+            return await self._handle_call_chaining(request, params_dict, body_bytes)
 
         # Verify agent's HTTPSig signature
         headers_dict = dict(request.headers)
@@ -726,6 +729,63 @@ class AuthServer:
         resource_id = resource_claims.get("iss")
         scope = resource_claims.get("scope", "")
         purpose = params_dict.get("purpose")
+        mission = resource_claims.get("mission")
+
+        # Call Chaining: if upstream_token is provided, verify it before issuing auth token.
+        upstream_token_str = params_dict.get("upstream_token")
+        if upstream_token_str:
+            import jwt as jwt_lib
+            try:
+                upstream_payload = jwt_lib.decode(upstream_token_str, options={"verify_signature": False})
+                upstream_iss = upstream_payload.get("iss")
+                upstream_aud = upstream_payload.get("aud")
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "invalid_upstream_token", "error_description": str(e)},
+                )
+            if upstream_iss not in self.trusted_auth_servers:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "untrusted_auth_server", "error_description": f"Upstream AS not trusted: {upstream_iss}"},
+                )
+            if upstream_aud != agent_id_for_policy:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_upstream_token", "error_description": f"upstream_aud {upstream_aud} does not match agent {agent_id_for_policy}"},
+                )
+            # Verify upstream token signature via upstream AS's JWKS
+            try:
+                upstream_header = jwt_lib.get_unverified_header(upstream_token_str)
+                upstream_kid = upstream_header.get("kid")
+                metadata_url = f"{upstream_iss}/.well-known/aauth-issuer"
+                import httpx as _httpx
+                meta_r = _httpx.get(metadata_url, timeout=10.0)
+                meta_r.raise_for_status()
+                jwks_uri = meta_r.json().get("jwks_uri")
+                if not jwks_uri:
+                    raise ValueError("upstream AS metadata missing jwks_uri")
+                jwks_r = _httpx.get(jwks_uri, timeout=10.0)
+                jwks_r.raise_for_status()
+                upstream_jwks = jwks_r.json()
+                signing_key = None
+                for k in upstream_jwks.get("keys", []):
+                    if k.get("kid") == upstream_kid:
+                        signing_key = k
+                        break
+                if not signing_key:
+                    raise ValueError(f"Key {upstream_kid} not in upstream AS JWKS")
+                from aauth.keys.jwk import jwk_to_public_key as _jwk_to_pub
+                upstream_pub = _jwk_to_pub(signing_key)
+                jwt_lib.decode(
+                    upstream_token_str, upstream_pub, algorithms=["EdDSA"],
+                    options={"verify_signature": True, "verify_exp": True, "verify_aud": False},
+                )
+            except jwt_lib.ExpiredSignatureError:
+                return JSONResponse(status_code=401, content={"error": "invalid_upstream_token", "error_description": "upstream token expired"})
+            except Exception as e:
+                return JSONResponse(status_code=401, content={"error": "invalid_upstream_token", "error_description": str(e)})
+
         policy_result = self._evaluate_policy(agent_id_for_policy, resource_id, scope)
         agent_clarification_supported = self._agent_supports_clarification(agent_id_for_policy, debug)
 
@@ -751,6 +811,7 @@ class AuthServer:
             resource=resource_id,
             scope=scope,
             cnf_jwk=cnf_jwk,
+            mission=mission,
         )
         return JSONResponse(content=build_success_response(auth_token))
 
@@ -981,6 +1042,7 @@ class AuthServer:
             retry_after=2,
             require="interaction",
             code=interaction_code,
+            url=f"{self.auth_id}/interact",
         )
 
         return Response(
@@ -1351,6 +1413,7 @@ class AuthServer:
             kid=self.kid,
             exp=None,  # Default 1 hour
             sub=sub,
+            mission=kwargs.get("mission"),
         )
         
         if debug:

@@ -1,13 +1,25 @@
-"""Demo Phase 11: MM–AS Trust — federated token path via Mission Manager.
+"""Demo Phase 13: Direct Approval — requirement=approval polling without user redirect.
 
-The agent is configured with ``mm_url`` so its auth token requests go to the MM's
-``token_endpoint`` instead of the AS directly.  The MM verifies the resource token,
-then calls the AS using its own HTTP Message Signature (``scheme=jwks_uri``).  The AS
-trusts the MM (``trusted_mission_managers``) and issues an auth token.  The agent
-never speaks to the AS directly.
+Per spec Section 4.5.6, the MM contacts the user via an out-of-band channel
+(push notification, email, existing session) instead of asking the agent to
+redirect the user.  The agent receives ``AAuth-Requirement: requirement=approval``
+with no interaction URL or code and simply polls the pending URL.
 
-TEST 2 shows the contrast: an identical agent WITHOUT ``mm_url`` calls the AS
-directly — the AS grants it too, but the signing path (and audit trail) differs.
+Flow:
+  Agent → Resource:  GET /data-auth (unsigned)
+  Resource → Agent:  401 + resource token (AAuth-Requirement: requirement=auth-token)
+  Agent → MM:        POST /token + resource_token (signed)
+  MM → Agent:        202 Accepted + Location + AAuth-Requirement: requirement=approval
+  [MM sends push notification to user — simulated by a background task]
+  [User approves after ``approval_delay`` seconds]
+  Agent → MM:        GET /pending/{pid}  (signed, Prefer: wait=15, repeated)
+  MM → Agent:        200 OK + auth_token          (once approved)
+  Agent → Resource:  GET /data-auth (auth token, scheme=jwks_uri)
+  Resource → Agent:  200 OK
+
+TEST 1: Full direct-approval happy path (MM auto-approves after 2 s).
+TEST 2: Denied terminal state — MM auto-denies after 2 s; agent polls and
+        receives 403; asserts auth_token is None.
 """
 
 import asyncio
@@ -16,6 +28,7 @@ import sys
 import threading
 from typing import List
 
+import httpx
 from uvicorn import Config, Server
 
 from aauth.debug import print_stderr_localhost_port_map
@@ -67,10 +80,10 @@ async def main() -> None:
     _server_threads.clear()
 
     print("\n" + "=" * 80, file=sys.stderr)
-    print("Phase 11: MM–AS Trust (federated token path via Mission Manager)", file=sys.stderr)
+    print("Phase 13: Direct Approval (requirement=approval — no user redirect)", file=sys.stderr)
     print(
-        "Spec: Agent sends resource token to MM token_endpoint; MM signs request\n"
-        "with its own key (scheme=jwks_uri); AS verifies MM identity and issues auth token.",
+        "Spec: MM returns 202 + requirement=approval; agent polls only.\n"
+        "MM contacts user out-of-band; user approves; agent gets auth token.",
         file=sys.stderr,
     )
     print("=" * 80 + "\n", file=sys.stderr)
@@ -80,11 +93,11 @@ async def main() -> None:
     as_id = "http://127.0.0.1:8003"
     mm_id = "http://127.0.0.1:8004"
 
-    # Agent WITH mm_url — all auth token requests go through the MM.
+    # MM configured for direct approval (simulates push/email approval after 2 s).
     agent = Agent(agent_id, port=8001, mm_url=mm_id)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
     auth = AuthServer(as_id, port=8003, trusted_mission_managers=[mm_id])
-    mm = MissionManager(mm_id, port=8004)
+    mm = MissionManager(mm_id, port=8004, require_approval=True, approval_delay=2.0, approval_outcome="approve")
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
@@ -97,10 +110,7 @@ async def main() -> None:
 
     try:
         # ------------------------------------------------------------------
-        print(
-            "TEST 1: Reactive MM-federated flow — 401 challenge → MM → AS → auth token",
-            file=sys.stderr,
-        )
+        print("TEST 1: Direct approval — MM returns requirement=approval, agent polls", file=sys.stderr)
 
         response = await agent.request_resource(
             resource_url=f"{resource_id}/data-auth",
@@ -113,7 +123,7 @@ async def main() -> None:
         data = response.json()
         assert data.get("token_type") == "aa-auth+jwt"
 
-        # Display the resource token the agent captured from the 401 challenge.
+        # Inspect the resource token captured from the 401 challenge.
         rt = agent.resource_token
         assert rt, "Agent should have captured resource token from 401 challenge"
         rt_claims = parse_token_claims(rt)
@@ -126,12 +136,12 @@ async def main() -> None:
         print(json.dumps(rt_claims["payload"], indent=2), file=sys.stderr)
         print("=" * 80, file=sys.stderr)
 
-        # Display the auth token the MM obtained from the AS.
+        # Inspect the auth token the MM obtained via direct approval.
         auth_token = agent.auth_token
-        assert auth_token, "Agent should have stored auth_token"
+        assert auth_token, "Agent should have stored auth_token after polling"
         at_claims = parse_token_claims(auth_token)
         print("\n" + "=" * 80, file=sys.stderr)
-        print("AUTH TOKEN (aa-auth+jwt) — issued by AS via MM federation", file=sys.stderr)
+        print("AUTH TOKEN (aa-auth+jwt) — obtained via direct approval polling", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("Header:", file=sys.stderr)
         print(json.dumps(at_claims["header"], indent=2), file=sys.stderr)
@@ -139,57 +149,47 @@ async def main() -> None:
         print(json.dumps(at_claims["payload"], indent=2), file=sys.stderr)
         print("=" * 80, file=sys.stderr)
 
-        # Verify token chain
         assert at_claims["header"].get("typ") == "aa-auth+jwt"
         assert at_claims["payload"].get("iss") == as_id
         assert at_claims["payload"].get("aud") == resource_id
         assert at_claims["payload"].get("agent") == agent_id
-        print("  ✓ TEST 1 PASSED: MM-federated auth token obtained; resource returned 200", file=sys.stderr)
-        print(f"  Final response: {data}", file=sys.stderr)
+        print("  ✓ TEST 1 PASSED: direct approval flow complete; resource returned 200", file=sys.stderr)
+        print(f"  Response: {data}", file=sys.stderr)
 
         # ------------------------------------------------------------------
         print(
-            "\nTEST 2: Direct flow (no MM) — same resource, agent calls AS directly",
+            "\nTEST 2: Denied terminal state — MM denies after 2 s; agent gets 403",
             file=sys.stderr,
         )
 
-        # Start a second agent (port 8011) without mm_url — calls AS directly.
+        # Start a second MM (port 8014) configured to deny, and a second agent (port 8011).
+        mm2_id = "http://127.0.0.1:8014"
         agent2_id = "http://127.0.0.1:8011"
-        agent2 = Agent(agent2_id, port=8011)  # no mm_url
-        start_uvicorn(agent2.app, agent2.port, "Agent2")
+
+        mm2 = MissionManager(
+            mm2_id, port=8014,
+            require_approval=True,
+            approval_delay=2.0,
+            approval_outcome="deny",
+        )
+        agent2 = Agent(agent2_id, port=8011, mm_url=mm2_id)
+        start_uvicorn(mm2.app, 8014, "Mission Manager 2 (deny)")
+        start_uvicorn(agent2.app, 8011, "Agent 2")
         await asyncio.sleep(1)
 
-        response2 = await agent2.request_resource(
-            resource_url=f"{resource_id}/data-auth",
-            method="GET",
-            sig_scheme="jwks_uri",
+        # Agent2 gets a resource token via the same resource (which uses AS on 8003).
+        # Then sends it to MM2 which will deny — auth_token comes back as None.
+        resource_token2 = await agent2.request_resource_token_proactively(resource_id, "data.read")
+        assert resource_token2, "resource_token2 missing"
+
+        auth_token2 = await agent2._request_auth_token(resource_token2, as_id)
+        assert auth_token2 is None, (
+            f"Expected None (denied), got token: {auth_token2}"
         )
-        assert response2.status_code == 200, (
-            f"Expected 200, got {response2.status_code}: {response2.text}"
-        )
+        print("  ✓ TEST 2 PASSED: MM denied approval → agent received 403 → auth_token is None", file=sys.stderr)
+        print(f"  (polling terminated with 403 denied after {mm2.approval_delay}s)", file=sys.stderr)
 
-        auth_token2 = agent2.auth_token
-        assert auth_token2, "Agent2 should have stored auth_token"
-        at2_claims = parse_token_claims(auth_token2)
-        print("\n" + "=" * 80, file=sys.stderr)
-        print("AUTH TOKEN 2 (aa-auth+jwt) — issued directly by AS (no MM)", file=sys.stderr)
-        print("=" * 80, file=sys.stderr)
-        print("Header:", file=sys.stderr)
-        print(json.dumps(at2_claims["header"], indent=2), file=sys.stderr)
-        print("\nPayload:", file=sys.stderr)
-        print(json.dumps(at2_claims["payload"], indent=2), file=sys.stderr)
-        print("=" * 80, file=sys.stderr)
-
-        # Both paths produce valid aa-auth+jwt from the same AS.
-        assert at2_claims["header"].get("typ") == "aa-auth+jwt"
-        assert at2_claims["payload"].get("iss") == as_id
-        assert at2_claims["payload"].get("aud") == resource_id
-        assert at2_claims["payload"].get("agent") == agent2_id
-        print("  ✓ TEST 2 PASSED: Direct AS path also works; same AS issued both tokens", file=sys.stderr)
-        print(f"  MM-federated iss: {at_claims['payload']['iss']}  (via MM → AS)", file=sys.stderr)
-        print(f"  Direct AS iss:    {at2_claims['payload']['iss']}  (agent → AS)", file=sys.stderr)
-
-        print("\nPhase 11 MM–AS trust demo complete.", file=sys.stderr)
+        print("\nPhase 13 direct approval demo complete.", file=sys.stderr)
     finally:
         await shutdown_uvicorn_servers()
 

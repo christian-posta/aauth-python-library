@@ -43,6 +43,7 @@ class Resource:
         port: int = 8002,
         auth_server: Optional[str] = None,
         downstream_resource_url: Optional[str] = None,
+        mm_url: Optional[str] = None,
     ):
         """Initialize resource.
 
@@ -50,11 +51,14 @@ class Resource:
             resource_id: Resource identifier (HTTPS URL)
             port: Port to run resource server on
             auth_server: Optional auth server identifier (HTTPS URL) for Phase 3
+            mm_url: Optional Mission Manager URL; if set, token exchange goes via MM (call chaining)
         """
         self.resource_id = resource_id
         self.port = port
         self.auth_server = auth_server
         self.downstream_resource_url = downstream_resource_url
+        self.mm_url = mm_url
+        self.last_downstream_auth_token: Optional[str] = None
         self.chained_pending_requests: Dict[str, Dict[str, Any]] = {}
         
         # Generate key pair for resource token signing
@@ -1731,12 +1735,14 @@ class Resource:
             resource_token=resource_token,
             upstream_auth_token=upstream_auth_token
         )
-        
+
         if not exchange_token:
             if debug:
                 print(f"DEBUG RESOURCE:   Token exchange failed", file=sys.stderr, flush=True)
             return initial_response
-        
+
+        self.last_downstream_auth_token = exchange_token
+
         if debug:
             print(f"DEBUG RESOURCE:   Token exchange successful: {exchange_token[:100]}...", file=sys.stderr, flush=True)
         
@@ -1826,7 +1832,44 @@ class Resource:
         if debug:
             print(f"DEBUG RESOURCE: Exchanging token", file=sys.stderr, flush=True)
             print(f"DEBUG RESOURCE:   Auth server: {auth_server}", file=sys.stderr, flush=True)
-        
+
+        if self.mm_url:
+            # Call Chaining via MM: send resource_token + upstream_token to MM
+            if debug:
+                print(f"DEBUG RESOURCE:   Using MM for call chaining: {self.mm_url}", file=sys.stderr, flush=True)
+            token_endpoint = f"{self.mm_url.rstrip('/')}/token"
+            request_data = {
+                "resource_token": resource_token,
+                "upstream_token": upstream_auth_token,
+            }
+            request_body = json.dumps(request_data)
+            request_body_bytes = request_body.encode("utf-8")
+            from aauth.signing.signer import sign_request as _sign
+            base_headers = {"Content-Type": "application/json"}
+            sig_headers = _sign(
+                method="POST",
+                target_uri=token_endpoint,
+                headers=base_headers,
+                body=request_body_bytes,
+                private_key=self.private_key,
+                sig_scheme="jwks_uri",
+                id=self.resource_id,
+                kid=self.kid,
+            )
+            request_headers = {**base_headers, **sig_headers}
+            async with httpx.AsyncClient() as client:
+                response = await client.post(token_endpoint, headers=request_headers, content=request_body_bytes)
+            if response.status_code != 200:
+                if debug:
+                    print(f"DEBUG RESOURCE:   MM call chaining failed: {response.status_code} {response.text}", file=sys.stderr, flush=True)
+                return None
+            try:
+                return response.json().get("auth_token")
+            except Exception as e:
+                if debug:
+                    print(f"DEBUG RESOURCE:   Failed to parse MM response: {e}", file=sys.stderr, flush=True)
+                return None
+
         # Build exchange request (call chaining: resource_token + upstream_token)
         token_endpoint = f"{auth_server}/token"
         request_data = {
@@ -1840,7 +1883,7 @@ class Resource:
 
         # Build base headers - sign_request will add Content-Digest to this dict
         base_headers = {"Content-Type": "application/json"}
-        
+
         # Sign request with scheme=jwt using upstream auth token
         # Note: sign_request modifies base_headers to add Content-Digest
         sig_headers = sign_request(
@@ -1852,7 +1895,7 @@ class Resource:
             sig_scheme="jwt",
             jwt=upstream_auth_token
         )
-        
+
         # Combine base headers (now includes Content-Digest) with signature headers
         request_headers = {
             **base_headers,
@@ -2071,6 +2114,7 @@ class Resource:
                 retry_after=2,
                 require="interaction",
                 code=interaction_code,
+                url=f"{self.resource_id}/interact",
             )
             return Response(content=json.dumps(body), status_code=202, headers=headers, media_type="application/json")
 
@@ -2119,6 +2163,7 @@ class Resource:
             auth_token = data.get("auth_token")
             if not auth_token:
                 return JSONResponse(status_code=500, content={"error": "server_error", "error_description": "Missing downstream auth token"})
+            self.last_downstream_auth_token = auth_token
             sig_headers = sign_request(
                 method="GET",
                 target_uri=pending["downstream_url"],

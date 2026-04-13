@@ -1,79 +1,180 @@
-"""Demo Phase 10: Resource authorization endpoint (proactive resource tokens).
+"""Demo Phase 10: Proactive Resource Authorization — POST /authorize + AAuth-Mission.
 
-Exercises ``POST /authorize`` with JSON ``{"scope": ...}`` and optional
-``AAuth-Mission`` after mission approval. Requires resource metadata to list
-``authorization_endpoint`` (see ``/.well-known/aauth-resource``).
+The agent proposes a mission to its MM (which auto-approves in this demo), then
+proactively obtains a resource token from the resource's ``authorization_endpoint``
+(``POST /authorize``) by including an ``AAuth-Mission`` header.  The agent then sends
+the resource token to the MM's ``token_endpoint``; the MM federates with the resource's
+AS and returns an auth token.  The agent presents the auth token to access the resource.
+
+Key spec references:
+- Resource authorization endpoint: AAuth spec Section 8 (Resource Token Issuance)
+- AAuth-Mission header: AAuth spec Section 7 (Missions)
+- MM token endpoint / MM→AS federation: AAuth spec Section 10 (Authorization)
 """
 
 import asyncio
+import json
+import sys
 import threading
+from typing import List
 
-import httpx
-import uvicorn
+import jwt as jwt_lib
+from uvicorn import Config, Server
 
+from aauth.debug import print_stderr_localhost_port_map
+from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
 from participants.auth_server import AuthServer
 from participants.mission_manager import MissionManager
 from participants.resource import Resource
 
+_uvicorn_servers: List[Server] = []
+_server_threads: List[threading.Thread] = []
 
-async def run_phase10_demo():
-    print("=" * 60)
-    print("Phase 10 Demo: Resource authorization endpoint")
-    print("=" * 60)
 
-    agent_id = "http://127.0.0.1:8011"
-    resource_id = "http://127.0.0.1:8012"
-    as_id = "http://127.0.0.1:8013"
-    mm_id = "http://127.0.0.1:8014"
+def start_uvicorn(app, port: int, name: str) -> None:
+    """Run uvicorn in a daemon thread and keep a ``Server`` handle for ``should_exit``."""
 
-    agent = Agent(agent_id, port=8011, mm_url=mm_id)
-    resource = Resource(resource_id, port=8012, auth_server=as_id)
-    auth = AuthServer(as_id, port=8013, trusted_mission_managers=[mm_id])
-    mm = MissionManager(mm_id, port=8014)
+    def target() -> None:
+        print(f"Starting {name}...", file=sys.stderr, flush=True)
+        try:
+            config = Config(app, host="0.0.0.0", port=port, log_level="error")
+            server = Server(config=config)
+            _uvicorn_servers.append(server)
+            server.run()
+        except Exception as e:
+            print(f"{name} error: {e}", file=sys.stderr, flush=True)
 
-    threads = [
-        threading.Thread(
-            target=lambda: uvicorn.run(agent.app, host="0.0.0.0", port=8011, log_level="error"),
-            daemon=True,
-        ),
-        threading.Thread(
-            target=lambda: uvicorn.run(resource.app, host="0.0.0.0", port=8012, log_level="error"),
-            daemon=True,
-        ),
-        threading.Thread(
-            target=lambda: uvicorn.run(auth.app, host="0.0.0.0", port=8013, log_level="error"),
-            daemon=True,
-        ),
-        threading.Thread(
-            target=lambda: uvicorn.run(mm.app, host="0.0.0.0", port=8014, log_level="error"),
-            daemon=True,
-        ),
-    ]
-    for t in threads:
-        t.start()
+    t = threading.Thread(target=target, daemon=True, name=name)
+    _server_threads.append(t)
+    t.start()
+
+
+async def shutdown_uvicorn_servers() -> None:
+    """Signal all demo servers to exit and wait for threads to finish."""
+    if not _uvicorn_servers:
+        return
+    print("Shutting down servers...", file=sys.stderr, flush=True)
+    for s in list(_uvicorn_servers):
+        s.should_exit = True
+    await asyncio.sleep(2.0)
+    for t in _server_threads:
+        t.join(timeout=15.0)
+    _uvicorn_servers.clear()
+    _server_threads.clear()
+    print("Done.", file=sys.stderr, flush=True)
+
+
+async def main() -> None:
+    _uvicorn_servers.clear()
+    _server_threads.clear()
+
+    print("\n" + "=" * 80, file=sys.stderr)
+    print("Phase 10: Proactive Resource Authorization (POST /authorize + AAuth-Mission)", file=sys.stderr)
+    print(
+        "Spec: Agent proposes mission → MM approves; agent POSTs /authorize with\n"
+        "AAuth-Mission to get resource token; MM federates with AS to get auth token.",
+        file=sys.stderr,
+    )
+    print("=" * 80 + "\n", file=sys.stderr)
+
+    agent_id = "http://127.0.0.1:8001"
+    resource_id = "http://127.0.0.1:8002"
+    as_id = "http://127.0.0.1:8003"
+    mm_id = "http://127.0.0.1:8004"
+
+    agent = Agent(agent_id, port=8001, mm_url=mm_id)
+    resource = Resource(resource_id, port=8002, auth_server=as_id)
+    auth = AuthServer(as_id, port=8003, trusted_mission_managers=[mm_id])
+    mm = MissionManager(mm_id, port=8004)
+
+    start_uvicorn(agent.app, agent.port, "Agent")
+    start_uvicorn(resource.app, resource.port, "Resource")
+    start_uvicorn(auth.app, auth.port, "Auth Server")
+    start_uvicorn(mm.app, mm.port, "Mission Manager")
+
+    print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
+    print_stderr_localhost_port_map(agent, resource, auth)
 
-    print("\n1. Fetch resource metadata (authorization_endpoint)...")
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{resource_id}/.well-known/aauth-resource")
-        md = r.json()
-        assert "authorization_endpoint" in md
-        print(f"   authorization_endpoint = {md['authorization_endpoint']}")
+    try:
+        # ------------------------------------------------------------------
+        print("TEST 1: Mission proposal → resource token with mission claim", file=sys.stderr)
 
-    print("\n2. Propose mission to MM...")
-    m = await agent.propose_mission("Read user data for analytics (demo).")
-    assert m
-    print(f"   mission s256 = {m['s256'][:16]}...")
+        mission = await agent.propose_mission("Read user data for analytics (Phase 10 demo).")
+        assert mission and mission.get("s256"), "Mission proposal failed"
+        print(f"  Mission approved: s256={mission['s256'][:24]}...", file=sys.stderr)
 
-    print("\n3. POST /authorize with AAuth-Mission (proactive resource token)...")
-    tok = await agent.request_resource_token_proactively(resource_id, "data.read")
-    assert tok
-    print(f"   resource_token (prefix) = {tok[:40]}...")
+        resource_token = await agent.request_resource_token_proactively(resource_id, "data.read")
+        assert resource_token, "resource_token missing"
 
-    print("\nPhase 10 demo completed.")
-    return True
+        rt_claims = parse_token_claims(resource_token)
+        assert rt_claims["header"].get("typ") == "aa-resource+jwt"
+        rt_payload = rt_claims["payload"]
+        assert rt_payload.get("mission"), "resource token missing mission claim"
+        assert rt_payload["mission"].get("s256") == mission["s256"], "mission s256 mismatch"
+
+        print("\n" + "=" * 80, file=sys.stderr)
+        print("RESOURCE TOKEN (aa-resource+jwt) — decoded", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print("Header:", file=sys.stderr)
+        print(json.dumps(rt_claims["header"], indent=2), file=sys.stderr)
+        print("\nPayload:", file=sys.stderr)
+        print(json.dumps(rt_payload, indent=2), file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print(
+            f"  ✓ TEST 1 PASSED: resource token typ=aa-resource+jwt, mission.s256 matches",
+            file=sys.stderr,
+        )
+
+        # ------------------------------------------------------------------
+        print(
+            "\nTEST 2: MM→AS federation — resource token → auth token with mission claim",
+            file=sys.stderr,
+        )
+
+        auth_token = await agent._request_auth_token(resource_token, as_id)
+        assert auth_token, "auth_token missing"
+
+        auth_claims = parse_token_claims(auth_token)
+        assert auth_claims["header"].get("typ") == "aa-auth+jwt"
+        auth_payload = auth_claims["payload"]
+        assert auth_payload.get("mission"), "auth token missing mission claim"
+        assert auth_payload["mission"].get("s256") == mission["s256"], "auth token mission s256 mismatch"
+
+        print("\n" + "=" * 80, file=sys.stderr)
+        print("AUTH TOKEN (aa-auth+jwt) — decoded", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print("Header:", file=sys.stderr)
+        print(json.dumps(auth_claims["header"], indent=2), file=sys.stderr)
+        print("\nPayload:", file=sys.stderr)
+        print(json.dumps(auth_payload, indent=2), file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print(
+            f"  ✓ TEST 2 PASSED: auth token typ=aa-auth+jwt, mission.s256 preserved through MM→AS",
+            file=sys.stderr,
+        )
+
+        # ------------------------------------------------------------------
+        print("\nTEST 3: Access resource with auth token (scheme=jwt)", file=sys.stderr)
+
+        response = await agent.request_resource(
+            resource_url=f"{resource_id}/data-auth",
+            method="GET",
+            sig_scheme="jwks_uri",
+        )
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert data.get("token_type") == "aa-auth+jwt"
+        print("  ✓ TEST 3 PASSED: Resource access granted with auth token", file=sys.stderr)
+        print(f"  Response: {data}", file=sys.stderr)
+
+        print("\nPhase 10 proactive authorization demo complete.", file=sys.stderr)
+    finally:
+        await shutdown_uvicorn_servers()
 
 
 if __name__ == "__main__":
-    asyncio.run(run_phase10_demo())
+    asyncio.run(main())

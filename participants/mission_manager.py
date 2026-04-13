@@ -45,10 +45,16 @@ class MissionManager:
         mm_id: str,
         port: int = 8004,
         require_user_consent: bool = False,
+        require_approval: bool = False,
+        approval_delay: float = 2.0,
+        approval_outcome: str = "approve",
     ):
         self.mm_id = mm_id.rstrip("/")
         self.port = port
         self.require_user_consent = require_user_consent
+        self.require_approval = require_approval
+        self.approval_delay = approval_delay
+        self.approval_outcome = approval_outcome
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "mm-key-1"
 
@@ -237,10 +243,15 @@ class MissionManager:
         if not as_url:
             return JSONResponse(status_code=400, content={"error": "invalid_resource_token", "error_description": "no aud"})
 
-        if self.require_user_consent:
-            return self._create_mm_pending(resource_token, agent_token_for_as, as_url, params_dict)
+        upstream_token = params_dict.get("upstream_token")
 
-        resp = await self._forward_to_as(as_url, resource_token, agent_token_for_as)
+        if self.require_user_consent:
+            return self._create_mm_pending(resource_token, agent_token_for_as, as_url, params_dict, upstream_token)
+
+        if self.require_approval:
+            return await self._create_mm_approval_pending(resource_token, agent_token_for_as, as_url, params_dict, upstream_token)
+
+        resp = await self._forward_to_as(as_url, resource_token, agent_token_for_as, upstream_token)
         return Response(
             content=resp.content,
             status_code=resp.status_code,
@@ -254,6 +265,7 @@ class MissionManager:
         agent_token: Optional[str],
         as_url: str,
         params: Dict[str, Any],
+        upstream_token: Optional[str] = None,
     ) -> JSONResponse:
         pid = uuid.uuid4().hex[:12]
         code = uuid.uuid4().hex[:8].upper()
@@ -265,18 +277,78 @@ class MissionManager:
             "interaction_code": code,
             "status": "pending",
             "params": params,
+            "upstream_token": upstream_token or "",
         }
         body = build_pending_response_body(location=loc, require="interaction", code=code)
-        hdrs = build_pending_response_headers(location=loc, retry_after=0, require="interaction", code=code)
+        hdrs = build_pending_response_headers(location=loc, retry_after=0, require="interaction", code=code, url=f"{self.mm_id}/interact")
         return JSONResponse(status_code=202, content=body, headers=hdrs)
 
+    async def _create_mm_approval_pending(
+        self,
+        resource_token: str,
+        agent_token: Optional[str],
+        as_url: str,
+        params: Dict[str, Any],
+        upstream_token: Optional[str] = None,
+    ) -> JSONResponse:
+        """Create a direct-approval pending request (requirement=approval, no interaction code).
+
+        Schedules a background task that simulates the MM contacting the user
+        out-of-band (push notification, email, etc.) and resolving the pending
+        request after ``approval_delay`` seconds.
+        """
+        pid = uuid.uuid4().hex[:12]
+        loc = f"{self.mm_id}/pending/{pid}"
+        self.pending_requests[pid] = {
+            "resource_token": resource_token,
+            "agent_token": agent_token or "",
+            "as_url": as_url,
+            "require_type": "approval",
+            "status": "pending",
+            "params": params,
+            "upstream_token": upstream_token or "",
+        }
+        asyncio.ensure_future(self._auto_resolve_pending(pid))
+        body = build_pending_response_body(location=loc, require="approval")
+        hdrs = build_pending_response_headers(location=loc, retry_after=3, require="approval")
+        return JSONResponse(status_code=202, content=body, headers=hdrs)
+
+    async def _auto_resolve_pending(self, pid: str) -> None:
+        """Background task: resolve a pending approval after ``approval_delay`` seconds.
+
+        Simulates the MM contacting the user via push/email and receiving approval
+        (or denial) out of band.
+        """
+        await asyncio.sleep(self.approval_delay)
+        p = self.pending_requests.get(pid)
+        if not p or p.get("status") != "pending":
+            return
+        if self.approval_outcome == "deny":
+            p["status"] = "denied"
+            return
+        fwd = await self._forward_to_as(
+            p["as_url"],
+            p["resource_token"],
+            p.get("agent_token") or None,
+            p.get("upstream_token") or None,
+        )
+        if fwd.status_code == 200:
+            data = fwd.json()
+            p["auth_token"] = data.get("auth_token")
+            p["status"] = "approved"
+        else:
+            p["status"] = "denied"
+
     async def _forward_to_as(
-        self, as_url: str, resource_token: str, agent_token: Optional[str] = None
+        self, as_url: str, resource_token: str, agent_token: Optional[str] = None,
+        upstream_token: Optional[str] = None,
     ) -> httpx.Response:
         token_url = f"{as_url.rstrip('/')}/token"
         body_obj: Dict[str, Any] = {"resource_token": resource_token}
         if agent_token:
             body_obj["agent_token"] = agent_token
+        if upstream_token:
+            body_obj["upstream_token"] = upstream_token
         body_bytes = json.dumps(body_obj).encode("utf-8")
 
         def do_sign():
@@ -310,8 +382,11 @@ class MissionManager:
         if p.get("status") == "denied":
             return JSONResponse(status_code=403, content={"error": "denied"})
         loc = f"{self.mm_id}/pending/{pid}"
-        body = build_pending_response_body(location=loc, require="interaction", code=p.get("interaction_code", ""))
-        return JSONResponse(status_code=202, content=body, headers=build_pending_response_headers(loc, 2, "interaction", p.get("interaction_code", "")))
+        req_type = p.get("require_type", "interaction")
+        code = p.get("interaction_code") if req_type == "interaction" else None
+        body = build_pending_response_body(location=loc, require=req_type, code=code)
+        interaction_url = f"{self.mm_id}/interact" if req_type == "interaction" else None
+        return JSONResponse(status_code=202, content=body, headers=build_pending_response_headers(loc, 2, req_type, code, url=interaction_url))
 
     async def _handle_pending_post(self, pid: str, request: Request) -> Response:
         return JSONResponse(status_code=400, content={"error": "not_implemented"})
@@ -334,7 +409,8 @@ class MissionManager:
             for pid, p in list(self.pending_requests.items()):
                 if p.get("status") == "pending":
                     at = p.get("agent_token") or None
-                    fwd = await self._forward_to_as(p["as_url"], p["resource_token"], at or None)
+                    ut = p.get("upstream_token") or None
+                    fwd = await self._forward_to_as(p["as_url"], p["resource_token"], at or None, ut or None)
                     if fwd.status_code == 200:
                         data = fwd.json()
                         p["auth_token"] = data.get("auth_token")

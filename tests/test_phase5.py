@@ -73,9 +73,9 @@ async def test_agent_is_resource_flow(agent, auth_server, agent_id, auth_id):
         # Verify aud = agent identifier
         assert payload.get("aud") == agent_id, f"aud should be agent identifier, got {payload.get('aud')}"
         
-        # Verify agent claim is omitted
-        assert "agent" not in payload, "agent claim should be omitted when agent is resource"
-        
+        # Verify agent claim is present (required by spec Section 9.1)
+        assert "agent" in payload, "agent claim is required per spec Section 9.1"
+
         # Verify sub claim is present (user identifier)
         assert payload.get("sub") is not None, "sub claim should be present after user consent"
         
@@ -125,9 +125,9 @@ async def test_auth_token_claims_when_agent_is_resource(agent, auth_server, agen
         # Verify aud = agent identifier
         assert payload.get("aud") == agent_id
         
-        # Verify agent claim is omitted
-        assert "agent" not in payload
-        
+        # Verify agent claim is present (required by spec Section 9.1)
+        assert "agent" in payload
+
         # Verify sub is present
         assert "sub" in payload
         assert payload.get("sub") == "testuser"  # From user simulator

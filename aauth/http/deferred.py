@@ -81,6 +81,7 @@ def build_pending_response_headers(
     retry_after: int = 0,
     require: Optional[str] = None,
     code: Optional[str] = None,
+    url: Optional[str] = None,
     required_claims: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     """Build response headers for a 202 Accepted pending response.
@@ -90,6 +91,7 @@ def build_pending_response_headers(
         retry_after: Seconds before agent should poll (default: 0)
         require: Requirement level for AAuth header
         code: Interaction code for AAuth header
+        url: Interaction URL (REQUIRED when require="interaction" per spec Section 6.2)
 
     Returns:
         Headers dictionary
@@ -102,8 +104,8 @@ def build_pending_response_headers(
     }
 
     # Build AAuth-Requirement header if needed (protocol-level deferred requirements)
-    if require == "interaction" and code:
-        headers[HEADER_AAUTH_REQUIREMENT] = f'requirement=interaction; code="{code}"'
+    if require == "interaction" and code and url:
+        headers[HEADER_AAUTH_REQUIREMENT] = f'requirement=interaction; url="{url}"; code="{code}"'
     elif require == "approval":
         headers[HEADER_AAUTH_REQUIREMENT] = "requirement=approval"
     elif require == "claims" and required_claims:
