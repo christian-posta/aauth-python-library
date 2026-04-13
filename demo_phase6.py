@@ -1,294 +1,197 @@
-"""Demo script for Phase 6: Agent Delegation."""
+"""Demo Phase 6: Agent delegation — delegate ``aa-agent+jwt``, resource identity, AS token.
+
+The delegate obtains an agent token from the agent server (``POST /delegate/token``),
+uses ``scheme=jwt`` for HTTP message signatures, obtains a resource token at
+``POST /resource/token`` (JSON body; supports ``sig=jwt`` with ``aa-agent+jwt``), then
+requests an auth token at the AS ``POST /token``. The auth token ``agent`` claim uses the
+``local@domain`` identifier format (e.g. ``delegate-1@127.0.0.1:8001``) per the AAuth spec
+Section 12.1. There is no ``agent_delegate`` claim — the delegate IS the agent.
+"""
 
 import asyncio
+import json
 import sys
 import threading
-import json
+from typing import List
+
+import httpx
+from uvicorn import Config, Server
+
+from aauth.debug import print_stderr_localhost_port_map
+from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
 from participants.agent_delegate import AgentDelegate
-from participants.resource import Resource
 from participants.auth_server import AuthServer
-from aauth.tokens.auth_token import parse_token_claims
+from participants.resource import Resource
+
+_uvicorn_servers: List[Server] = []
+_server_threads: List[threading.Thread] = []
 
 
-def run_server(server, name):
-    """Run a server in a separate thread."""
-    print(f"Starting {name}...", file=sys.stderr, flush=True)
-    try:
-        server.run()
-    except KeyboardInterrupt:
-        print(f"{name} stopped", file=sys.stderr, flush=True)
+def start_uvicorn(app, port: int, name: str) -> None:
+    """Run uvicorn in a daemon thread and keep a ``Server`` handle for ``should_exit``."""
+
+    def target() -> None:
+        print(f"Starting {name}...", file=sys.stderr, flush=True)
+        try:
+            config = Config(app, host="0.0.0.0", port=port, log_level="error")
+            server = Server(config=config)
+            _uvicorn_servers.append(server)
+            server.run()
+        except Exception as e:
+            print(f"{name} error: {e}", file=sys.stderr, flush=True)
+
+    t = threading.Thread(target=target, daemon=True, name=name)
+    _server_threads.append(t)
+    t.start()
 
 
-async def main():
-    """Run Phase 6 demo."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Phase 6: Agent Delegation Demo")
-    parser.add_argument(
-        "--manual",
-        action="store_true",
-        help="Enable manual browser testing (disables user simulator)"
-    )
-    args = parser.parse_args()
-    
+async def shutdown_uvicorn_servers() -> None:
+    """Signal all demo servers to exit and wait for threads to finish."""
+    if not _uvicorn_servers:
+        return
+    print("Shutting down servers...", file=sys.stderr, flush=True)
+    for s in list(_uvicorn_servers):
+        s.should_exit = True
+    await asyncio.sleep(2.0)
+    for t in _server_threads:
+        t.join(timeout=15.0)
+    _uvicorn_servers.clear()
+    _server_threads.clear()
+    print("Done.", file=sys.stderr, flush=True)
+
+
+async def main() -> None:
+    _uvicorn_servers.clear()
+    _server_threads.clear()
+
     print("\n" + "=" * 80, file=sys.stderr)
-    print("Phase 6: Agent Delegation Demo", file=sys.stderr)
-    print("Delegates use sig=jwt with aa-agent+jwt; production flows may route tokens via MM.", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    
-    print("\nMODE: Automated", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    print("This demo shows the agent delegation flow:", file=sys.stderr)
-    print("1. Agent server starts and publishes JWKS", file=sys.stderr)
-    print("2. Agent delegate requests agent token from agent server", file=sys.stderr)
-    print("3. Agent delegate accesses resource using agent token", file=sys.stderr)
-    print("4. Resource validates agent token and grants access", file=sys.stderr)
-    print("5. Agent delegate requests auth token using agent token", file=sys.stderr)
-    print("6. Auth server validates agent token and issues auth token with agent_delegate claim", file=sys.stderr)
-    
-    print("\nDebug output is enabled by default.", file=sys.stderr)
+    print("Phase 6: Agent delegation (delegate token + resource + AS)", file=sys.stderr)
+    print(
+        "Spec: agent server issues aa-agent+jwt binding cnf.jwk to delegate; delegate "
+        "presents it via Signature-Key scheme=jwt.",
+        file=sys.stderr,
+    )
     print("=" * 80 + "\n", file=sys.stderr)
-    
-    # Create participants
-    agent_server_id = "http://127.0.0.1:8001"
+
+    agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
-    auth_id = "http://127.0.0.1:8003"
-    delegate_sub = "delegate-1"  # Persistent delegate identifier
-    
-    agent_server = Agent(agent_server_id, port=8001, use_user_simulator=True)
-    delegate = AgentDelegate(agent_server_id, delegate_sub, port=None)  # No server needed for delegate
-    resource = Resource(resource_id, port=8002, auth_server=auth_id)
-    auth_server = AuthServer(auth_id, port=8003, require_user_consent=False)  # Autonomous for demo
-    
-    # Start servers in background threads
-    agent_thread = threading.Thread(target=run_server, args=(agent_server, "Agent Server"), daemon=True)
-    resource_thread = threading.Thread(target=run_server, args=(resource, "Resource"), daemon=True)
-    auth_thread = threading.Thread(target=run_server, args=(auth_server, "Auth Server"), daemon=True)
-    
-    agent_thread.start()
-    resource_thread.start()
-    auth_thread.start()
-    
-    # Wait for servers to start
+    as_id = "http://127.0.0.1:8003"
+    delegate_sub = "delegate-1"
+
+    agent = Agent(agent_id, port=8001, use_user_simulator=False)
+    delegate = AgentDelegate(agent_id, delegate_sub, port=None)
+    resource = Resource(resource_id, port=8002, auth_server=as_id)
+    auth = AuthServer(as_id, port=8003, require_user_consent=False)
+
+    start_uvicorn(agent.app, agent.port, "Agent")
+    start_uvicorn(resource.app, resource.port, "Resource")
+    start_uvicorn(auth.app, auth.port, "Auth Server")
+
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
-    
-    # Prompt before starting test
-    print("\n" + "=" * 80, file=sys.stderr)
-    print("Ready to start test. Press Enter to begin...", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    input()
-    
-    # Track test results
-    test_results = []
-    
-    # Test 1: Delegate requests agent token
-    print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST 1: Delegate Requests Agent Token", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    print("Description: Agent delegate requests agent token from agent server.", file=sys.stderr)
-    print("=" * 80 + "\n", file=sys.stderr)
-    
-    test1_passed = False
-    test1_error = None
-    
+    print_stderr_localhost_port_map(agent, resource, auth)
+
     try:
-        print("📤 Delegate requesting agent token from agent server...", file=sys.stderr, flush=True)
+        print("TEST 1: Delegate obtains agent token from agent server", file=sys.stderr)
         agent_token = await delegate.request_agent_token()
-        
-        if not agent_token:
-            test1_error = "Failed to obtain agent token"
-            print(f"\n✗ TEST 1 FAILED: {test1_error}", file=sys.stderr)
-        else:
-            print(f"\n✓ Agent token obtained: {agent_token[:100]}...", file=sys.stderr, flush=True)
-            
-            # Parse token claims (without verification for inspection)
-            claims = parse_token_claims(agent_token)
-            payload = claims["payload"]
-            header = claims["header"]
-            
-            print(f"\nVerifying agent token claims:", file=sys.stderr, flush=True)
-            print(f"  Token header: {json.dumps(header, indent=2)}", file=sys.stderr, flush=True)
-            print(f"  Token payload: {json.dumps(payload, indent=2)}", file=sys.stderr, flush=True)
-            
-            # Verify claims
-            errors = []
-            
-            # Check typ = aa-agent+jwt
-            if header.get("typ") != "aa-agent+jwt":
-                errors.append(f"typ mismatch: expected aa-agent+jwt, got {header.get('typ')}")
-            else:
-                print(f"  ✓ typ claim correct: {header.get('typ')}", file=sys.stderr, flush=True)
-            
-            # Check iss = agent server identifier
-            if payload.get("iss") != agent_server_id:
-                errors.append(f"iss claim mismatch: expected {agent_server_id}, got {payload.get('iss')}")
-            else:
-                print(f"  ✓ iss claim correct: {payload.get('iss')}", file=sys.stderr, flush=True)
-            
-            # Check sub = delegate identifier
-            if payload.get("sub") != delegate_sub:
-                errors.append(f"sub claim mismatch: expected {delegate_sub}, got {payload.get('sub')}")
-            else:
-                print(f"  ✓ sub claim correct: {payload.get('sub')}", file=sys.stderr, flush=True)
-            
-            # Check cnf.jwk is present
-            if not payload.get("cnf", {}).get("jwk"):
-                errors.append("cnf.jwk claim missing (delegate's public key should be present)")
-            else:
-                print(f"  ✓ cnf.jwk claim present", file=sys.stderr, flush=True)
-            
-            if errors:
-                test1_error = "; ".join(errors)
-                print(f"\n✗ TEST 1 FAILED: Token validation errors", file=sys.stderr)
-                for error in errors:
-                    print(f"  - {error}", file=sys.stderr)
-            else:
-                test1_passed = True
-                print(f"\n✓ TEST 1 PASSED: Agent token obtained and validated", file=sys.stderr)
-        
-    except Exception as e:
-        test1_error = str(e)
-        print(f"\n✗ TEST 1 FAILED: Exception occurred", file=sys.stderr)
-        print(f"  Error: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc()
-    
-    test_results.append(("TEST 1: Delegate Requests Agent Token", test1_passed, test1_error))
-    
-    if not test1_passed:
+        assert agent_token, "agent token missing"
+        claims = parse_token_claims(agent_token)
+        assert claims["header"].get("typ") == "aa-agent+jwt"
+        assert claims["payload"].get("iss") == agent_id
+        assert claims["payload"].get("sub") == delegate_sub
+        assert (claims["payload"].get("cnf") or {}).get("jwk")
         print("\n" + "=" * 80, file=sys.stderr)
-        print("TEST SUMMARY", file=sys.stderr)
+        print("AGENT TOKEN (aa-agent+jwt) — decoded", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
-        for test_name, passed, error in test_results:
-            status = "✓ PASSED" if passed else "✗ FAILED"
-            print(f"{status}: {test_name}", file=sys.stderr)
-            if error:
-                print(f"  Error: {error}", file=sys.stderr)
-        return
-    
-    # Test 2: Delegate accesses resource using agent token
-    print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST 2: Delegate Accesses Resource Using Agent Token", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    print("Description: Agent delegate makes signed request to resource using agent token.", file=sys.stderr)
-    print("=" * 80 + "\n", file=sys.stderr)
-    
-    test2_passed = False
-    test2_error = None
-    
-    try:
-        print("📤 Delegate accessing resource with agent token...", file=sys.stderr, flush=True)
-        resource_url = f"{resource_id}/data-jwks"  # Requires identity (agent token provides this)
-        response = await delegate.request_resource(resource_url)
-        
-        if response.status_code != 200:
-            test2_error = f"Resource returned status {response.status_code}: {response.text}"
-            print(f"\n✗ TEST 2 FAILED: {test2_error}", file=sys.stderr)
-        else:
-            response_data = response.json()
-            print(f"\n✓ Resource access granted", file=sys.stderr, flush=True)
-            print(f"  Response: {json.dumps(response_data, indent=2)}", file=sys.stderr, flush=True)
-            
-            # Verify response indicates agent token was used
-            if response_data.get("token_type") == "aa-agent+jwt":
-                print(f"  ✓ Resource recognized agent token", file=sys.stderr, flush=True)
-                test2_passed = True
-            elif response_data.get("scheme") == "jwt":
-                # Might not have token_type field, but scheme=jwt indicates it worked
-                print(f"  ✓ Resource accepted signed request with agent token", file=sys.stderr, flush=True)
-                test2_passed = True
-            else:
-                test2_error = "Resource response doesn't indicate agent token was used"
-                print(f"\n✗ TEST 2 FAILED: {test2_error}", file=sys.stderr)
-        
-    except Exception as e:
-        test2_error = str(e)
-        print(f"\n✗ TEST 2 FAILED: Exception occurred", file=sys.stderr)
-        print(f"  Error: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc()
-    
-    test_results.append(("TEST 2: Delegate Accesses Resource", test2_passed, test2_error))
-    
-    # Test 3: Delegate requests auth token using agent token
-    print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST 3: Delegate Requests Auth Token Using Agent Token", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    print("Description: Agent delegate requests auth token from auth server using agent token.", file=sys.stderr)
-    print("=" * 80 + "\n", file=sys.stderr)
-    
-    test3_passed = False
-    test3_error = None
-    
-    try:
-        print("📤 Delegate requesting auth token from auth server...", file=sys.stderr, flush=True)
-        
-        # Request resource token first
-        scope = "data.read"
-        redirect_uri = f"{agent_server_id}/callback"
-        
-        # Make signed request to auth server with agent token
-        import httpx
+        print("Header:", file=sys.stderr)
+        print(json.dumps(claims["header"], indent=2), file=sys.stderr)
+        print("\nPayload:", file=sys.stderr)
+        print(json.dumps(claims["payload"], indent=2), file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print("  ✓ aa-agent+jwt claims OK", file=sys.stderr)
+
+        print("\nTEST 2: Delegate GET /data-jwks with agent token (identity)", file=sys.stderr)
+        r2 = await delegate.request_resource(f"{resource_id}/data-jwks")
+        assert r2.status_code == 200, r2.text
+        data2 = r2.json()
+        assert data2.get("token_type") == "aa-agent+jwt"
+        print(f"  ✓ resource response: token_type=aa-agent+jwt", file=sys.stderr)
+
+        print("\nTEST 3: Resource token + auth token (JSON POST /token)", file=sys.stderr)
+        rt_json = json.dumps({"scope": "data.read"})
+        rt_body = rt_json.encode("utf-8")
+        rt_headers = {"Content-Type": "application/json"}
+        rt_sig = delegate.sign_request(
+            "POST",
+            f"{resource_id}/resource/token",
+            rt_headers,
+            rt_body,
+        )
         async with httpx.AsyncClient() as client:
-            # Sign request with agent token
-            sig_headers = delegate.sign_request(
-                method="POST",
-                url=f"{auth_id}/agent/token",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                body=f"request_type=auth&resource_token=test&redirect_uri={redirect_uri}".encode('utf-8'),
-                agent_token=delegate.agent_token
+            rt_resp = await client.post(
+                f"{resource_id}/resource/token",
+                headers={**rt_headers, **rt_sig},
+                content=rt_body,
             )
-            
-            # For demo, we'll use a simpler approach - request resource token first
-            # Actually, let's just test that the delegate can sign requests correctly
-            # The full flow would require getting a resource token first
-            
-            print(f"  Note: Full auth token flow requires resource token (Phase 3/4)", file=sys.stderr, flush=True)
-            print(f"  This test verifies delegate can sign requests with agent token", file=sys.stderr, flush=True)
-            
-            test3_passed = True  # Simplified for demo
-            print(f"\n✓ TEST 3 PASSED: Delegate can sign requests with agent token", file=sys.stderr)
-        
-    except Exception as e:
-        test3_error = str(e)
-        print(f"\n✗ TEST 3 FAILED: Exception occurred", file=sys.stderr)
-        print(f"  Error: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc()
-        test_results.append(("TEST 3: Delegate Requests Auth Token", test3_passed, test3_error))
-    
-    if test3_passed:
-        test_results.append(("TEST 3: Delegate Requests Auth Token", test3_passed, test3_error))
-    
-    # Print summary
-    print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST SUMMARY", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    
-    for test_name, passed, error in test_results:
-        status = "✓ PASSED" if passed else "✗ FAILED"
-        print(f"{status}: {test_name}", file=sys.stderr)
-        if error:
-            print(f"  Error: {error}", file=sys.stderr)
-    
-    total_tests = len(test_results)
-    passed_tests = sum(1 for _, passed, _ in test_results if passed)
-    failed_tests = total_tests - passed_tests
-    
-    print("\n" + "-" * 80, file=sys.stderr)
-    print(f"Total: {total_tests} | Passed: {passed_tests} | Failed: {failed_tests}", file=sys.stderr)
-    print("=" * 80 + "\n", file=sys.stderr)
-    
-    print("Servers are still running. Press Ctrl+C to stop.", file=sys.stderr, flush=True)
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        print("\nStopping servers...", file=sys.stderr, flush=True)
+        assert rt_resp.status_code == 200, rt_resp.text
+        resource_token = rt_resp.json().get("resource_token")
+        assert resource_token
+        rt_claims = parse_token_claims(resource_token)
+        print("\n" + "=" * 80, file=sys.stderr)
+        print("RESOURCE TOKEN (aa-resource+jwt) — decoded", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print("Header:", file=sys.stderr)
+        print(json.dumps(rt_claims["header"], indent=2), file=sys.stderr)
+        print("\nPayload:", file=sys.stderr)
+        print(json.dumps(rt_claims["payload"], indent=2), file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+
+        token_json = json.dumps({"resource_token": resource_token})
+        token_body = token_json.encode("utf-8")
+        tok_headers = {"Content-Type": "application/json"}
+        tok_sig = delegate.sign_request(
+            "POST",
+            f"{as_id}/token",
+            tok_headers,
+            token_body,
+        )
+        async with httpx.AsyncClient() as client:
+            auth_resp = await client.post(
+                f"{as_id}/token",
+                headers={**tok_headers, **tok_sig},
+                content=token_body,
+            )
+        assert auth_resp.status_code == 200, auth_resp.text
+        auth_token = auth_resp.json().get("auth_token")
+        assert auth_token
+        auth_claims = parse_token_claims(auth_token)
+        auth_payload = auth_claims["payload"]
+        print("\n" + "=" * 80, file=sys.stderr)
+        print("AUTH TOKEN (aa-auth+jwt) — decoded", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        print("Header:", file=sys.stderr)
+        print(json.dumps(auth_claims["header"], indent=2), file=sys.stderr)
+        print("\nPayload:", file=sys.stderr)
+        print(json.dumps(auth_payload, indent=2), file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        # Per spec: agent identifier is local@domain derived from agent token iss/sub
+        from urllib.parse import urlparse
+        _domain = urlparse(agent_id).netloc
+        expected_agent = f"{delegate_sub}@{_domain}"
+        assert auth_payload.get("agent") == expected_agent, (
+            f"Expected agent={expected_agent!r}, got {auth_payload.get('agent')!r}"
+        )
+        assert "data.read" in (auth_payload.get("scope") or "")
+        print(
+            f"  ✓ auth token: agent={expected_agent}, scope=data.read (aa-auth+jwt payload OK)",
+            file=sys.stderr,
+        )
+
+        print("\nPhase 6 delegation demo complete.", file=sys.stderr)
+    finally:
+        await shutdown_uvicorn_servers()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-

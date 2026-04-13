@@ -26,7 +26,7 @@ def create_auth_token(
     Args:
         iss: Auth server identifier (HTTPS URL)
         aud: Resource identifier, or agent identifier for self-access
-        agent: Agent identifier (HTTPS URL) - omitted from token when agent == aud (self-access)
+        agent: Agent identifier (local@domain) - omitted from token when agent == aud (self-access)
         cnf_jwk: Agent's public signing key (JWK format)
         private_key: Auth server's Ed25519 private key for signing
         kid: Key ID for signing key

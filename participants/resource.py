@@ -612,6 +612,12 @@ class Resource:
                         self._print_response_debug(response)
                     return response
                 
+                # Compute local@domain agent identifier per spec Section 12.1
+                _iss = agent_claims.get("iss", "")
+                _sub = agent_claims.get("sub", "")
+                from urllib.parse import urlparse as _urlparse
+                _domain = _urlparse(_iss).netloc
+                _agent_identifier = f"{_sub}@{_domain}" if _sub and _domain else _iss
                 # Agent token valid - return data (identified request)
                 response = JSONResponse({
                     "message": "Access granted",
@@ -619,8 +625,7 @@ class Resource:
                     "scheme": "jwt",
                     "token_type": "aa-agent+jwt",
                     "method": method,
-                    "agent": agent_claims.get("iss"),  # Agent server identifier
-                    "agent_delegate": agent_claims.get("sub")  # Delegate identifier
+                    "agent": _agent_identifier,
                 })
                 if _is_http_debug_enabled():
                     self._print_response_debug(response)
@@ -652,7 +657,6 @@ class Resource:
                     "token_type": "aa-auth+jwt",
                     "method": method,
                     "agent": auth_claims.get("agent"),
-                    "agent_delegate": auth_claims.get("agent_delegate"),
                     "scope": auth_claims.get("scope")
                 })
                 if _is_http_debug_enabled():
@@ -1215,19 +1219,23 @@ class Resource:
                 print(body_text, file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
         
-        # Parse request body (application/x-www-form-urlencoded)
+        # Parse request body (application/json per spec)
+        content_type = request.headers.get("content-type", "")
         try:
-            params = parse_qs(body_text, keep_blank_values=True)
-            params_dict = {k: v[0] if v else "" for k, v in params.items()}
+            if "application/json" in content_type:
+                params_dict = json.loads(body_text) if body_text else {}
+            else:
+                # Fallback: form-encoded for backward compat
+                params_dict = {k: v[0] if v else "" for k, v in parse_qs(body_text, keep_blank_values=True).items()}
         except Exception as e:
             return JSONResponse(
                 status_code=400,
                 content={"error": "invalid_request", "error_description": f"Failed to parse request body: {e}"}
             )
-        
+
         # Extract scope or auth_request_url (exactly one required per spec)
-        scope = params_dict.get("scope", "").strip()
-        auth_request_url = params_dict.get("auth_request_url", "").strip()
+        scope = (params_dict.get("scope") or "").strip()
+        auth_request_url = (params_dict.get("auth_request_url") or "").strip()
         
         if not scope and not auth_request_url:
             return JSONResponse(
@@ -1273,72 +1281,137 @@ class Resource:
                 content={"error": "invalid_request", "error_description": f"Invalid Signature-Key: {e}"}
             )
         
-        # Require sig=jwks for resource token endpoint (agent identity required)
-        if scheme not in ("jwks", "jwks_uri"):
-            return JSONResponse(
-                status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
-                content={"error": "invalid_request", "error_description": "Resource token endpoint requires sig=jwks"}
-            )
-        
-        # Extract agent identity
-        agent_id = key_params.get("id")
-        if not agent_id:
-            return JSONResponse(
-                status_code=401,
-                headers={"Signature-Requirement": "requirement=identity"},
-                content={"error": "invalid_request", "error_description": "Could not extract agent identifier"}
-            )
-        
-        # Verify signature
+        # Identity: sig=jwks_uri (agent server key) or sig=jwt with aa-agent+jwt (delegate, Phase 6)
         target_uri = str(request.url)
-        def jwks_fetcher(agent_id_param: str, kid_param: Optional[str] = None):
-            if not kid_param:
-                kid_param = key_params.get("kid")  # Use kid from params if not provided
-            return self._fetch_jwks_for_agent(agent_id_param, kid_param)
-        
-        is_valid = verify_signature(
-            method=request.method,
-            target_uri=target_uri,
-            headers=headers_dict,
-            body=body,
-            signature_input_header=signature_input_header,
-            signature_header=signature_header,
-            signature_key_header=signature_key_header,
-            jwks_fetcher=jwks_fetcher
-        )
-        
-        if not is_valid:
+        agent_id: Optional[str] = None
+        agent_jkt: Optional[str] = None
+
+        if scheme in ("jwks", "jwks_uri"):
+            agent_id = key_params.get("id")
+            if not agent_id:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Signature-Requirement": "requirement=identity"},
+                    content={"error": "invalid_request", "error_description": "Could not extract agent identifier"},
+                )
+
+            def jwks_fetcher(agent_id_param: str, kid_param: Optional[str] = None):
+                if not kid_param:
+                    kid_param = key_params.get("kid")
+                return self._fetch_jwks_for_agent(agent_id_param, kid_param)
+
+            is_valid = verify_signature(
+                method=request.method,
+                target_uri=target_uri,
+                headers=headers_dict,
+                body=body,
+                signature_input_header=signature_input_header,
+                signature_header=signature_header,
+                signature_key_header=signature_key_header,
+                jwks_fetcher=jwks_fetcher,
+            )
+            if not is_valid:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Signature-Requirement": "requirement=identity"},
+                    content={"error": "invalid_signature", "error_description": "Signature verification failed"},
+                )
+
+            kid = key_params.get("kid")
+            agent_jwks_doc = self._fetch_jwks_for_agent(agent_id, kid)
+            if not agent_jwks_doc:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "server_error", "error_description": "Failed to fetch agent JWKS"},
+                )
+            agent_jwk = None
+            for key in agent_jwks_doc.get("keys", []):
+                if key.get("kid") == kid:
+                    agent_jwk = key
+                    break
+            if not agent_jwk:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "server_error",
+                        "error_description": f"Key with kid={kid} not found in JWKS",
+                    },
+                )
+            agent_jkt = calculate_jwk_thumbprint(agent_jwk)
+
+        elif scheme == "jwt":
+            jwt_token = key_params.get("jwt")
+            if not jwt_token:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Signature-Requirement": "requirement=identity"},
+                    content={
+                        "error": "invalid_request",
+                        "error_description": "Missing jwt parameter in Signature-Key for sig=jwt",
+                    },
+                )
+            try:
+                import jwt as jwt_lib
+
+                if jwt_lib.get_unverified_header(jwt_token).get("typ") != "aa-agent+jwt":
+                    return JSONResponse(
+                        status_code=401,
+                        headers={"Signature-Requirement": "requirement=identity"},
+                        content={
+                            "error": "invalid_request",
+                            "error_description": "Resource token with sig=jwt requires typ aa-agent+jwt",
+                        },
+                    )
+            except Exception as e:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Signature-Requirement": "requirement=identity"},
+                    content={"error": "invalid_request", "error_description": f"Invalid agent token: {e}"},
+                )
+
+            ok, agent_claims = await self._verify_agent_token(
+                jwt_token,
+                request.method,
+                target_uri,
+                headers_dict,
+                body,
+                signature_input_header,
+                signature_header,
+                signature_key_header,
+            )
+            if not ok or not agent_claims:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Signature-Requirement": "requirement=identity"},
+                    content={"error": "invalid_signature", "error_description": "Agent token verification failed"},
+                )
+            # Compute local@domain agent identifier per spec Section 12.1
+            _iss = agent_claims.get("iss", "")
+            _sub = agent_claims.get("sub", "")
+            from urllib.parse import urlparse as _urlparse
+            _domain = _urlparse(_iss).netloc
+            agent_id = f"{_sub}@{_domain}" if _sub and _domain else _iss
+            delegate_jwk = (agent_claims.get("cnf") or {}).get("jwk")
+            if not agent_id or not delegate_jwk:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Signature-Requirement": "requirement=identity"},
+                    content={
+                        "error": "invalid_request",
+                        "error_description": "Agent token missing iss or cnf.jwk",
+                    },
+                )
+            agent_jkt = calculate_jwk_thumbprint(delegate_jwk)
+
+        else:
             return JSONResponse(
                 status_code=401,
                 headers={"Signature-Requirement": "requirement=identity"},
-                content={"error": "invalid_signature", "error_description": "Signature verification failed"}
+                content={
+                    "error": "invalid_request",
+                    "error_description": "Resource token endpoint requires sig=jwks_uri or sig=jwt (aa-agent+jwt)",
+                },
             )
-        
-        # Get agent's key for agent_jkt calculation
-        kid = key_params.get("kid")
-        agent_jwks = self._fetch_jwks_for_agent(agent_id, kid)
-        if not agent_jwks:
-            return JSONResponse(
-                status_code=500,
-                content={"error": "server_error", "error_description": "Failed to fetch agent JWKS"}
-            )
-        
-        # Extract the matching key from JWKS
-        keys = agent_jwks.get("keys", [])
-        agent_jwk = None
-        for key in keys:
-            if key.get("kid") == kid:
-                agent_jwk = key
-                break
-        
-        if not agent_jwk:
-            return JSONResponse(
-                status_code=500,
-                content={"error": "server_error", "error_description": f"Key with kid={kid} not found in JWKS"}
-            )
-        
-        agent_jkt = calculate_jwk_thumbprint(agent_jwk)
         
         # Issue resource token
         if not self.auth_server:

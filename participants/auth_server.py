@@ -290,9 +290,8 @@ class AuthServer:
         
         # Extract agent identifier from signature
         agent_id = None
-        agent_delegate_sub = None  # Phase 6: agent delegation
-        agent_jwk = None  # Phase 6: delegate's key from agent token
-        
+        agent_jwk = None  # delegate's key from agent token (jwt/aa-agent+jwt scheme)
+
         if scheme in ("jwks", "jwks_uri"):
             agent_id = key_params.get("id")
         elif scheme == "jwt":
@@ -356,16 +355,18 @@ class AuthServer:
                         expected_aud=None
                     )
                     
-                    # Extract agent identifier and delegate identifier
-                    agent_id = agent_claims.get("iss")  # Agent server identifier
-                    agent_delegate_sub = agent_claims.get("sub")  # Delegate identifier
+                    # Compute local@domain agent identifier per spec Section 12.1
+                    agent_iss = agent_claims.get("iss", "")
+                    agent_sub = agent_claims.get("sub", "")
+                    from urllib.parse import urlparse as _urlparse
+                    _domain = _urlparse(agent_iss).netloc
+                    agent_id = f"{agent_sub}@{_domain}" if agent_sub and _domain else agent_iss
                     cnf = agent_claims.get("cnf", {})
-                    agent_jwk = cnf.get("jwk")  # Delegate's key for agent_jkt calculation
-                    
+                    agent_jwk = cnf.get("jwk")  # Delegate's key for cnf.jwk in auth token
+
                     if debug:
                         print(f"DEBUG AUTH:   Agent token validated successfully", file=sys.stderr, flush=True)
-                        print(f"DEBUG AUTH:     Agent server (iss): {agent_id}", file=sys.stderr, flush=True)
-                        print(f"DEBUG AUTH:     Agent delegate (sub): {agent_delegate_sub}", file=sys.stderr, flush=True)
+                        print(f"DEBUG AUTH:     Agent identifier: {agent_id}", file=sys.stderr, flush=True)
                 except Exception as e:
                     if debug:
                         print(f"DEBUG AUTH:   Agent token validation failed: {e}", file=sys.stderr, flush=True)
@@ -403,8 +404,6 @@ class AuthServer:
         
         if debug:
             print(f"DEBUG AUTH:   Agent ID: {agent_id}", file=sys.stderr, flush=True)
-            if agent_delegate_sub:
-                print(f"DEBUG AUTH:   Agent delegate (sub): {agent_delegate_sub}", file=sys.stderr, flush=True)
         
         # Verify signature
         # For agent tokens, we've already validated the JWT, but we still need to verify HTTPSig
@@ -490,12 +489,13 @@ class AuthServer:
 
         # Determine resource_id and scope based on mode
         agent_is_resource = (mode == "self_access")
-        
-        # Extract agent's JWK for agent_jkt verification and cnf.jwk
-        agent_jwk = self._extract_agent_jwk(scheme, key_params, agent_id, debug)
+
+        # JWK for agent_jkt / cnf: from JWKS (jwks_uri) or already set from aa-agent+jwt cnf (delegate)
+        if scheme in ("jwks", "jwks_uri"):
+            agent_jwk = self._extract_agent_jwk(scheme, key_params, agent_id, debug)
 
         if debug:
-            logger.debug(f"agent_jwk extracted: {agent_jwk is not None}")
+            logger.debug(f"agent_jwk for resource/cnf: {agent_jwk is not None}")
 
         # Determine resource_id and scope based on mode
         if agent_is_resource:
@@ -1320,7 +1320,7 @@ class AuthServer:
         """Issue auth token per AAuth spec Section 9.1.
 
         Args:
-            agent: Agent identifier
+            agent: Agent identifier (local@domain or HTTPS URL)
             resource: Resource identifier (audience)
             scope: Authorized scope
             cnf_jwk: Agent's public signing key (JWK format)
@@ -1475,7 +1475,6 @@ class AuthServer:
             upstream_iss = upstream_payload.get("iss")  # Upstream auth server
             upstream_aud = upstream_payload.get("aud")  # Should be the requesting resource
             upstream_agent = upstream_payload.get("agent")  # Original agent
-            upstream_agent_delegate = upstream_payload.get("agent_delegate")  # Original delegate
             upstream_sub = upstream_payload.get("sub")  # User identifier
             upstream_cnf = upstream_payload.get("cnf", {})
             upstream_cnf_jwk = upstream_cnf.get("jwk")
@@ -1486,8 +1485,6 @@ class AuthServer:
                 print(f"DEBUG AUTH:     aud (requesting resource): {upstream_aud}", file=sys.stderr, flush=True)
                 print(f"DEBUG AUTH:     agent (original agent): {upstream_agent}", file=sys.stderr, flush=True)
                 print(f"DEBUG AUTH:     sub (user): {upstream_sub}", file=sys.stderr, flush=True)
-                if upstream_agent_delegate:
-                    print(f"DEBUG AUTH:     agent_delegate: {upstream_agent_delegate}", file=sys.stderr, flush=True)
         except Exception as e:
             return JSONResponse(
                 status_code=401,
