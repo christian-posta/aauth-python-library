@@ -1,6 +1,6 @@
 """Demo Phase 8: Clarification Chat — AAuth-Requirement: requirement=clarification.
 
-The auth server poses a clarification question to the agent during user consent.
+The AS poses a clarification question to the agent during user consent.
 The agent (``clarification_supported=True``) POSTs a ``clarification_response`` to the
 pending URL before consent completes, per AAuth spec Section 11.4.  The AS records
 the answer and includes it in the consent context before issuing an auth token.

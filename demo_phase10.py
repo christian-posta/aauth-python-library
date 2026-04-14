@@ -1,15 +1,15 @@
 """Demo Phase 10: Proactive Resource Authorization — POST /authorize + AAuth-Mission.
 
-The agent proposes a mission to its MM (which auto-approves in this demo), then
+The agent proposes a mission to its Person Server (which auto-approves in this demo), then
 proactively obtains a resource token from the resource's ``authorization_endpoint``
 (``POST /authorize``) by including an ``AAuth-Mission`` header.  The agent then sends
-the resource token to the MM's ``token_endpoint``; the MM federates with the resource's
+the resource token to the PS ``token_endpoint``; the PS federates with the resource's
 AS and returns an auth token.  The agent presents the auth token to access the resource.
 
 Key spec references:
 - Resource authorization endpoint: AAuth spec Section 8 (Resource Token Issuance)
 - AAuth-Mission header: AAuth spec Section 7 (Missions)
-- MM token endpoint / MM→AS federation: AAuth spec Section 10 (Authorization)
+- PS token endpoint / PS→AS federation: AAuth spec (#access-server-federation)
 """
 
 import asyncio

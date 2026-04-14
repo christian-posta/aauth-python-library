@@ -184,7 +184,7 @@ class AccessServer:
         body_text = body_bytes.decode('utf-8') if body_bytes else ""
 
         if http_debug:
-            banner = "Incoming: POST /token (Authorization Server)"
+            banner = "Incoming: POST /token (AS)"
             try:
                 sk = request.headers.get("signature-key", "")
                 if sk:

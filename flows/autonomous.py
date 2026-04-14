@@ -2,7 +2,7 @@
 
 If ``agent.mm_url`` is set, the agent requests **auth tokens** from the Person
 Server's ``token_endpoint`` (PS forwards to the AS). Otherwise the agent calls
-the access server **token_endpoint** directly.
+the AS **token_endpoint** directly.
 """
 
 import asyncio
@@ -35,7 +35,7 @@ async def run_autonomous_flow(
     1. Agent requests resource (gets resource token challenge)
     2. Agent presents resource token to the Person Server (PS) ``token_endpoint``
        (or to the AS directly if ``agent.mm_url`` is unset)
-    3. PS federates to the AS when applicable; auth server issues auth token
+    3. PS federates to the AS when applicable; AS issues auth token
     4. Agent retries resource request with auth token
     5. Resource validates auth token and grants access
     
@@ -57,7 +57,7 @@ async def run_autonomous_flow(
         print("=" * 80, file=sys.stderr)
         print(f"Agent: {agent.agent_id}", file=sys.stderr)
         print(f"Resource: {resource.resource_id}", file=sys.stderr)
-        print(f"Auth Server: {auth_server.auth_id}", file=sys.stderr)
+        print(f"AS: {auth_server.auth_id}", file=sys.stderr)
         if getattr(agent, "mm_url", None):
             print(
                 f"Person Server (PS): {agent.mm_url} (agent token requests go here)",

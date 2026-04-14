@@ -81,7 +81,7 @@ def print_stderr_localhost_port_map(
         rows.append(
             (
                 asp,
-                "Authorization server",
+                "AS",
                 "iss in auth tokens; aud in resource tokens; POST /token",
             )
         )

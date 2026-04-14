@@ -126,7 +126,7 @@ async def main() -> None:
         print(json.dumps(rt_claims["payload"], indent=2), file=sys.stderr)
         print("=" * 80, file=sys.stderr)
 
-        # Display the auth token the MM obtained from the AS.
+        # Display the auth token the PS obtained from the AS.
         auth_token = agent.auth_token
         assert auth_token, "Agent should have stored auth_token"
         at_claims = parse_token_claims(auth_token)
@@ -149,7 +149,7 @@ async def main() -> None:
 
         # ------------------------------------------------------------------
         print(
-            "\nTEST 2: Direct flow (no MM) — same resource, agent calls AS directly",
+            "\nTEST 2: Direct flow (no PS) — same resource, agent calls AS directly",
             file=sys.stderr,
         )
 
@@ -172,7 +172,7 @@ async def main() -> None:
         assert auth_token2, "Agent2 should have stored auth_token"
         at2_claims = parse_token_claims(auth_token2)
         print("\n" + "=" * 80, file=sys.stderr)
-        print("AUTH TOKEN 2 (aa-auth+jwt) — issued directly by AS (no MM)", file=sys.stderr)
+        print("AUTH TOKEN 2 (aa-auth+jwt) — issued directly by AS (no PS on path)", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("Header:", file=sys.stderr)
         print(json.dumps(at2_claims["header"], indent=2), file=sys.stderr)

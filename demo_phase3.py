@@ -1,7 +1,7 @@
 """Demo script for Phase 3: Autonomous Authorization.
 
 The agent obtains an auth token via the **Person Server (PS)** token endpoint;
-the PS federates to the access server (AS). (The ``Agent`` constructor still uses
+the PS federates to the AS. (The ``Agent`` constructor still uses
 the ``mm_url`` parameter name for the PS base URL.)
 """
 
@@ -73,7 +73,7 @@ async def main():
     print("\nThis demo shows the autonomous authorization flow (spec-compliant path):", file=sys.stderr)
     print("1. Agent requests resource (gets resource token challenge)", file=sys.stderr)
     print("2. Agent sends resource token to Person Server token endpoint", file=sys.stderr)
-    print("3. PS federates to the access server; AS issues auth token to PS response", file=sys.stderr)
+    print("3. PS federates to the AS; AS issues auth token to PS response", file=sys.stderr)
     print("4. Agent retries resource request with auth token", file=sys.stderr)
     print("5. Resource validates auth token and grants access", file=sys.stderr)
     print("\nTest 1: Standard flow", file=sys.stderr)

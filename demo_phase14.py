@@ -8,7 +8,7 @@ Access mode: Resource-managed (two-party)
 - Resource rolls the token on each successful request (prevents replay).
 
 This demonstrates the simplest AAuth authorization mode — the resource manages
-its own access control without delegating to an external authorization server.
+its own access control without delegating to an external access server.
 
 Protocol flow:
   Agent                              Resource
@@ -38,7 +38,7 @@ async def run_demo():
     print("Phase 14: Resource-Managed Two-Party Mode (AAuth-Access)")
     print("=" * 65)
 
-    # Two-party resource: manages its own access tokens, no AS/PS needed.
+    # Two-party resource: manages its own access tokens, no Access Server / PS needed.
     agent = Agent("http://127.0.0.1:8001", port=8001)
     resource = Resource("http://127.0.0.1:8002", port=8002, two_party_mode=True)
 
@@ -106,7 +106,7 @@ async def run_demo():
     print("\n" + "=" * 65)
     print("Phase 14 Demo Complete!")
     print("Key takeaways:")
-    print("  - No PS or AS required for two-party mode")
+    print("  - No PS or Access Server required for two-party mode")
     print("  - Resource issues and manages its own AAuth-Access tokens")
     print("  - Token rolls on each successful request (prevents replay)")
     print("  - Agent stores token in agent.aauth_access_token automatically")

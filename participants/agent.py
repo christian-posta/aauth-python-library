@@ -712,7 +712,7 @@ class Agent:
         request_headers["Prefer"] = "wait=30"
 
         if http_debug:
-            via = "Person Server" if token_request_via == "mm" else "Authorization Server"
+            via = "Person Server" if token_request_via == "mm" else "AS"
             print(
                 f"\n>>> Outgoing: request auth token (agent → {via})",
                 file=sys.stderr,

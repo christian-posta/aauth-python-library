@@ -1,7 +1,7 @@
 """Demo Phase 9: Interaction Chaining — downstream 202 bubbles back to agent.
 
 A resource (R1) that receives an authorized request calls a downstream resource (R2).
-R2's auth server requires user consent (202 + interaction).  R1 chains the interaction
+R2's AS requires user consent (202 + interaction).  R1 chains the interaction
 back to the original agent: R1 returns its own 202 + pending URL + interaction code.
 The user goes to R1's ``/interact`` endpoint, which redirects to R2's AS interact page.
 After consent, R1 polls the downstream pending URL, obtains an auth token for R2, and

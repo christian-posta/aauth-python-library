@@ -84,7 +84,7 @@ async def main():
 
     try:
         # Test 1: mission proposal
-        print("TEST 1: Mission proposal → MM returns s256", file=sys.stderr)
+        print("TEST 1: Mission proposal → PS returns s256", file=sys.stderr)
         m = await agent.propose_mission("Analyze customer feedback for Q2 reporting.")
         assert m and m.get("s256")
         print(f"  ✓ s256 = {m['s256'][:32]}...", file=sys.stderr)

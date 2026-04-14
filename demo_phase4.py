@@ -90,7 +90,7 @@ async def main():
     else:
         print("\nMODE: Automated (with User Simulator)", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
-        print("This demo shows user delegation (MM → AS federation + consent):", file=sys.stderr)
+        print("This demo shows user delegation (PS → AS federation + consent):", file=sys.stderr)
         print("1. Agent requests resource (401 + resource token in AAuth header)", file=sys.stderr)
         print("2. Agent POSTs resource token to PS /token; PS calls AS /token (202 + pending + code)", file=sys.stderr)
         print("3. User simulator completes interaction at AS /interact (consent)", file=sys.stderr)
@@ -140,7 +140,7 @@ async def main():
         else:
             print("TEST 1: User Delegation Flow (Automated)", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
-        print("Description: Agent gets 401 + resource token, POSTs MM /token (MM → AS), may receive 202 + pending URL,", file=sys.stderr)
+        print("Description: Agent gets 401 + resource token, POSTs PS /token (PS → AS), may receive 202 + pending URL,", file=sys.stderr)
         print("             user completes interaction at AS /interact, agent polls pending URL for auth_token,", file=sys.stderr)
         print("             then retries the resource with scheme=jwt (auth token).", file=sys.stderr)
         print("=" * 80 + "\n", file=sys.stderr)

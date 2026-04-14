@@ -1,4 +1,4 @@
-"""Demo Phase 7: Call Chaining — Resource 1 acts as agent to access Resource 2 via MM.
+"""Demo Phase 7: Call Chaining — Resource 1 acts as agent to access Resource 2 via PS.
 
 Per spec Section "Call Chaining": when Resource 1 needs to call Resource 2 to fulfil a
 request, it acts as an agent. It sends the downstream resource token (from Resource 2's
@@ -66,7 +66,7 @@ async def main() -> None:
     _server_threads.clear()
 
     print("\n" + "=" * 80, file=sys.stderr)
-    print("Phase 7: Call Chaining — Resource 1 -> MM -> AS2 -> Resource 2", file=sys.stderr)
+    print("Phase 7: Call Chaining — Resource 1 -> PS -> AS2 -> Resource 2", file=sys.stderr)
     print(
         "Per spec: Resource 1 acts as agent; sends resource_token + upstream_token to its PS. "
         "PS federates with AS2 which verifies the chain and issues a downstream auth token.",
@@ -113,7 +113,7 @@ async def main() -> None:
 
     all_passed = True
 
-    # --- TEST 1: Agent 1 -> Resource 1 via MM (autonomous flow) ---
+    # --- TEST 1: Agent 1 -> Resource 1 via PS (autonomous flow) ---
     print("=" * 80, file=sys.stderr)
     print("TEST 1: Agent 1 accesses Resource 1 via Person Server", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
@@ -147,9 +147,9 @@ async def main() -> None:
         import traceback; traceback.print_exc(file=sys.stderr)
         all_passed = False
 
-    # --- TEST 2: Resource 1 acts as agent, calls Resource 2 via MM (call chaining) ---
+    # --- TEST 2: Resource 1 acts as agent, calls Resource 2 via PS (call chaining) ---
     print("\n" + "=" * 80, file=sys.stderr)
-    print("TEST 2: Resource 1 calls Resource 2 via MM (call chaining per spec)", file=sys.stderr)
+    print("TEST 2: Resource 1 calls Resource 2 via PS (call chaining per spec)", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
 
     if not auth_token_for_resource1:

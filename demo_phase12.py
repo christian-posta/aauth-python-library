@@ -2,13 +2,13 @@
 
 Walks the complete mission lifecycle end-to-end:
 
-1. Discover MM metadata (``/.well-known/aauth-person.json``) to locate the
+1. Discover Person Server metadata (``/.well-known/aauth-person.json``) to locate the
    ``mission_endpoint``.
-2. Agent proposes a mission; MM auto-approves and returns the mission text + ``s256``.
+2. Agent proposes a mission; PS auto-approves and returns the mission text + ``s256``.
 3. Agent proactively obtains a resource token from the resource's
    ``authorization_endpoint`` (``POST /authorize``) including the ``AAuth-Mission``
    header — the resource token carries the mission claim.
-4. Agent sends the resource token to the MM's ``token_endpoint``; MM federates with
+4. Agent sends the resource token to the PS ``token_endpoint``; PS federates with
    the AS and returns an auth token — the auth token also carries the mission claim.
 5. Agent presents the auth token to the resource (``scheme=jwt``) and gets 200.
 

@@ -34,9 +34,9 @@ async def run_user_delegated_flow(
 ) -> httpx.Response:
     """Run the complete user delegation flow (automated with user simulator).
 
-    Flow (SPEC: MM token endpoint + deferred responses):
+    Flow (SPEC: PS token endpoint + deferred responses):
     1. Agent requests resource (401 + resource token in AAuth header)
-    2. Agent POSTs resource token to MM ``/token``; MM federates to AS → may return 202 + Location + code
+    2. Agent POSTs resource token to PS ``/token``; PS federates to AS → may return 202 + Location + code
     3. User simulator completes consent at AS ``/interact`` (or interaction URL from 202)
     4. Agent polls pending URL (GET) until 200 with auth_token
     5. Agent retries resource request with auth token
@@ -45,7 +45,7 @@ async def run_user_delegated_flow(
     Args:
         agent: Agent instance
         resource: Resource instance
-        auth_server: Auth server instance
+        auth_server: AccessServer instance
         user_simulator: User simulator instance
         resource_url: Resource URL to access
         method: HTTP method
@@ -61,12 +61,12 @@ async def run_user_delegated_flow(
         print("=" * 80, file=sys.stderr)
         print(f"Agent: {agent.agent_id}", file=sys.stderr)
         print(f"Resource: {resource.resource_id}", file=sys.stderr)
-        print(f"Auth Server: {auth_server.auth_id}", file=sys.stderr)
+        print(f"AS: {auth_server.auth_id}", file=sys.stderr)
         if getattr(agent, "mm_url", None):
-            print(f"Mission Manager: {agent.mm_url} (agent POSTs token requests here)", file=sys.stderr)
+            print(f"Person Server (PS): {agent.mm_url} (agent POSTs token requests here)", file=sys.stderr)
         else:
             print(
-                "Mission Manager: (not set — agent would call AS token endpoint directly; spec expects MM)",
+                "Person Server: (not set — agent would call AS token endpoint directly)",
                 file=sys.stderr,
             )
         print(f"Resource URL: {resource_url}", file=sys.stderr)
@@ -170,7 +170,7 @@ async def run_user_delegated_flow_manual(
     Args:
         agent: Agent instance
         resource: Resource instance
-        auth_server: Auth server instance
+        auth_server: AccessServer instance
         resource_url: Resource URL to access
         method: HTTP method
         
@@ -185,7 +185,7 @@ async def run_user_delegated_flow_manual(
         print("=" * 80, file=sys.stderr)
         print(f"Agent: {agent.agent_id}", file=sys.stderr)
         print(f"Resource: {resource.resource_id}", file=sys.stderr)
-        print(f"Auth Server: {auth_server.auth_id}", file=sys.stderr)
+        print(f"AS: {auth_server.auth_id}", file=sys.stderr)
         print(f"Resource URL: {resource_url}", file=sys.stderr)
         print("=" * 80 + "\n", file=sys.stderr)
     

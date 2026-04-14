@@ -1,6 +1,6 @@
 """Demo Phase 13: Direct Approval — requirement=approval polling without user redirect.
 
-Per spec Section 4.5.6, the MM contacts the user via an out-of-band channel
+Per spec Section 4.5.6, the Person Server contacts the user via an out-of-band channel
 (push notification, email, existing session) instead of asking the agent to
 redirect the user.  The agent receives ``AAuth-Requirement: requirement=approval``
 with no interaction URL or code and simply polls the pending URL.
@@ -8,17 +8,17 @@ with no interaction URL or code and simply polls the pending URL.
 Flow:
   Agent → Resource:  GET /data-auth (unsigned)
   Resource → Agent:  401 + resource token (AAuth-Requirement: requirement=auth-token)
-  Agent → MM:        POST /token + resource_token (signed)
-  MM → Agent:        202 Accepted + Location + AAuth-Requirement: requirement=approval
-  [MM sends push notification to user — simulated by a background task]
+  Agent → PS:        POST /token + resource_token (signed)
+  PS → Agent:        202 Accepted + Location + AAuth-Requirement: requirement=approval
+  [PS sends push notification to user — simulated by a background task]
   [User approves after ``approval_delay`` seconds]
-  Agent → MM:        GET /pending/{pid}  (signed, Prefer: wait=15, repeated)
-  MM → Agent:        200 OK + auth_token          (once approved)
+  Agent → PS:        GET /pending/{pid}  (signed, Prefer: wait=15, repeated)
+  PS → Agent:        200 OK + auth_token          (once approved)
   Agent → Resource:  GET /data-auth (auth token, scheme=jwks_uri)
   Resource → Agent:  200 OK
 
-TEST 1: Full direct-approval happy path (MM auto-approves after 2 s).
-TEST 2: Denied terminal state — MM auto-denies after 2 s; agent polls and
+TEST 1: Full direct-approval happy path (PS auto-approves after 2 s).
+TEST 2: Denied terminal state — PS auto-denies after 2 s; agent polls and
         receives 403; asserts auth_token is None.
 """
 
@@ -82,8 +82,8 @@ async def main() -> None:
     print("\n" + "=" * 80, file=sys.stderr)
     print("Phase 13: Direct Approval (requirement=approval — no user redirect)", file=sys.stderr)
     print(
-        "Spec: MM returns 202 + requirement=approval; agent polls only.\n"
-        "MM contacts user out-of-band; user approves; agent gets auth token.",
+        "Spec: PS returns 202 + requirement=approval; agent polls only.\n"
+        "PS contacts user out-of-band; user approves; agent gets auth token.",
         file=sys.stderr,
     )
     print("=" * 80 + "\n", file=sys.stderr)
@@ -110,7 +110,7 @@ async def main() -> None:
 
     try:
         # ------------------------------------------------------------------
-        print("TEST 1: Direct approval — MM returns requirement=approval, agent polls", file=sys.stderr)
+        print("TEST 1: Direct approval — PS returns requirement=approval, agent polls", file=sys.stderr)
 
         response = await agent.request_resource(
             resource_url=f"{resource_id}/data-auth",
@@ -136,7 +136,7 @@ async def main() -> None:
         print(json.dumps(rt_claims["payload"], indent=2), file=sys.stderr)
         print("=" * 80, file=sys.stderr)
 
-        # Inspect the auth token the MM obtained via direct approval.
+        # Inspect the auth token the PS obtained via direct approval.
         auth_token = agent.auth_token
         assert auth_token, "Agent should have stored auth_token after polling"
         at_claims = parse_token_claims(auth_token)
@@ -158,11 +158,11 @@ async def main() -> None:
 
         # ------------------------------------------------------------------
         print(
-            "\nTEST 2: Denied terminal state — MM denies after 2 s; agent gets 403",
+            "\nTEST 2: Denied terminal state — PS denies after 2 s; agent gets 403",
             file=sys.stderr,
         )
 
-        # Start a second MM (port 8014) configured to deny, and a second agent (port 8011).
+        # Start a second PS (port 8014) configured to deny, and a second agent (port 8011).
         ps2_id = "http://127.0.0.1:8014"
         agent2_id = "http://127.0.0.1:8011"
 
@@ -178,7 +178,7 @@ async def main() -> None:
         await asyncio.sleep(1)
 
         # Agent2 gets a resource token via the same resource (which uses AS on 8003).
-        # Then sends it to MM2 which will deny — auth_token comes back as None.
+        # Then sends it to PS2 which will deny — auth_token comes back as None.
         resource_token2 = await agent2.request_resource_token_proactively(resource_id, "data.read")
         assert resource_token2, "resource_token2 missing"
 
@@ -186,7 +186,7 @@ async def main() -> None:
         assert auth_token2 is None, (
             f"Expected None (denied), got token: {auth_token2}"
         )
-        print("  ✓ TEST 2 PASSED: MM denied approval → agent received 403 → auth_token is None", file=sys.stderr)
+        print("  ✓ TEST 2 PASSED: PS denied approval → agent received 403 → auth_token is None", file=sys.stderr)
         print(f"  (polling terminated with 403 denied after {ps2.approval_delay}s)", file=sys.stderr)
 
         print("\nPhase 13 direct approval demo complete.", file=sys.stderr)
