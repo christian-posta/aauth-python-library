@@ -4,8 +4,8 @@ The delegate obtains an agent token from the agent server (``POST /delegate/toke
 uses ``scheme=jwt`` for HTTP message signatures, obtains a resource token at
 ``POST /resource/token`` (JSON body; supports ``sig=jwt`` with ``aa-agent+jwt``), then
 requests an auth token at the AS ``POST /token``. The auth token ``agent`` claim uses the
-``local@domain`` identifier format (e.g. ``delegate-1@127.0.0.1:8001``) per the AAuth spec
-Section 12.1. There is no ``agent_delegate`` claim — the delegate IS the agent.
+``aauth:local@domain`` identifier format (e.g. ``aauth:delegate-1@127.0.0.1``) per the
+AAuth spec Section 12.1. There is no ``agent_delegate`` claim — the delegate IS the agent.
 """
 
 import asyncio
@@ -77,7 +77,7 @@ async def main() -> None:
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
     as_id = "http://127.0.0.1:8003"
-    delegate_sub = "delegate-1"
+    delegate_sub = "aauth:delegate-1@127.0.0.1"
 
     agent = Agent(agent_id, port=8001, use_user_simulator=False)
     delegate = AgentDelegate(agent_id, delegate_sub, port=None)
@@ -175,10 +175,9 @@ async def main() -> None:
         print("\nPayload:", file=sys.stderr)
         print(json.dumps(auth_payload, indent=2), file=sys.stderr)
         print("=" * 80, file=sys.stderr)
-        # Per spec: agent identifier is local@domain derived from agent token iss/sub
-        from urllib.parse import urlparse
-        _domain = urlparse(agent_id).netloc
-        expected_agent = f"{delegate_sub}@{_domain}"
+        # Per spec Section 12.1: agent identifier is the aauth:local@domain sub claim from
+        # the agent token — the sub IS the full identifier, no reconstruction needed.
+        expected_agent = delegate_sub
         assert auth_payload.get("agent") == expected_agent, (
             f"Expected agent={expected_agent!r}, got {auth_payload.get('agent')!r}"
         )

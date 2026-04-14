@@ -621,12 +621,9 @@ class Resource:
                         self._print_response_debug(response)
                     return response
                 
-                # Compute local@domain agent identifier per spec Section 12.1
-                _iss = agent_claims.get("iss", "")
+                # Per spec Section 12.1: the sub claim IS the aauth:local@domain identifier.
                 _sub = agent_claims.get("sub", "")
-                from urllib.parse import urlparse as _urlparse
-                _domain = _urlparse(_iss).netloc
-                _agent_identifier = f"{_sub}@{_domain}" if _sub and _domain else _iss
+                _agent_identifier = _sub or agent_claims.get("iss", "")
                 # Agent token valid - return data (identified request)
                 response = JSONResponse({
                     "message": "Access granted",
@@ -1497,12 +1494,9 @@ class Resource:
                     headers={"Accept-Signature": build_accept_signature(SIGKEY_URI)},
                     content={"error": "invalid_signature", "error_description": "Agent token verification failed"},
                 )
-            # Compute local@domain agent identifier per spec Section 12.1
-            _iss = agent_claims.get("iss", "")
+            # Per spec Section 12.1: the sub claim IS the aauth:local@domain identifier.
             _sub = agent_claims.get("sub", "")
-            from urllib.parse import urlparse as _urlparse
-            _domain = _urlparse(_iss).netloc
-            agent_id = f"{_sub}@{_domain}" if _sub and _domain else _iss
+            agent_id = _sub or agent_claims.get("iss", "")
             delegate_jwk = (agent_claims.get("cnf") or {}).get("jwk")
             if not agent_id or not delegate_jwk:
                 return JSONResponse(

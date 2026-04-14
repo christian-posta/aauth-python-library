@@ -374,12 +374,9 @@ class AccessServer:
                         expected_aud=None
                     )
                     
-                    # Compute local@domain agent identifier per spec Section 12.1
-                    agent_iss = agent_claims.get("iss", "")
+                    # Per spec Section 12.1: the sub claim IS the aauth:local@domain identifier.
                     agent_sub = agent_claims.get("sub", "")
-                    from urllib.parse import urlparse as _urlparse
-                    _domain = _urlparse(agent_iss).netloc
-                    agent_id = f"{agent_sub}@{_domain}" if agent_sub and _domain else agent_iss
+                    agent_id = agent_sub or agent_claims.get("iss", "")
                     cnf = agent_claims.get("cnf", {})
                     agent_jwk = cnf.get("jwk")  # Delegate's key for cnf.jwk in auth token
 
