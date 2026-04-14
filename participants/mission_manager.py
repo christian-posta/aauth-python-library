@@ -50,6 +50,7 @@ class PersonServer:
         require_approval: bool = False,
         approval_delay: float = 2.0,
         approval_outcome: str = "approve",
+        capabilities: Optional[List[str]] = None,
     ):
         self.ps_id = ps_id.rstrip("/")
         self.port = port
@@ -57,6 +58,10 @@ class PersonServer:
         self.require_approval = require_approval
         self.approval_delay = approval_delay
         self.approval_outcome = approval_outcome
+        # Capabilities the PS can provide on behalf of the user for an approved mission.
+        # Per spec §Mission Approval: the agent unions these with its own capabilities
+        # to produce the AAuth-Capabilities request header.
+        self.capabilities: List[str] = capabilities if capabilities is not None else ["interaction"]
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "ps-key-1"
 
@@ -233,6 +238,10 @@ class PersonServer:
         }
         if tools:
             blob["approved_tools"] = tools
+        # capabilities: what this PS can provide on behalf of the user for this session.
+        # The agent unions these with its own capabilities for AAuth-Capabilities (spec §AAuth-Capabilities).
+        if self.capabilities:
+            blob["capabilities"] = self.capabilities
 
         # s256 = base64url(SHA-256(blob_bytes)); blob_bytes are the exact response body bytes.
         blob_bytes = json.dumps(blob, separators=(",", ":"), sort_keys=True).encode("utf-8")

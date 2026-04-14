@@ -670,6 +670,15 @@ class Agent:
         if s256 != expected:
             return None
 
+        # Extract PS capabilities from the blob — store so we can union them with our
+        # own capabilities when building AAuth-Capabilities (spec §AAuth-Capabilities).
+        import json as _json
+        try:
+            blob = _json.loads(resp.content)
+            self.ps_capabilities: list = blob.get("capabilities", [])
+        except Exception:
+            self.ps_capabilities = []
+
         self.approved_mission = {"approver": approver, "s256": s256}
         return self.approved_mission
 
@@ -698,6 +707,13 @@ class Agent:
                 self.approved_mission["approver"],
                 self.approved_mission["s256"],
             )
+
+        # Union own capabilities with PS capabilities from mission approval (spec §AAuth-Capabilities).
+        ps_caps = getattr(self, "ps_capabilities", [])
+        all_caps = list(dict.fromkeys(self.capabilities + ps_caps))  # preserve order, dedupe
+        if all_caps:
+            base_headers["AAuth-Capabilities"] = build_aauth_capabilities_header(all_caps)
+
         sig_headers = self.sign_request(
             method="POST",
             url=authz,

@@ -130,14 +130,24 @@ async def main():
 
         print(f"\n✓ s256 verified (SHA-256 of blob bytes): {s256[:32]}...", file=sys.stderr)
 
+        # Show the capabilities the PS declared and what the agent will advertise
+        ps_caps = agent.ps_capabilities
+        all_caps = list(dict.fromkeys(agent.capabilities + ps_caps))
+        print(f"\nCapabilities:", file=sys.stderr)
+        print(f"  Agent own     : {agent.capabilities}", file=sys.stderr)
+        print(f"  PS (from blob): {ps_caps}", file=sys.stderr)
+        print(f"  Union (→ AAuth-Capabilities header): {all_caps}", file=sys.stderr)
+
         # ── TEST 2: Proactive resource token includes mission claim ───────────
         sep("TEST 2: Agent requests resource token — AAuth-Mission → mission in JWT")
 
         # Show what goes out on the wire to the resource
-        from aauth.headers.aauth_header import build_aauth_mission_header
+        from aauth.headers.aauth_header import build_aauth_mission_header, build_aauth_capabilities_header
         mission_hdr = build_aauth_mission_header(approved["approver"], s256)
-        print(f"\nAAuth-Mission header sent to resource /authorize:", file=sys.stderr)
-        print(f"  AAuth-Mission: {mission_hdr[:80]}...", file=sys.stderr)
+        caps_hdr = build_aauth_capabilities_header(all_caps)
+        print(f"\nHeaders sent to resource /authorize:", file=sys.stderr)
+        print(f"  AAuth-Mission      : {mission_hdr[:80]}...", file=sys.stderr)
+        print(f"  AAuth-Capabilities : {caps_hdr}", file=sys.stderr)
 
         rt = await agent.request_resource_token_proactively(resource_id, "data.read")
         assert rt, "Resource token request failed"
