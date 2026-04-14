@@ -127,16 +127,128 @@ class PersonServer:
             return await self._handle_interact_post(request)
 
     async def _handle_mission(self, request: Request) -> Response:
-        body = await request.json()
-        proposal = body.get("mission_proposal", "")
-        if not proposal:
-            return JSONResponse(status_code=400, content={"error": "invalid_request"})
+        """POST /mission — agent proposes a mission; PS verifies, approves, returns mission blob.
+
+        Per spec §Mission Creation: agent MUST sign with scheme=jwt (agent token).
+        Per spec §Mission Approval: response body IS the mission blob; s256 = SHA-256 of blob bytes.
+        """
+        body_bytes = await request.body()
+        try:
+            body = json.loads(body_bytes) if body_bytes else {}
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Body must be JSON"})
+
+        description = body.get("description", "")
+        if not description:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": "'description' is required"},
+            )
+        tools = body.get("tools", [])
+
+        # Spec §Mission Creation: agent MUST present its agent token via Signature-Key with scheme=jwt.
+        headers_dict = dict(request.headers)
+        hl = {k.lower(): v for k, v in headers_dict.items()}
+        sig_in = hl.get("signature-input", "")
+        sig = hl.get("signature", "")
+        sig_key = hl.get("signature-key", "")
+        if not sig_in or not sig or not sig_key:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_signature", "error_description": "Missing signature headers"},
+            )
+
+        try:
+            pk = parse_signature_key(sig_key)
+            scheme = pk["scheme"]
+            key_params = pk["params"]
+        except Exception as e:
+            return JSONResponse(status_code=401, content={"error": "invalid_request", "error_description": str(e)})
+
+        if scheme != "jwt":
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "invalid_request",
+                    "error_description": "Mission creation requires Signature-Key scheme=jwt with an agent token",
+                },
+            )
+
+        jwt_tok = key_params.get("jwt")
+        if not jwt_tok:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_request", "error_description": "scheme=jwt requires 'jwt' parameter"},
+            )
+
+        # Verify it is an agent token (aa-agent+jwt)
+        try:
+            token_header = pyjwt.get_unverified_header(jwt_tok)
+            if token_header.get("typ") != "aa-agent+jwt":
+                raise ValueError(f"expected aa-agent+jwt, got {token_header.get('typ')}")
+            agent_payload_unverified = pyjwt.decode(jwt_tok, options={"verify_signature": False})
+            agent_sub = agent_payload_unverified.get("sub", "")
+        except Exception as e:
+            return JSONResponse(status_code=401, content={"error": "invalid_agent_token", "error_description": str(e)})
+
+        def agent_jwks_fetcher(iss: str, kid_param: str = None):
+            try:
+                meta = httpx.get(f"{iss.rstrip('/')}/.well-known/aauth-agent.json", timeout=10.0)
+                meta.raise_for_status()
+                ju = meta.json().get("jwks_uri")
+                if not ju:
+                    return None
+                j = httpx.get(ju, timeout=10.0)
+                j.raise_for_status()
+                return j.json()
+            except Exception:
+                return None
+
+        # Full agent token + HTTP signature verification
+        try:
+            verify_agent_token(jwt_tok, jwks_fetcher=agent_jwks_fetcher)
+        except Exception as e:
+            return JSONResponse(status_code=401, content={"error": "invalid_agent_token", "error_description": str(e)})
+
+        ok = verify_signature(
+            method=request.method,
+            target_uri=str(request.url),
+            headers=headers_dict,
+            body=body_bytes,
+            signature_input_header=sig_in,
+            signature_header=sig,
+            signature_key_header=sig_key,
+            jwks_fetcher=agent_jwks_fetcher,
+        )
+        if not ok:
+            return JSONResponse(status_code=401, content={"error": "invalid_signature"})
+
+        # Build the mission blob (spec §Mission Approval required fields).
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        approved = f"{proposal}\n\n## Approval\n- Approved at: {now}"
-        digest = hashlib.sha256(approved.encode("utf-8")).digest()
+        blob: Dict[str, Any] = {
+            "approver": self.ps_id,
+            "agent": agent_sub,
+            "approved_at": now,
+            "description": description,
+        }
+        if tools:
+            blob["approved_tools"] = tools
+
+        # s256 = base64url(SHA-256(blob_bytes)); blob_bytes are the exact response body bytes.
+        blob_bytes = json.dumps(blob, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        digest = hashlib.sha256(blob_bytes).digest()
         s256 = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-        self.missions[s256] = {"approved": approved, "status": "active"}
-        return JSONResponse(content={"mission": {"s256": s256, "approved": approved}})
+
+        self.missions[s256] = {"blob": blob, "status": "active"}
+
+        # AAuth-Mission response header (spec §Mission Approval)
+        mission_header_val = f'approver="{self.ps_id}"; s256="{s256}"'
+        return Response(
+            content=blob_bytes,
+            status_code=200,
+            headers={"AAuth-Mission": mission_header_val},
+            media_type="application/json",
+        )
 
     def terminate_mission(self, s256: str) -> bool:
         """Terminate a mission by its s256 hash.

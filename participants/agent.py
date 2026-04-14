@@ -583,11 +583,30 @@ class Agent:
             token_endpoint, body_dict, auth_server, token_request_via="as"
         )
 
-    async def propose_mission(self, proposal: str) -> Optional[Dict[str, Any]]:
-        """POST ``mission_proposal`` to the configured Person Server; cache approved mission."""
+    async def propose_mission(
+        self,
+        description: str,
+        tools: Optional[list] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """POST a mission proposal to the configured Person Server and cache the approval.
+
+        Per spec §Mission Creation: signed with scheme=jwt carrying a self-issued agent token.
+        Per spec §Mission Approval: s256 is verified against SHA-256 of the response body bytes.
+
+        Args:
+            description: Markdown string describing what the agent intends to accomplish.
+            tools: Optional list of tool objects (each with ``name`` and ``description``)
+                   that the agent wants to use without per-call permission.
+
+        Returns:
+            Dict with ``approver`` and ``s256`` on success; None on failure.
+        """
         if not self.mm_url:
             return None
         from aauth.metadata.mission_manager import fetch_mm_metadata_async
+        from aauth.tokens.agent_token import create_agent_token
+        from aauth.keys.jwk import public_key_to_jwk
+        from aauth.headers.aauth_header import parse_aauth_mission_header
 
         try:
             meta = await fetch_mm_metadata_async(self.mm_url)
@@ -597,14 +616,33 @@ class Agent:
         except Exception:
             return None
 
-        body_bytes = json.dumps({"mission_proposal": proposal}).encode("utf-8")
+        # Build proposal body: spec uses "description" (+ optional "tools").
+        body_obj: Dict[str, Any] = {"description": description}
+        if tools:
+            body_obj["tools"] = tools
+        body_bytes = json.dumps(body_obj).encode("utf-8")
+
+        # Self-issue an agent token so the PS can verify our identity (spec §Mission Creation:
+        # "The agent MUST make a signed POST … presenting its agent token via Signature-Key
+        # using scheme=jwt").
+        cnf_jwk = public_key_to_jwk(self.public_key, kid=self.kid)
+        self_agent_token = create_agent_token(
+            iss=self.agent_id,
+            sub=self.agent_sub,
+            cnf_jwk=cnf_jwk,
+            private_key=self.private_key,
+            kid=self.kid,
+            ps=self.mm_url,
+        )
+
         base_headers = {"Content-Type": "application/json"}
         sig_headers = self.sign_request(
             method="POST",
             url=mission_endpoint,
             headers=base_headers,
             body=body_bytes,
-            sig_scheme="jwks_uri",
+            sig_scheme="jwt",
+            jwt=self_agent_token,
         )
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -614,16 +652,25 @@ class Agent:
             )
         if resp.status_code != 200:
             return None
-        data = resp.json()
-        mission = (data.get("mission") or {}) if isinstance(data, dict) else {}
-        s256 = mission.get("s256")
-        if not s256:
+
+        # Parse AAuth-Mission response header for approver + s256 (spec §Mission Approval).
+        mission_hdr = resp.headers.get("aauth-mission") or resp.headers.get("AAuth-Mission") or ""
+        if not mission_hdr:
             return None
-        self.approved_mission = {
-            "approver": self.mm_url,
-            "s256": s256,
-            "approved": mission.get("approved", ""),
-        }
+        parsed = parse_aauth_mission_header(mission_hdr)
+        approver = parsed.get("approver")
+        s256 = parsed.get("s256")
+        if not approver or not s256:
+            return None
+
+        # Verify s256 = base64url(SHA-256(response_body_bytes)) — spec §Mission Approval.
+        import base64 as _b64
+        import hashlib as _hl
+        expected = _b64.urlsafe_b64encode(_hl.sha256(resp.content).digest()).decode("ascii").rstrip("=")
+        if s256 != expected:
+            return None
+
+        self.approved_mission = {"approver": approver, "s256": s256}
         return self.approved_mission
 
     async def request_resource_token_proactively(
