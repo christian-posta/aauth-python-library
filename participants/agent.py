@@ -228,7 +228,8 @@ class Agent:
         method: str = "GET",
         headers: Optional[Dict[str, str]] = None,
         body: Optional[bytes] = None,
-        sig_scheme: str = "hwk"
+        sig_scheme: str = "hwk",
+        follow_identity_challenge: bool = True,
     ) -> httpx.Response:
         """Make a signed request to a resource.
         
@@ -240,6 +241,8 @@ class Agent:
             headers: Request headers
             body: Request body
             sig_scheme: Signature scheme - "hwk" (Phase 1), "jwks_uri" (Phase 2), or "jwt" (Phase 3)
+            follow_identity_challenge: If True (default), on 401 with ``Accept-Signature`` and
+                ``sigkey=uri``, retry using ``jwks_uri``. Set False to observe the 401 (e.g. negative tests).
             
         Returns:
             HTTP response
@@ -337,7 +340,11 @@ class Agent:
                 if "sigkey=" in aauth_header:
                     accept_sig = parse_accept_signature(aauth_header)
                     sigkey = accept_sig.get("sigkey")
-                    if sigkey == SIGKEY_URI and sig_scheme not in ("jwks_uri", "jwt"):
+                    if (
+                        sigkey == SIGKEY_URI
+                        and sig_scheme not in ("jwks_uri", "jwt")
+                        and follow_identity_challenge
+                    ):
                         if debug:
                             logger.debug("Accept-Signature sigkey=uri — retrying with jwks_uri")
                         return await self.request_resource(
@@ -346,6 +353,7 @@ class Agent:
                             headers=headers,
                             body=body,
                             sig_scheme="jwks_uri",
+                            follow_identity_challenge=follow_identity_challenge,
                         )
                     # sigkey=jkt (pseudonym/hwk) — agent already signs with hwk by default; fall through
                 else:
@@ -389,6 +397,7 @@ class Agent:
                                     headers=headers,
                                     body=body,
                                     sig_scheme="jwt",
+                                    follow_identity_challenge=follow_identity_challenge,
                                 )
 
         # Capture AAuth-Access opaque token from any successful response
