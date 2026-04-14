@@ -1,4 +1,9 @@
-"""Demo script for Phase 3: Autonomous Authorization."""
+"""Demo script for Phase 3: Autonomous Authorization.
+
+The agent obtains an auth token via the **Person Server (PS)** token endpoint;
+the PS federates to the access server (AS). (The ``Agent`` constructor still uses
+the ``mm_url`` parameter name for the PS base URL.)
+"""
 
 import asyncio
 import sys
@@ -11,7 +16,7 @@ from uvicorn import Config, Server
 from participants.agent import Agent
 from participants.resource import Resource
 from participants.auth_server import AccessServer
-from participants.mission_manager import PersonServer
+from participants.mission_manager import PersonServer  # Person Server (PS); package path is legacy
 from flows.autonomous import run_autonomous_flow
 from aauth.debug import print_stderr_localhost_port_map
 from aauth.keys.jwk import public_key_to_jwk

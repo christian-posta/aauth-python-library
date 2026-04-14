@@ -529,8 +529,8 @@ class Agent:
     async def _request_auth_token(self, resource_token: str, auth_server: str) -> Optional[str]:
         """Request auth token from auth server (resource access mode).
 
-        When ``mm_url`` is configured, sends the request to the Mission Manager's
-        ``token_endpoint`` (HTTPSig ``jwks_uri``); MM forwards to the AS.
+        When ``mm_url`` is configured, sends the request to the Person Server (PS)
+        ``token_endpoint`` (HTTPSig ``jwks_uri``); the PS forwards to the AS.
 
         Args:
             resource_token: Resource token from AAuth challenge
@@ -553,10 +553,10 @@ class Agent:
                 metadata = await fetch_mm_metadata_async(self.mm_url)
                 token_endpoint = metadata.get("token_endpoint")
                 if debug:
-                    logger.debug(f"MM token endpoint: {token_endpoint}")
+                    logger.debug(f"PS token endpoint: {token_endpoint}")
             except Exception as e:
                 if debug:
-                    logger.debug(f"Failed to fetch mission manager metadata: {e}")
+                    logger.debug(f"Failed to fetch Person Server metadata: {e}")
                 return None
             if not token_endpoint:
                 return None
@@ -584,7 +584,7 @@ class Agent:
         )
 
     async def propose_mission(self, proposal: str) -> Optional[Dict[str, Any]]:
-        """POST ``mission_proposal`` to the configured Mission Manager; cache approved mission."""
+        """POST ``mission_proposal`` to the configured Person Server; cache approved mission."""
         if not self.mm_url:
             return None
         from aauth.metadata.mission_manager import fetch_mm_metadata_async
@@ -685,10 +685,10 @@ class Agent:
         Handles both direct grant (200) and deferred response (202 + polling).
 
         Args:
-            token_endpoint: Token endpoint URL (MM or AS ``/token``)
+            token_endpoint: Token endpoint URL (PS or AS ``/token``)
             body_dict: JSON request body
-            auth_server: Peer identifier for deferred-response / polling (MM or AS URL)
-            token_request_via: ``"mm"`` when posting to the Mission Manager, ``"as"`` when posting to the AS
+            auth_server: Peer identifier for deferred-response / polling (PS or AS URL)
+            token_request_via: ``"mm"`` when posting to the Person Server, ``"as"`` when posting to the AS
 
         Returns:
             Auth token string, or None if request failed
@@ -712,7 +712,7 @@ class Agent:
         request_headers["Prefer"] = "wait=30"
 
         if http_debug:
-            via = "Mission Manager" if token_request_via == "mm" else "Authorization Server"
+            via = "Person Server" if token_request_via == "mm" else "Authorization Server"
             print(
                 f"\n>>> Outgoing: request auth token (agent → {via})",
                 file=sys.stderr,
@@ -830,7 +830,7 @@ class Agent:
                             logger.debug(f"Using user simulator for interaction: {interaction_url}")
                         from participants.user_simulator import UserSimulator
                         user_sim = UserSimulator()
-                        # Do not pass MM as auth_server_base; consent UI is on the AS host in interaction_url.
+                        # Do not pass PS as auth_server_base; consent UI is on the AS host in interaction_url.
                         await user_sim.complete_interaction(interaction_url, None)
                     else:
                         print(f"\n{'='*60}", file=sys.stderr)

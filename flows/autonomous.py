@@ -33,9 +33,9 @@ async def run_autonomous_flow(
     
     Flow:
     1. Agent requests resource (gets resource token challenge)
-    2. Agent presents resource token to its MM's ``token_endpoint`` (or to the AS
-       directly if ``agent.mm_url`` is unset)
-    3. MM federates to the AS when applicable; auth server issues auth token
+    2. Agent presents resource token to the Person Server (PS) ``token_endpoint``
+       (or to the AS directly if ``agent.mm_url`` is unset)
+    3. PS federates to the AS when applicable; auth server issues auth token
     4. Agent retries resource request with auth token
     5. Resource validates auth token and grants access
     
@@ -59,9 +59,15 @@ async def run_autonomous_flow(
         print(f"Resource: {resource.resource_id}", file=sys.stderr)
         print(f"Auth Server: {auth_server.auth_id}", file=sys.stderr)
         if getattr(agent, "mm_url", None):
-            print(f"Mission Manager: {agent.mm_url} (token requests go here)", file=sys.stderr)
+            print(
+                f"Person Server (PS): {agent.mm_url} (agent token requests go here)",
+                file=sys.stderr,
+            )
         else:
-            print("Mission Manager: (not set — agent calls AS token endpoint directly)", file=sys.stderr)
+            print(
+                "Person Server: (not set — agent calls AS token endpoint directly)",
+                file=sys.stderr,
+            )
         print(f"Resource URL: {resource_url}", file=sys.stderr)
         print("=" * 80 + "\n", file=sys.stderr)
     
@@ -110,7 +116,7 @@ async def run_autonomous_flow(
     if debug:
         if getattr(agent, "mm_url", None):
             print(
-                "\nSteps 2-4: Agent obtained auth token (via MM → AS) and retried resource request",
+                "\nSteps 2-4: Agent obtained auth token (via PS → AS) and retried resource request",
                 file=sys.stderr,
                 flush=True,
             )

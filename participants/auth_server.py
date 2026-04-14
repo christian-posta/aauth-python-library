@@ -255,12 +255,15 @@ class AccessServer:
         if mode in ("resource_access", "call_chaining") and self.trusted_person_servers:
             try:
                 pk = parse_signature_key(request.headers.get("signature-key", ""))
+            except ValueError:
+                pk = None
+            if pk:
                 sch = pk.get("scheme")
                 ps_id = (pk.get("params") or {}).get("id")
-                if sch in ("jwks", "jwks_uri") and ps_id and ps_id.rstrip("/") in {x.rstrip("/") for x in self.trusted_person_servers}:
+                if sch in ("jwks", "jwks_uri") and ps_id and ps_id.rstrip("/") in {
+                    x.rstrip("/") for x in self.trusted_person_servers
+                }:
                     return await self._handle_ps_federated_token_request(request, params_dict, body_bytes)
-            except Exception:
-                pass
 
         # Direct call chaining (no MM involved)
         if mode == "call_chaining":
@@ -633,12 +636,15 @@ class AccessServer:
             signature_input_header=signature_input_header,
             signature_header=signature_header,
             signature_key_header=signature_key_header,
-            jwks_fetcher=mm_jwks_fetcher,
+            jwks_fetcher=ps_jwks_fetcher,
         )
         if not ok:
             return JSONResponse(
                 status_code=401,
-                content={"error": "invalid_signature", "error_description": "MM signature verification failed"},
+                content={
+                    "error": "invalid_signature",
+                    "error_description": "Person Server signature verification failed",
+                },
             )
 
         agent_token_str = params_dict.get("agent_token")

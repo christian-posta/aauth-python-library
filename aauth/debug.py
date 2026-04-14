@@ -53,7 +53,7 @@ def print_stderr_localhost_port_map(
     """Print a compact 127.0.0.1 port → role legend for multi-service demos.
 
     Helps map ``iss`` / ``aud`` / agent URLs inside JWT payloads to running services.
-    When ``agent.mm_url`` is set, includes the Mission Manager port parsed from that URL.
+    When ``agent.mm_url`` is set, includes the Person Server (PS) port parsed from that URL.
     """
     out = sys.stderr if file is None else file
 
@@ -92,8 +92,8 @@ def print_stderr_localhost_port_map(
         rows.append(
             (
                 mp,
-                "Mission manager",
-                "Agent ``POST /token``; MM → AS federation",
+                "Person Server (PS)",
+                "Agent ``POST /token``; PS → AS federation",
             )
         )
 
