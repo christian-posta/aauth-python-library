@@ -54,7 +54,7 @@ pytest tests/test_phase5.py -v
 
 - **`participants/auth_server.py`**: Self-access branch on **`/token`**, **`agent_is_resource`** flag on pending + token issuance.
 - **`participants/agent.py`**: **`request_self_authorization()`** — same deferred/polling path as resource-token flow.
-- **`aauth/tokens/`** (and signing): **`auth+jwt`** with conditional **`agent`** claim.
+- **`aauth/tokens/`** (and signing): **`aa-auth+jwt`** with conditional **`agent`** claim.
 - **`demo_phase5.py`**: Claim checks for Phase 5 tokens.
 
 See **SPEC_UPDATED.md** and **DEMOS.md** for normative behavior and demo coverage.

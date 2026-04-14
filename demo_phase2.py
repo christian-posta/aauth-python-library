@@ -1,6 +1,6 @@
 """Demo script for Phase 2: Agent Identity via JWKS.
 
-This script demonstrates both sig=hwk and sig=jwks schemes working simultaneously
+This script demonstrates both sig=hwk and sig=jwks_uri schemes working simultaneously
 on separate endpoints.
 """
 
@@ -70,7 +70,7 @@ async def main():
     input("Press Enter to continue to Demo 2...")
     print()
     print("=" * 80)
-    print("Demo 2: sig=jwks on /data-jwks endpoint (Phase 2)")
+    print("Demo 2: sig=jwks_uri on /data-jwks endpoint (Phase 2)")
     print("=" * 80)
     
     try:
@@ -83,7 +83,7 @@ async def main():
         if response.status_code == 200:
             data = response.json()
             print(f"Response: {data}")
-            print("✓ sig=jwks works on /data-jwks endpoint")
+            print("✓ sig=jwks_uri works on /data-jwks endpoint")
             print(f"  Agent ID: {data.get('agent_id')}")
         else:
             print(f"Error: {response.text}")
@@ -190,7 +190,7 @@ async def main():
     print()
     print("Summary:")
     print("- sig=hwk works on /data-hwk endpoint (Phase 1)")
-    print("- sig=jwks works on /data-jwks endpoint (Phase 2)")
+    print("- sig=jwks_uri works on /data-jwks endpoint (Phase 2)")
     print("- Agent metadata endpoint works")
     print("- Agent JWKS endpoint works")
     print("- Wrong scheme correctly rejected")

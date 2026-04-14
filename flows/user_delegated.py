@@ -1,7 +1,7 @@
 """User delegation flow orchestrator for Phase 4.
 
-Per SPEC, agents POST resource tokens to the Mission Manager ``token_endpoint``;
-the MM federates with the AS. Token **POST**s go to the MM when ``agent.mm_url``
+Per SPEC, agents POST resource tokens to the Person Server ``token_endpoint``;
+the PS federates with the AS. Token **POST**s go to the PS when ``agent.mm_url``
 is set. The user simulator completes interaction at the URL in the 202 response
 (typically the AS ``/interact`` endpoint; see ``Agent._handle_deferred_response``).
 """
@@ -14,7 +14,7 @@ import httpx
 
 from participants.agent import Agent
 from participants.resource import Resource
-from participants.auth_server import AuthServer
+from participants.auth_server import AccessServer
 from participants.user_simulator import UserSimulator
 from aauth.debug import (
     _is_debug_enabled,
@@ -27,7 +27,7 @@ from aauth.tokens.auth_token import parse_token_claims
 async def run_user_delegated_flow(
     agent: Agent,
     resource: Resource,
-    auth_server: AuthServer,
+    auth_server: AccessServer,
     user_simulator: UserSimulator,
     resource_url: str = "http://127.0.0.1:8002/data-auth",
     method: str = "GET"
@@ -155,7 +155,7 @@ async def run_user_delegated_flow(
 async def run_user_delegated_flow_manual(
     agent: Agent,
     resource: Resource,
-    auth_server: AuthServer,
+    auth_server: AccessServer,
     resource_url: str = "http://127.0.0.1:8002/data-auth",
     method: str = "GET"
 ) -> httpx.Response:

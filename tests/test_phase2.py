@@ -25,7 +25,7 @@ class TestMetadata:
         
         metadata = generate_agent_metadata(agent_id, jwks_uri)
         
-        assert metadata["agent"] == agent_id
+        assert metadata["issuer"] == agent_id
         assert metadata["jwks_uri"] == jwks_uri
         assert len(metadata) == 2  # Only required fields
     
@@ -51,7 +51,7 @@ class TestMetadata:
             # Fetch metadata
             metadata = fetch_metadata("http://127.0.0.1:8001/.well-known/aauth-agent")
             
-            assert metadata["agent"] == "https://agent.example.com"
+            assert metadata["issuer"] == "https://agent.example.com"
             assert metadata["jwks_uri"] == "https://agent.example.com/jwks.json"
         finally:
             # Server will be killed when thread dies

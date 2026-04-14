@@ -16,14 +16,14 @@ sequenceDiagram
     participant AS as Auth Server
     
     Note over A,R: Step 1: Agent requests resource
-    A->>R: GET /data-auth (sig=jwks, no auth token)
-    R->>R: Verify sig=jwks (no auth token present)
+    A->>R: GET /data-auth (sig=jwks_uri, no auth token)
+    R->>R: Verify sig=jwks_uri (no auth token present)
     R->>R: Issue resource token
-    R-->>A: 401 Unauthorized (Agent-Auth: auth-token, resource_token, auth_server)
-    
+    R-->>A: 401 Unauthorized (AAuth-Requirement: requirement=auth-token, resource-token)
+
     Note over A,AS: Step 2: Agent requests auth token
-    A->>A: Parse resource_token and auth_server
-    A->>AS: POST /agent/token (request_type=auth, resource_token, sig=jwks)
+    A->>A: Parse resource-token from AAuth-Requirement
+    A->>AS: POST /token (resource_token, sig=jwks_uri) via PS if configured
     AS->>AS: Verify agent signature
     AS->>AS: Validate resource token
     AS->>AS: Evaluate policy (allow-all)
@@ -41,7 +41,7 @@ sequenceDiagram
 
 ### Token Types
 
-#### Resource Token (resource+jwt)
+#### Resource Token (aa-resource+jwt)
 
 **Purpose**: Binds agent identity and access request to resource identity.
 
@@ -58,7 +58,7 @@ sequenceDiagram
 **Example**:
 ```json
 {
-  "typ": "resource+jwt",
+  "typ": "aa-resource+jwt",
   "alg": "EdDSA",
   "kid": "resource-key-1"
 }
@@ -72,7 +72,7 @@ sequenceDiagram
 }
 ```
 
-#### Auth Token (auth+jwt)
+#### Auth Token (aa-auth+jwt)
 
 **Purpose**: Authorizes agent to access specific resource.
 
@@ -84,14 +84,13 @@ sequenceDiagram
 - `scope`: Authorized scope values
 - `exp`: Expiration timestamp
 - `sub`: Optional user identifier (Phase 4)
-- `agent_delegate`: Optional agent delegate identifier (Phase 4)
 
 **Signed by**: Auth server's private key
 
 **Example**:
 ```json
 {
-  "typ": "auth+jwt",
+  "typ": "aa-auth+jwt",
   "alg": "EdDSA",
   "kid": "auth-key-1"
 }
@@ -114,7 +113,7 @@ sequenceDiagram
 ### Autonomous Authorization Flow
 
 1. **Agent requests resource** (without auth token)
-   - Agent signs request with `sig=jwks` (agent identity)
+   - Agent signs request with `sig=jwks_uri` (agent identity)
    - Resource detects missing auth token
 
 2. **Resource issues resource token challenge**
@@ -122,13 +121,13 @@ sequenceDiagram
      - Agent identity (from signature)
      - Agent's current signing key (via JWK thumbprint)
      - Requested scope
-   - Resource returns 401 with Agent-Auth header containing:
+   - Resource returns 401 with `AAuth-Requirement` header containing:
      - `resource_token`: Signed resource token
      - `auth_server`: Auth server identifier
 
 3. **Agent requests auth token**
-   - Agent parses `resource_token` and `auth_server` from challenge
-   - Agent signs request to auth server with `sig=jwks`
+   - Agent parses `resource-token` from `AAuth-Requirement` challenge
+   - Agent sends to PS token endpoint (or directly to AS if no PS configured), signed with `sig=jwks_uri`
    - Agent includes `resource_token` in request body
 
 4. **Auth server validates and issues tokens**
@@ -223,9 +222,9 @@ asyncio.run(test())
 #### Expected Output
 
 You should see comprehensive debug output showing:
-- Agent request with `sig=jwks`
+- Agent request with `sig=jwks_uri`
 - Resource token issuance
-- Agent-Auth challenge with resource_token
+- AAuth-Requirement challenge with resource_token
 - Auth token request to auth server
 - Resource token validation
 - Policy evaluation
@@ -267,7 +266,7 @@ This shows:
 - Component parsing
 - Timestamp validation
 - Key extraction and matching
-- JWKS fetching steps (for `sig=jwks`)
+- JWKS fetching steps (for `sig=jwks_uri`)
 - Token signature verification
 - Signature verification results
 
@@ -319,7 +318,7 @@ AAUTH_DEBUG=1 AAUTH_DEBUG_HTTP=1 AAUTH_DEBUG_JWT_TOKEN=1 python demo_phase3.py
 ```
 DEBUG TOKEN: Creating resource token:
 DEBUG TOKEN:   Header: {
-  "typ": "resource+jwt",
+  "typ": "aa-resource+jwt",
   "alg": "EdDSA",
   "kid": "resource-key-1"
 }
@@ -347,8 +346,8 @@ DEBUG AUTH:   Policy result: {
 
 **Agent Challenge Handling**:
 ```
-DEBUG AGENT: Received 401 response, checking Agent-Auth header
-DEBUG AGENT: Parsing Agent-Auth header: httpsig; auth-token; resource_token="eyJhbGc..."; auth_server="http://127.0.0.1:8003"
+DEBUG AGENT: Received 401 response, checking AAuth-Requirement header
+DEBUG AGENT: Parsing AAuth-Requirement header: requirement=auth-token; resource-token="eyJhbGc..."
 DEBUG AGENT:   Extracted resource_token: eyJhbGc...
 DEBUG AGENT:   Extracted auth_server: http://127.0.0.1:8003
 DEBUG AGENT: Requesting auth token from auth server
@@ -385,9 +384,9 @@ DEBUG AGENT: Requesting auth token from auth server
 
 ### Core Components
 
-1. **Token Module** (`core/tokens.py`)
-   - `create_resource_token()` - Generates resource+jwt tokens per AAuth spec Section 6
-   - `create_auth_token()` - Generates auth+jwt tokens per AAuth spec Section 7
+1. **Token Module** (`aauth/tokens/`)
+   - `create_resource_token()` - Generates aa-resource+jwt tokens per AAuth spec Section 8
+   - `create_auth_token()` - Generates aa-auth+jwt tokens per AAuth spec Section 9
    - `verify_token()` - Verifies JWT signatures and claims
    - `calculate_jwk_thumbprint()` - RFC 7638 thumbprint calculation for agent_jkt claim
    - `parse_token_claims()` - Parses token claims without verification
@@ -409,11 +408,11 @@ DEBUG AGENT: Requesting auth token from auth server
    - `/.well-known/aauth-resource` metadata endpoint (Section 8.3)
    - `/jwks.json` endpoint for resource signing keys
    - `/data-auth` endpoint that requires auth token
-   - Agent-Auth challenge with `resource_token` and `auth_server` parameters
+   - `AAuth-Requirement: requirement=auth-token` challenge with `resource-token` parameter
    - Comprehensive debug output
 
 4. **Agent Updates** (`participants/agent.py`)
-   - Auth challenge handling (parses `resource_token` and `auth_server` from Agent-Auth header)
+   - Auth challenge handling (parses `resource-token` from `AAuth-Requirement` header)
    - Auth token request to auth server
    - Token storage (`auth_token`, `refresh_token`)
    - `sig=jwt` support with auth token in Signature-Key header
@@ -651,7 +650,7 @@ content-length: 212
 content-type: application/json
 
 [Body (212 bytes)]
-{"message":"Access granted","data":"This is protected data (authorized)","scheme":"jwt","token_type":"auth+jwt","method":"GET","agent":"http://127.0.0.1:8001","agent_delegate":null,"scope":"data.read data.write"}
+{"message":"Access granted","data":"This is protected data (authorized)","scheme":"jwt","token_type":"aa-auth+jwt","method":"GET","agent":"http://127.0.0.1:8001","scope":"data.read data.write"}
 ================================================================================
 
 INFO:     127.0.0.1:58655 - "GET /data-auth HTTP/1.1" 200 OK
@@ -666,7 +665,7 @@ date: Mon, 19 Jan 2026 01:25:19 GMT
 server: uvicorn
 
 [Body (212 bytes)]
-{"message":"Access granted","data":"This is protected data (authorized)","scheme":"jwt","token_type":"auth+jwt","method":"GET","agent":"http://127.0.0.1:8001","agent_delegate":null,"scope":"data.read data.write"}
+{"message":"Access granted","data":"This is protected data (authorized)","scheme":"jwt","token_type":"aa-auth+jwt","method":"GET","agent":"http://127.0.0.1:8001","scope":"data.read data.write"}
 ================================================================================
 
 
@@ -677,7 +676,7 @@ Header:
 {
   "alg": "EdDSA",
   "kid": "resource-key-1",
-  "typ": "resource+jwt"
+  "typ": "aa-resource+jwt"
 }
 
 Payload:
@@ -699,7 +698,7 @@ Header:
 {
   "alg": "EdDSA",
   "kid": "auth-key-1",
-  "typ": "auth+jwt"
+  "typ": "aa-auth+jwt"
 }
 
 Payload:
@@ -722,7 +721,7 @@ Payload:
 
 
 ✓ TEST 1 PASSED: Status 200
-  Response: {'message': 'Access granted', 'data': 'This is protected data (authorized)', 'scheme': 'jwt', 'token_type': 'auth+jwt', 'method': 'GET', 'agent': 'http://127.0.0.1:8001', 'agent_delegate': None, 'scope': 'data.read data.write'}
+  Response: {'message': 'Access granted', 'data': 'This is protected data (authorized)', 'scheme': 'jwt', 'token_type': 'aa-auth+jwt', 'method': 'GET', 'agent': 'http://127.0.0.1:8001', 'scope': 'data.read data.write'}
 
 ================================================================================
 TEST SUMMARY

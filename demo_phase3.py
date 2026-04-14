@@ -10,8 +10,8 @@ from uvicorn import Config, Server
 
 from participants.agent import Agent
 from participants.resource import Resource
-from participants.auth_server import AuthServer
-from participants.mission_manager import MissionManager
+from participants.auth_server import AccessServer
+from participants.mission_manager import PersonServer
 from flows.autonomous import run_autonomous_flow
 from aauth.debug import print_stderr_localhost_port_map
 from aauth.keys.jwk import public_key_to_jwk
@@ -67,8 +67,8 @@ async def main():
     print("=" * 80, file=sys.stderr)
     print("\nThis demo shows the autonomous authorization flow (spec-compliant path):", file=sys.stderr)
     print("1. Agent requests resource (gets resource token challenge)", file=sys.stderr)
-    print("2. Agent sends resource token to Mission Manager token endpoint", file=sys.stderr)
-    print("3. MM federates to the auth server; AS issues auth token to MM response", file=sys.stderr)
+    print("2. Agent sends resource token to Person Server token endpoint", file=sys.stderr)
+    print("3. PS federates to the access server; AS issues auth token to PS response", file=sys.stderr)
     print("4. Agent retries resource request with auth token", file=sys.stderr)
     print("5. Resource validates auth token and grants access", file=sys.stderr)
     print("\nTest 1: Standard flow", file=sys.stderr)
@@ -79,17 +79,17 @@ async def main():
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
     auth_id = "http://127.0.0.1:8003"
-    mm_id = "http://127.0.0.1:8004"
+    ps_id = "http://127.0.0.1:8004"
 
-    agent = Agent(agent_id, port=8001, mm_url=mm_id)
+    agent = Agent(agent_id, port=8001, mm_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=auth_id)
-    auth_server = AuthServer(auth_id, port=8003, trusted_mission_managers=[mm_id])
-    mm = MissionManager(mm_id, port=8004, require_user_consent=False)
+    auth_server = AccessServer(auth_id, port=8003, trusted_person_servers=[ps_id])
+    ps = PersonServer(ps_id, port=8004, require_user_consent=False)
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth_server.app, auth_server.port, "Auth Server")
-    start_uvicorn(mm.app, mm.port, "Mission Manager")
+    start_uvicorn(auth_server.app, auth_server.port, "Access Server")
+    start_uvicorn(ps.app, ps.port, "Person Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
@@ -134,12 +134,12 @@ async def main():
                     print(f"    jti: {payload.get('jti')}", file=sys.stderr)
                     print(f"    dwk: {payload.get('dwk', '(not present)')}", file=sys.stderr)
 
-                    if payload.get("dwk") == "aauth-issuer.json" and "jti" in payload:
+                    if payload.get("dwk") == "aauth-access.json" and "jti" in payload:
                         test1_passed = True
-                        print(f"\n  ✓ dwk correctly set to aauth-issuer.json", file=sys.stderr)
+                        print(f"\n  ✓ dwk correctly set to aauth-access.json", file=sys.stderr)
                         print(f"  ✓ jti present for replay detection", file=sys.stderr)
-                    elif payload.get("dwk") != "aauth-issuer.json":
-                        test1_error = f"dwk should be 'aauth-issuer.json', got: {payload.get('dwk')}"
+                    elif payload.get("dwk") != "aauth-access.json":
+                        test1_error = f"dwk should be 'aauth-access.json', got: {payload.get('dwk')}"
                         print(f"\n  ✗ dwk incorrect: {payload.get('dwk')}", file=sys.stderr)
                     else:
                         test1_error = "jti should be present in auth token"
@@ -206,8 +206,8 @@ async def main():
                     atp = parse_token_claims(auth_token)["payload"]
                     adwk = atp.get("dwk")
                     print(f"  Auth token dwk: {adwk or '(not present)'}", file=sys.stderr)
-                    if adwk != "aauth-issuer.json":
-                        errs.append(f"auth token dwk: expected aauth-issuer.json, got {adwk!r}")
+                    if adwk != "aauth-access.json":
+                        errs.append(f"auth token dwk: expected aauth-access.json, got {adwk!r}")
 
                 cnf_jwk = public_key_to_jwk(agent.public_key, kid=agent.kid)
                 sample_agent_jwt = create_agent_token(
@@ -234,7 +234,7 @@ async def main():
                 else:
                     test2_passed = True
                     print(f"\n  ✓ Resource token dwk = aauth-resource.json", file=sys.stderr)
-                    print(f"  ✓ Auth token dwk = aauth-issuer.json", file=sys.stderr)
+                    print(f"  ✓ Auth token dwk = aauth-access.json", file=sys.stderr)
                     print(f"  ✓ Agent token dwk = aauth-agent.json", file=sys.stderr)
 
         except Exception as e:

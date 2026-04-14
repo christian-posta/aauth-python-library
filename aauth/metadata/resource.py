@@ -18,6 +18,8 @@ def generate_resource_metadata(
     scope_descriptions: Optional[Dict[str, str]] = None,
     additional_signature_components: Optional[List[str]] = None,
     signature_window: Optional[int] = None,
+    login_endpoint: Optional[str] = None,
+    revocation_endpoint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate resource metadata JSON per AAuth spec Section 13.3.
 
@@ -33,12 +35,14 @@ def generate_resource_metadata(
         scope_descriptions: Object mapping scope names to descriptions (optional)
         additional_signature_components: Additional HTTP components for signatures (optional)
         signature_window: Signature validity window in seconds for ``created`` (optional)
+        login_endpoint: URL for third-party login initiation (OPTIONAL)
+        revocation_endpoint: URL where authorized parties can revoke auth tokens (OPTIONAL)
 
     Returns:
         Resource metadata dictionary
     """
     metadata = {
-        "resource": resource_id,
+        "issuer": resource_id,
         "jwks_uri": jwks_uri,
     }
 
@@ -60,5 +64,9 @@ def generate_resource_metadata(
         metadata["additional_signature_components"] = additional_signature_components
     if signature_window is not None:
         metadata["signature_window"] = signature_window
+    if login_endpoint is not None:
+        metadata["login_endpoint"] = login_endpoint
+    if revocation_endpoint is not None:
+        metadata["revocation_endpoint"] = revocation_endpoint
 
     return metadata

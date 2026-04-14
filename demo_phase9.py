@@ -18,7 +18,7 @@ from uvicorn import Config, Server
 
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
-from participants.auth_server import AuthServer
+from participants.auth_server import AccessServer
 from participants.resource import Resource
 
 _uvicorn_servers: List[Server] = []
@@ -63,9 +63,9 @@ def print_port_map(agent, resource1, auth1, resource2, auth2) -> None:
     rows = [
         (agent.port,     "Agent server",   "iss for agent identity; /.well-known/aauth-agent.json"),
         (resource1.port, "Resource 1",     "iss in R1 resource tokens; /data-chain-auth; /interact"),
-        (auth1.port,     "Auth Server 1",  "issues auth tokens for R1; direct grant (no consent)"),
-        (resource2.port, "Resource 2",     "iss in R2 resource tokens; /data-auth"),
-        (auth2.port,     "Auth Server 2",  "issues auth tokens for R2; requires user consent"),
+        (auth1.port,     "Access Server 1",  "issues auth tokens for R1; direct grant (no consent)"),
+        (resource2.port, "Resource 2",       "iss in R2 resource tokens; /data-auth"),
+        (auth2.port,     "Access Server 2",  "issues auth tokens for R2; requires user consent"),
     ]
     print("\n" + "-" * 80, file=sys.stderr, flush=True)
     print(
@@ -104,9 +104,9 @@ async def main() -> None:
         auth_server=auth1_id,
         downstream_resource_url=f"{resource2_id}/data-auth",
     )
-    auth1 = AuthServer(auth1_id, port=8003, require_user_consent=False)
+    auth1 = AccessServer(auth1_id, port=8003, require_user_consent=False)
     resource2 = Resource(resource2_id, port=8004, auth_server=auth2_id)
-    auth2 = AuthServer(
+    auth2 = AccessServer(
         auth2_id,
         port=8005,
         require_user_consent=True,
@@ -115,9 +115,9 @@ async def main() -> None:
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource1.app, resource1.port, "Resource 1")
-    start_uvicorn(auth1.app, auth1.port, "Auth Server 1")
+    start_uvicorn(auth1.app, auth1.port, "Access Server 1")
     start_uvicorn(resource2.app, resource2.port, "Resource 2")
-    start_uvicorn(auth2.app, auth2.port, "Auth Server 2")
+    start_uvicorn(auth2.app, auth2.port, "Access Server 2")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)

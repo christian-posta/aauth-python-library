@@ -21,7 +21,7 @@ from uvicorn import Config, Server
 from aauth.debug import print_stderr_localhost_port_map
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
-from participants.auth_server import AuthServer
+from participants.auth_server import AccessServer
 from participants.resource import Resource
 from participants.user_simulator import UserSimulator
 
@@ -63,7 +63,7 @@ async def shutdown_uvicorn_servers() -> None:
 
 
 async def _wait_for_pending(
-    auth_server: AuthServer, timeout_sec: int = 10
+    auth_server: AccessServer, timeout_sec: int = 10
 ) -> Tuple[Optional[str], Optional[dict]]:
     """Poll ``auth_server.pending_requests`` until a request appears or timeout."""
     start = time.time()
@@ -76,7 +76,7 @@ async def _wait_for_pending(
 
 
 async def _wait_for_clarification_response(
-    auth_server: AuthServer,
+    auth_server: AccessServer,
     pending_id: str,
     timeout_sec: int = 15,
 ) -> bool:
@@ -111,7 +111,7 @@ async def main() -> None:
 
     agent = Agent(agent_id, port=8001, use_user_simulator=False, clarification_supported=True)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
-    auth = AuthServer(
+    auth = AccessServer(
         as_id,
         port=8003,
         require_user_consent=True,
@@ -121,7 +121,7 @@ async def main() -> None:
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth.app, auth.port, "Auth Server")
+    start_uvicorn(auth.app, auth.port, "Access Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)

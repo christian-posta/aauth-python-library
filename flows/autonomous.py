@@ -1,8 +1,8 @@
 """Autonomous authorization flow orchestrator (Phase 3+).
 
-If ``agent.mm_url`` is set, the agent requests **auth tokens** from the Mission
-Manager's ``token_endpoint`` (MM forwards to the AS). Otherwise the agent calls
-the auth server **token_endpoint** directly.
+If ``agent.mm_url`` is set, the agent requests **auth tokens** from the Person
+Server's ``token_endpoint`` (PS forwards to the AS). Otherwise the agent calls
+the access server **token_endpoint** directly.
 """
 
 import asyncio
@@ -13,7 +13,7 @@ import httpx
 
 from participants.agent import Agent
 from participants.resource import Resource
-from participants.auth_server import AuthServer
+from participants.auth_server import AccessServer
 from aauth.debug import (
     _is_debug_enabled,
     _is_jwt_token_debug_enabled,
@@ -25,7 +25,7 @@ from aauth.tokens.auth_token import parse_token_claims
 async def run_autonomous_flow(
     agent: Agent,
     resource: Resource,
-    auth_server: AuthServer,
+    auth_server: AccessServer,
     resource_url: str = "http://127.0.0.1:8002/data-auth",
     method: str = "GET"
 ) -> httpx.Response:

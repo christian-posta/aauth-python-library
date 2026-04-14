@@ -63,10 +63,10 @@ def test_create_pending_request_returns_202_with_interaction_code(auth_server):
 def test_auth_server_metadata_includes_token_and_interaction_endpoints(auth_server):
     """Metadata exposes token_endpoint and interaction_endpoint (SPEC_UPDATED 13.2), not legacy agent/auth paths."""
     client = TestClient(auth_server.app)
-    r = client.get("/.well-known/aauth-issuer.json")
+    r = client.get("/.well-known/aauth-access.json")
     assert r.status_code == 200
     data = r.json()
-    assert data["issuer"] == auth_server.auth_id
+    assert data["access_server"] == auth_server.auth_id
     assert "token_endpoint" in data
     assert "interaction_endpoint" in data
     assert str(data["interaction_endpoint"]).rstrip("/").endswith("interact")

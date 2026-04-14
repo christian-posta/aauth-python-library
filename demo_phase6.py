@@ -21,7 +21,7 @@ from aauth.debug import print_stderr_localhost_port_map
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
 from participants.agent_delegate import AgentDelegate
-from participants.auth_server import AuthServer
+from participants.auth_server import AccessServer
 from participants.resource import Resource
 
 _uvicorn_servers: List[Server] = []
@@ -82,11 +82,11 @@ async def main() -> None:
     agent = Agent(agent_id, port=8001, use_user_simulator=False)
     delegate = AgentDelegate(agent_id, delegate_sub, port=None)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
-    auth = AuthServer(as_id, port=8003, require_user_consent=False)
+    auth = AccessServer(as_id, port=8003, require_user_consent=False)
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth.app, auth.port, "Auth Server")
+    start_uvicorn(auth.app, auth.port, "Access Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)

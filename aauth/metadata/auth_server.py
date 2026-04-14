@@ -1,6 +1,6 @@
-"""Auth server metadata handling for AAuth.
+"""Access server metadata handling for AAuth.
 
-Published at /.well-known/aauth-issuer.json
+Published at /.well-known/aauth-access.json
 """
 
 from typing import Dict, Any, Optional
@@ -11,24 +11,33 @@ def generate_auth_metadata(
     jwks_uri: str,
     token_endpoint: str,
     interaction_endpoint: str,
+    login_endpoint: Optional[str] = None,
+    revocation_endpoint: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Generate auth server metadata JSON per AAuth spec Section 13.2.
+    """Generate access server metadata JSON per AAuth spec.
 
     Args:
-        auth_id: Auth server identifier (HTTPS URL) - REQUIRED
-        jwks_uri: URL to auth server's JSON Web Key Set - REQUIRED
-        token_endpoint: Single endpoint for all agent-to-auth-server communication - REQUIRED
+        auth_id: Access server identifier (HTTPS URL) - REQUIRED
+        jwks_uri: URL to access server's JSON Web Key Set - REQUIRED
+        token_endpoint: Single endpoint for all agent-to-AS communication - REQUIRED
         interaction_endpoint: URL where users are sent for authentication and consent - REQUIRED
+        login_endpoint: URL for third-party login initiation (OPTIONAL)
+        revocation_endpoint: URL for token revocation (OPTIONAL)
 
     Returns:
-        Auth server metadata dictionary
+        Access server metadata dictionary
     """
-    return {
+    meta = {
         "issuer": auth_id,
         "token_endpoint": token_endpoint,
         "interaction_endpoint": interaction_endpoint,
         "jwks_uri": jwks_uri,
     }
+    if login_endpoint:
+        meta["login_endpoint"] = login_endpoint
+    if revocation_endpoint:
+        meta["revocation_endpoint"] = revocation_endpoint
+    return meta
 
 
 def fetch_metadata(url: str) -> Dict[str, Any]:

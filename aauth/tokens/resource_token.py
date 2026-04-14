@@ -31,7 +31,7 @@ def create_resource_token(
         private_key: Resource's Ed25519 private key for signing
         kid: Key ID for signing key
         exp: Expiration timestamp (Unix time). Defaults to 10 minutes from now.
-        mission: Optional ``{"manager": url, "s256": hash}`` when mission-aware.
+        mission: Optional ``{"approver": url, "s256": hash}`` when mission-aware.
 
     Returns:
         Signed JWT string (aa-resource+jwt)

@@ -1,4 +1,6 @@
-# Phase 7: Token Exchange
+# Phase 7: Token Exchange (DEPRECATED)
+
+> **This document is superseded.** Token Exchange has been replaced by **Call Chaining** — see [PHASE7-call-chaining.md](PHASE7-call-chaining.md). Token types in this document (`resource+jwt`, `auth+jwt`) reflect the old format; the current spec uses `aa-resource+jwt` and `aa-auth+jwt`.
 
 ## Overview
 

@@ -128,9 +128,10 @@ async def test_auth_token_claims_when_agent_is_resource(agent, auth_server, agen
         # Verify agent claim is present (required by spec Section 9.1)
         assert "agent" in payload
 
-        # Verify sub is present
+        # Verify sub is present and is a pairwise pseudonymous identifier (not raw user id)
         assert "sub" in payload
-        assert payload.get("sub") == "testuser"  # From user simulator
+        assert payload.get("sub") != "testuser", "sub should be pairwise pseudonymous, not raw user id"
+        assert len(payload.get("sub", "")) == 32, "pairwise sub should be 32-char hex digest"
         
         # Verify scope
         assert payload.get("scope") == scope

@@ -24,8 +24,8 @@ from uvicorn import Config, Server
 from aauth.debug import print_stderr_localhost_port_map
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
-from participants.auth_server import AuthServer
-from participants.mission_manager import MissionManager
+from participants.auth_server import AccessServer
+from participants.mission_manager import PersonServer
 from participants.resource import Resource
 
 _uvicorn_servers: List[Server] = []
@@ -72,8 +72,8 @@ async def main() -> None:
     print("\n" + "=" * 80, file=sys.stderr)
     print("Phase 10: Proactive Resource Authorization (POST /authorize + AAuth-Mission)", file=sys.stderr)
     print(
-        "Spec: Agent proposes mission → MM approves; agent POSTs /authorize with\n"
-        "AAuth-Mission to get resource token; MM federates with AS to get auth token.",
+        "Spec: Agent proposes mission → PS approves; agent POSTs /authorize with\n"
+        "AAuth-Mission to get resource token; PS federates with AS to get auth token.",
         file=sys.stderr,
     )
     print("=" * 80 + "\n", file=sys.stderr)
@@ -81,17 +81,17 @@ async def main() -> None:
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
     as_id = "http://127.0.0.1:8003"
-    mm_id = "http://127.0.0.1:8004"
+    ps_id = "http://127.0.0.1:8004"
 
-    agent = Agent(agent_id, port=8001, mm_url=mm_id)
+    agent = Agent(agent_id, port=8001, mm_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
-    auth = AuthServer(as_id, port=8003, trusted_mission_managers=[mm_id])
-    mm = MissionManager(mm_id, port=8004)
+    auth = AccessServer(as_id, port=8003, trusted_person_servers=[ps_id])
+    ps = PersonServer(ps_id, port=8004)
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth.app, auth.port, "Auth Server")
-    start_uvicorn(mm.app, mm.port, "Mission Manager")
+    start_uvicorn(auth.app, auth.port, "Access Server")
+    start_uvicorn(ps.app, ps.port, "Person Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
@@ -129,7 +129,7 @@ async def main() -> None:
 
         # ------------------------------------------------------------------
         print(
-            "\nTEST 2: MM→AS federation — resource token → auth token with mission claim",
+            "\nTEST 2: PS→AS federation — resource token → auth token with mission claim",
             file=sys.stderr,
         )
 
@@ -151,7 +151,7 @@ async def main() -> None:
         print(json.dumps(auth_payload, indent=2), file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print(
-            f"  ✓ TEST 2 PASSED: auth token typ=aa-auth+jwt, mission.s256 preserved through MM→AS",
+            f"  ✓ TEST 2 PASSED: auth token typ=aa-auth+jwt, mission.s256 preserved through PS→AS",
             file=sys.stderr,
         )
 

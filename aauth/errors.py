@@ -21,6 +21,17 @@ ERROR_EXPIRED_RESOURCE_TOKEN = "expired_resource_token"
 ERROR_INVALID_AUTH_TOKEN = "invalid_auth_token"
 ERROR_SERVER_ERROR = "server_error"
 
+# --- Interaction / Authorization Error Codes ---
+
+# 403: User interaction needed but no interaction channel available (agent lacks
+# 'interaction' capability and PS cannot reach the user out-of-band).
+ERROR_INTERACTION_REQUIRED = "interaction_required"
+
+# --- Mission Status Error Codes (JSON body, per draft-hardt-aauth-protocol) ---
+
+# Missions have two states: active or terminated (no suspended state).
+ERROR_MISSION_TERMINATED = "mission_terminated"
+
 # --- Polling Error Codes (JSON body, per draft-hardt-aauth-protocol) ---
 
 ERROR_DENIED = "denied"

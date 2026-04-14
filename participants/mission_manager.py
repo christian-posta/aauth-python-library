@@ -1,4 +1,4 @@
-"""Mission Manager participant — agents send token requests here; MM federates with AS."""
+"""Person Server participant — agents send token requests here; PS federates with AS."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from fastapi.responses import JSONResponse
 from starlette.responses import HTMLResponse
 
 from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
+from aauth.errors import ERROR_INTERACTION_REQUIRED, ERROR_MISSION_TERMINATED
+from aauth.headers.aauth_header import parse_aauth_capabilities_header
 from aauth.headers.signature_key import parse_signature_key
 from aauth.http.deferred import (
     build_pending_response_body,
@@ -29,63 +31,72 @@ from aauth.http.deferred import (
 )
 from aauth.keys.jwk import generate_jwks, public_key_to_jwk
 from aauth.keys.keypair import generate_ed25519_keypair
-from aauth.metadata.mission_manager import generate_mm_metadata
+from aauth.metadata.mission_manager import generate_ps_metadata
 from aauth.signing.signer import sign_request
 from aauth.signing.verifier import verify_signature
 from aauth.tokens.agent_token import verify_agent_token
 
-logger = logging.getLogger("aauth.mission_manager")
+logger = logging.getLogger("aauth.person_server")
 
 
-class MissionManager:
-    """Mission Manager: mission lifecycle + broker to authorization server(s)."""
+class PersonServer:
+    """Person Server: mission lifecycle + broker to authorization server(s)."""
 
     def __init__(
         self,
-        mm_id: str,
+        ps_id: str,
         port: int = 8004,
         require_user_consent: bool = False,
         require_approval: bool = False,
         approval_delay: float = 2.0,
         approval_outcome: str = "approve",
     ):
-        self.mm_id = mm_id.rstrip("/")
+        self.ps_id = ps_id.rstrip("/")
         self.port = port
         self.require_user_consent = require_user_consent
         self.require_approval = require_approval
         self.approval_delay = approval_delay
         self.approval_outcome = approval_outcome
         self.private_key, self.public_key = generate_ed25519_keypair()
-        self.kid = "mm-key-1"
+        self.kid = "ps-key-1"
 
         self.missions: Dict[str, Dict[str, Any]] = {}
         self.pending_requests: Dict[str, Dict[str, Any]] = {}
+        # Revocation: track auth tokens issued/brokered under missions
+        self.issued_tokens: Dict[str, Dict] = {}   # jti -> {aud, agent, ...}
+        self.revoked_jtis: set = set()
         self.users: Dict[str, Dict[str, str]] = {
             "testuser": {"password": "testpass", "name": "Test User", "email": "testuser@example.com"}
         }
 
-        self.app = FastAPI(title="AAuth Mission Manager")
+        self.app = FastAPI(title="AAuth Person Server")
         self._setup_routes()
 
     def _setup_routes(self) -> None:
         @self.app.get("/")
         async def root():
-            return {"manager": self.mm_id, "status": "running"}
+            return {"person_server": self.ps_id, "status": "running"}
 
         @self.app.get("/jwks.json")
         async def jwks():
             jwk = public_key_to_jwk(self.public_key, kid=self.kid)
             return generate_jwks([jwk])
 
-        @self.app.get("/.well-known/aauth-mission.json")
-        @self.app.get("/.well-known/aauth-mission")
-        async def mm_meta():
-            return generate_mm_metadata(
-                manager=self.mm_id,
-                token_endpoint=f"{self.mm_id}/token",
-                mission_endpoint=f"{self.mm_id}/mission",
-                jwks_uri=f"{self.mm_id}/jwks.json",
+        @self.app.get("/.well-known/aauth-person.json")
+        @self.app.get("/.well-known/aauth-person")
+        async def ps_meta():
+            return generate_ps_metadata(
+                person_server=self.ps_id,
+                token_endpoint=f"{self.ps_id}/token",
+                mission_endpoint=f"{self.ps_id}/mission",
+                jwks_uri=f"{self.ps_id}/jwks.json",
+                revocation_endpoint=f"{self.ps_id}/revoke",
             )
+
+        @self.app.post("/revoke")
+        async def revoke(request: Request):
+            """Token revocation endpoint per AAuth spec Section 14."""
+            return await self._handle_revocation(request)
 
         @self.app.post("/mission")
         async def mission(req: Request):
@@ -127,7 +138,19 @@ class MissionManager:
         self.missions[s256] = {"approved": approved, "status": "active"}
         return JSONResponse(content={"mission": {"s256": s256, "approved": approved}})
 
-    def _mm_jwks_fetcher(self, issuer_url: str, kid_param: Optional[str] = None):
+    def terminate_mission(self, s256: str) -> bool:
+        """Terminate a mission by its s256 hash.
+
+        Missions have two states: active or terminated (no suspended state).
+        Returns True if the mission was found and terminated, False if not found.
+        """
+        mission = self.missions.get(s256)
+        if mission is None:
+            return False
+        mission["status"] = "terminated"
+        return True
+
+    def _ps_jwks_fetcher(self, issuer_url: str, kid_param: Optional[str] = None):
         try:
             url = f"{issuer_url.rstrip('/')}/jwks.json"
             r = httpx.get(url, timeout=10.0)
@@ -152,7 +175,7 @@ class MissionManager:
         if mode in ("token_refresh", "self_access"):
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_request", "error_description": "MM token endpoint expects resource_token"},
+                content={"error": "invalid_request", "error_description": "PS token endpoint expects resource_token"},
             )
 
         headers_dict = dict(request.headers)
@@ -208,14 +231,14 @@ class MissionManager:
                 status_code=401,
                 content={
                     "error": "invalid_request",
-                    "error_description": "MM token requests require sig=jwt or sig=jwks_uri",
+                    "error_description": "PS token requests require sig=jwt or sig=jwks_uri",
                 },
             )
 
-        def mm_jwks_fetcher(agent_id_param: str, kid_param: str = None):
-            return self._mm_jwks_fetcher(agent_id_param, kid_param)
+        def ps_jwks_fetcher(agent_id_param: str, kid_param: str = None):
+            return self._ps_jwks_fetcher(agent_id_param, kid_param)
 
-        verify_fetcher = agent_jwks_fetcher if scheme in ("jwks", "jwks_uri") else mm_jwks_fetcher
+        verify_fetcher = agent_jwks_fetcher if scheme in ("jwks", "jwks_uri") else ps_jwks_fetcher
 
         ok = verify_signature(
             method=request.method,
@@ -229,6 +252,21 @@ class MissionManager:
         )
         if not ok:
             return JSONResponse(status_code=401, content={"error": "invalid_signature"})
+
+        # Check mission state if a mission reference is included.
+        # Missions are two-state: active or terminated (no suspended state).
+        mission_ref = params_dict.get("mission")
+        if mission_ref:
+            mission = self.missions.get(mission_ref)
+            if mission is None or mission.get("status") != "active":
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": ERROR_MISSION_TERMINATED,
+                        "error_description": "The referenced mission is terminated or does not exist",
+                        "mission_status": "terminated",
+                    },
+                )
 
         resource_token = params_dict.get("resource_token")
         if not resource_token:
@@ -246,10 +284,22 @@ class MissionManager:
         upstream_token = params_dict.get("upstream_token")
 
         if self.require_user_consent:
-            return self._create_mm_pending(resource_token, agent_token_for_as, as_url, params_dict, upstream_token)
+            # Check if agent declares the interaction capability.
+            # If not, we cannot reach the user via interaction — return interaction_required.
+            caps_header = headers_dict.get("AAuth-Capabilities") or headers_dict.get("aauth-capabilities") or ""
+            capabilities = parse_aauth_capabilities_header(caps_header) if caps_header else []
+            if "interaction" not in capabilities:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": ERROR_INTERACTION_REQUIRED,
+                        "error_description": "User interaction is needed but the agent does not declare the 'interaction' capability",
+                    },
+                )
+            return self._create_ps_pending(resource_token, agent_token_for_as, as_url, params_dict, upstream_token)
 
         if self.require_approval:
-            return await self._create_mm_approval_pending(resource_token, agent_token_for_as, as_url, params_dict, upstream_token)
+            return await self._create_ps_approval_pending(resource_token, agent_token_for_as, as_url, params_dict, upstream_token)
 
         resp = await self._forward_to_as(as_url, resource_token, agent_token_for_as, upstream_token)
         return Response(
@@ -259,7 +309,7 @@ class MissionManager:
             media_type=resp.headers.get("content-type", "application/json"),
         )
 
-    def _create_mm_pending(
+    def _create_ps_pending(
         self,
         resource_token: str,
         agent_token: Optional[str],
@@ -269,7 +319,7 @@ class MissionManager:
     ) -> JSONResponse:
         pid = uuid.uuid4().hex[:12]
         code = uuid.uuid4().hex[:8].upper()
-        loc = f"{self.mm_id}/pending/{pid}"
+        loc = f"{self.ps_id}/pending/{pid}"
         self.pending_requests[pid] = {
             "resource_token": resource_token,
             "agent_token": agent_token or "",
@@ -280,10 +330,10 @@ class MissionManager:
             "upstream_token": upstream_token or "",
         }
         body = build_pending_response_body(location=loc, require="interaction", code=code)
-        hdrs = build_pending_response_headers(location=loc, retry_after=0, require="interaction", code=code, url=f"{self.mm_id}/interact")
+        hdrs = build_pending_response_headers(location=loc, retry_after=0, require="interaction", code=code, url=f"{self.ps_id}/interact")
         return JSONResponse(status_code=202, content=body, headers=hdrs)
 
-    async def _create_mm_approval_pending(
+    async def _create_ps_approval_pending(
         self,
         resource_token: str,
         agent_token: Optional[str],
@@ -298,7 +348,7 @@ class MissionManager:
         request after ``approval_delay`` seconds.
         """
         pid = uuid.uuid4().hex[:12]
-        loc = f"{self.mm_id}/pending/{pid}"
+        loc = f"{self.ps_id}/pending/{pid}"
         self.pending_requests[pid] = {
             "resource_token": resource_token,
             "agent_token": agent_token or "",
@@ -334,8 +384,22 @@ class MissionManager:
         )
         if fwd.status_code == 200:
             data = fwd.json()
-            p["auth_token"] = data.get("auth_token")
+            auth_token = data.get("auth_token")
+            p["auth_token"] = auth_token
             p["status"] = "approved"
+            # Track JTI for revocation support
+            if auth_token:
+                try:
+                    import jwt as _pyjwt
+                    payload_check = _pyjwt.decode(auth_token, options={"verify_signature": False})
+                    jti_val = payload_check.get("jti")
+                    if jti_val:
+                        self.issued_tokens[jti_val] = {
+                            "aud": payload_check.get("aud"),
+                            "agent": payload_check.get("agent"),
+                        }
+                except Exception:
+                    pass
         else:
             p["status"] = "denied"
 
@@ -360,7 +424,7 @@ class MissionManager:
                 body=body_bytes,
                 private_key=self.private_key,
                 sig_scheme="jwks_uri",
-                id=self.mm_id,
+                id=self.ps_id,
                 kid=self.kid,
             )
 
@@ -376,16 +440,22 @@ class MissionManager:
     async def _handle_pending_get(self, pid: str, request: Request) -> Response:
         p = self.pending_requests.get(pid)
         if not p:
-            return JSONResponse(status_code=404, content={"error": "not_found"})
+            # Per spec: once a terminal response has been returned, subsequent
+            # requests to the pending URL MUST return 410 Gone.
+            return Response(status_code=410)
         if p.get("status") == "approved" and p.get("auth_token"):
-            return JSONResponse(content={"auth_token": p["auth_token"], "expires_in": 3600})
+            auth_token = p["auth_token"]
+            # Remove the pending request — terminal response; future polls return 410.
+            del self.pending_requests[pid]
+            return JSONResponse(content={"auth_token": auth_token, "expires_in": 3600})
         if p.get("status") == "denied":
+            del self.pending_requests[pid]
             return JSONResponse(status_code=403, content={"error": "denied"})
-        loc = f"{self.mm_id}/pending/{pid}"
+        loc = f"{self.ps_id}/pending/{pid}"
         req_type = p.get("require_type", "interaction")
         code = p.get("interaction_code") if req_type == "interaction" else None
         body = build_pending_response_body(location=loc, require=req_type, code=code)
-        interaction_url = f"{self.mm_id}/interact" if req_type == "interaction" else None
+        interaction_url = f"{self.ps_id}/interact" if req_type == "interaction" else None
         return JSONResponse(status_code=202, content=body, headers=build_pending_response_headers(loc, 2, req_type, code, url=interaction_url))
 
     async def _handle_pending_post(self, pid: str, request: Request) -> Response:
@@ -400,7 +470,7 @@ class MissionManager:
     async def _handle_interact_get(self, request: Request) -> Response:
         code = request.query_params.get("code", "")
         return HTMLResponse(
-            f"<html><body><h1>MM Consent</h1><form method='post'><input name='consent' value='grant'/><button>Submit</button></form><p>code={code}</p></body></html>"
+            f"<html><body><h1>PS Consent</h1><form method='post'><input name='consent' value='grant'/><button>Submit</button></form><p>code={code}</p></body></html>"
         )
 
     async def _handle_interact_post(self, request: Request) -> Response:
@@ -413,13 +483,137 @@ class MissionManager:
                     fwd = await self._forward_to_as(p["as_url"], p["resource_token"], at or None, ut or None)
                     if fwd.status_code == 200:
                         data = fwd.json()
-                        p["auth_token"] = data.get("auth_token")
+                        auth_token = data.get("auth_token")
+                        p["auth_token"] = auth_token
                         p["status"] = "approved"
+                        # Track JTI for revocation
+                        if auth_token:
+                            try:
+                                tok_payload = pyjwt.decode(auth_token, options={"verify_signature": False})
+                                jti_val = tok_payload.get("jti")
+                                if jti_val:
+                                    self.issued_tokens[jti_val] = {
+                                        "aud": tok_payload.get("aud"),
+                                        "agent": tok_payload.get("agent"),
+                                    }
+                            except Exception:
+                                pass
                     break
         return HTMLResponse("<html><body>ok</body></html>")
 
+    async def _handle_revocation(self, request: Request) -> Response:
+        """Handle POST /revoke — revoke a brokered auth token by JTI.
+
+        Per spec Section 14: verify caller identity, check JTI is known, mark revoked.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Body must be JSON"})
+
+        jti = body.get("jti")
+        if not jti:
+            return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Missing 'jti'"})
+
+        if jti in self.revoked_jtis:
+            return JSONResponse(content={"status": "revoked"})
+
+        if jti not in self.issued_tokens:
+            return JSONResponse(status_code=404, content={"error": "not_found", "error_description": "JTI not recognized"})
+
+        headers_dict = dict(request.headers)
+        hl = {k.lower(): v for k, v in headers_dict.items()}
+        sig_in = hl.get("signature-input", "")
+        sig = hl.get("signature", "")
+        sig_key = hl.get("signature-key", "")
+        if not sig_in or not sig or not sig_key:
+            return JSONResponse(status_code=401, content={"error": "invalid_signature", "error_description": "Missing signature headers"})
+
+        # Accept revocation from the token's resource (aud) only
+        try:
+            from aauth.headers.signature_key import parse_signature_key
+            pk = parse_signature_key(sig_key)
+            caller_id = pk["params"].get("id") or pk["params"].get("uri")
+        except Exception as e:
+            return JSONResponse(status_code=401, content={"error": "invalid_signature", "error_description": str(e)})
+
+        token_info = self.issued_tokens.get(jti, {})
+        if caller_id != token_info.get("aud"):
+            return JSONResponse(status_code=403, content={"error": "forbidden", "error_description": "Not authorized to revoke"})
+
+        def jwks_fetcher(issuer_url, kid_param=None):
+            try:
+                for path in ("/.well-known/aauth-resource.json", "/.well-known/aauth-resource"):
+                    r = httpx.get(f"{issuer_url.rstrip('/')}{path}", timeout=10.0)
+                    if r.status_code == 200:
+                        jwks_uri = r.json().get("jwks_uri")
+                        if jwks_uri:
+                            j = httpx.get(jwks_uri, timeout=10.0)
+                            return j.json() if j.status_code == 200 else None
+            except Exception:
+                return None
+
+        from aauth.signing.verifier import verify_signature
+        body_bytes = json.dumps(body).encode("utf-8")
+        ok = verify_signature(
+            method=request.method,
+            target_uri=str(request.url),
+            headers=headers_dict,
+            body=body_bytes,
+            signature_input_header=sig_in,
+            signature_header=sig,
+            signature_key_header=sig_key,
+            jwks_fetcher=jwks_fetcher,
+        )
+        if not ok:
+            return JSONResponse(status_code=401, content={"error": "invalid_signature"})
+
+        self.revoked_jtis.add(jti)
+        return JSONResponse(content={"status": "revoked"})
+
+    async def revoke_token(self, jti: str, resource_url: str) -> bool:
+        """Revoke an auth token at the resource's revocation endpoint.
+
+        The PS signs the revocation request and sends it to the resource's ``/revoke``.
+
+        Args:
+            jti: JTI of the auth token to revoke
+            resource_url: Base URL of the resource
+
+        Returns:
+            True if successfully revoked, False otherwise
+        """
+        revoke_url = f"{resource_url.rstrip('/')}/revoke"
+        body_obj = {"jti": jti}
+        body_bytes = json.dumps(body_obj).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+
+        sig_headers = sign_request(
+            method="POST",
+            target_uri=revoke_url,
+            headers=headers,
+            body=body_bytes,
+            private_key=self.private_key,
+            sig_scheme="jwks_uri",
+            id=self.ps_id,
+            kid=self.kid,
+        )
+        req_headers = {**headers, **sig_headers}
+        try:
+            resp = await asyncio.to_thread(
+                lambda: httpx.post(revoke_url, content=body_bytes, headers=req_headers, timeout=10.0)
+            )
+            return resp.status_code == 200
+        except Exception as e:
+            logger.warning(f"Failed to revoke token {jti} at {revoke_url}: {e}")
+            return False
+
     def run(self) -> None:
-        """Run the Mission Manager (same pattern as ``Agent`` / ``Resource``)."""
+        """Run the Person Server (same pattern as ``Agent`` / ``Resource``)."""
         import uvicorn
 
         uvicorn.run(self.app, host="0.0.0.0", port=self.port)
+
+
+# Backward-compatibility alias
+MissionManager = PersonServer

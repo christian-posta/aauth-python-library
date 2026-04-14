@@ -38,7 +38,7 @@ def auth_id():
 
 @pytest.fixture
 def delegate_sub():
-    return "delegate-1"
+    return "aauth:delegate@127.0.0.1"
 
 
 @pytest.fixture

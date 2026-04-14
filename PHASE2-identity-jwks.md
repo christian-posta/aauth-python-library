@@ -20,7 +20,7 @@ sequenceDiagram
     R->>R: Verify sig=hwk<br/>(extract key from header)
     R-->>A: 200 OK
     
-    Note over A,R: Phase 2: sig=jwks endpoint
+    Note over A,R: Phase 2: sig=jwks_uri endpoint
     A->>A: Publish metadata at<br/>/.well-known/aauth-agent
     A->>A: Publish JWKS at /jwks.json
     A->>R: GET /data-jwks<br/>Signature-Key: sig1=(scheme=jwks id="..." kid="...")
@@ -33,9 +33,9 @@ sequenceDiagram
     R-->>A: 200 OK
 ```
 
-### Key Differences: sig=hwk vs sig=jwks
+### Key Differences: sig=hwk vs sig=jwks_uri
 
-| Aspect | sig=hwk (Phase 1) | sig=jwks (Phase 2) |
+| Aspect | sig=hwk (Phase 1) | sig=jwks_uri (Phase 2) |
 |--------|-------------------|-------------------|
 | **Identity** | Pseudonymous (key in header) | Identified (agent_id + kid) |
 | **Key Source** | Embedded in Signature-Key header | Fetched via JWKS discovery |
@@ -44,7 +44,7 @@ sequenceDiagram
 
 ### Mode 2 Discovery Flow
 
-When a resource receives a request with `sig=jwks`:
+When a resource receives a request with `sig=jwks_uri`:
 
 1. **Extract identifiers**: Parse `id` and `kid` from `Signature-Key` header
 2. **Fetch metadata**: GET `{agent_id}/.well-known/aauth-agent`
@@ -81,7 +81,7 @@ python demo_phase2.py
 
 The demo shows:
 - `sig=hwk` flow on `/data-hwk`
-- `sig=jwks` flow on `/data-jwks`
+- `sig=jwks_uri` flow on `/data-jwks`
 - Metadata endpoint verification
 - JWKS endpoint verification
 - Wrong scheme rejection
@@ -89,8 +89,8 @@ The demo shows:
 
 ### Manual Testing
 
-**Important Note for `sig=jwks` Testing:**
-For `sig=jwks` to work, the agent instance used for signing requests MUST be the same one serving the JWKS endpoint. Each `Agent()` instance generates its own key pair, so if you create a new instance, it will have a different key than the server, causing verification to fail.
+**Important Note for `sig=jwks_uri` Testing:**
+For `sig=jwks_uri` to work, the agent instance used for signing requests MUST be the same one serving the JWKS endpoint. Each `Agent()` instance generates its own key pair, so if you create a new instance, it will have a different key than the server, causing verification to fail.
 
 **Option 1: Use the same agent instance (recommended for manual testing)**
 
@@ -133,7 +133,7 @@ async def test():
 asyncio.run(test())
 ```
 
-**Option 2: Run servers separately (for sig=hwk only, or use demo script for sig=jwks)**
+**Option 2: Run servers separately (for sig=hwk only, or use demo script for sig=jwks_uri)**
 
 **Terminal 1 - Resource Server:**
 ```bash
@@ -141,7 +141,7 @@ python -c "from participants.resource import Resource; Resource('https://resourc
 ```
 
 
-**Note:** If you create a new `Agent()` instance in Terminal 3, it will have a different key pair and `sig=jwks` will fail. Use the demo script (`python demo_phase2.py`) for `sig=jwks` testing, or use Option 1 above.
+**Note:** If you create a new `Agent()` instance in Terminal 3, it will have a different key pair and `sig=jwks_uri` will fail. Use the demo script (`python demo_phase2.py`) for `sig=jwks_uri` testing, or use Option 1 above.
 
 #### 2. Test sig=hwk on /data-hwk
 
@@ -249,7 +249,7 @@ This shows:
 - Component parsing
 - Timestamp validation
 - Key extraction and matching
-- JWKS fetching steps (for `sig=jwks`)
+- JWKS fetching steps (for `sig=jwks_uri`)
 - Signature verification results
 
 ### AAUTH_DEBUG_HTTP
@@ -307,14 +307,14 @@ Phase 2 maintains full backward compatibility with Phase 1:
 3. **Resource Updates** (`participants/resource.py`)
    - Added separate endpoints:
      - `/data-hwk` - Requires `sig=hwk` scheme (Phase 1)
-     - `/data-jwks` - Requires `sig=jwks` scheme (Phase 2)
+     - `/data-jwks` - Requires `sig=jwks_uri` scheme (Phase 2)
    - Kept `/data` endpoint for backward compatibility (defaults to `sig=hwk`)
    - Added scheme validation (rejects wrong scheme for endpoint)
    - Implemented `_fetch_jwks_for_agent()` using Mode 2 discovery (spec Section 10.7)
    - Added JWKS fetching with debug support
 
 4. **HTTPSig Updates** (`core/httpsig.py`)
-   - Updated `_verify_signature_manual()` to handle both `sig=hwk` and `sig=jwks`
+   - Updated `_verify_signature_manual()` to handle both `sig=hwk` and `sig=jwks_uri`
    - Added debug output for JWKS fetching steps
    - Enhanced `verify_signature()` to support `jwks_fetcher` callback
 
@@ -401,7 +401,7 @@ Response: {'message': 'Access granted', 'data': 'This is protected data', 'schem
 Press Enter to continue to Demo 2...
 
 ================================================================================
-Demo 2: sig=jwks on /data-jwks endpoint (Phase 2)
+Demo 2: sig=jwks_uri on /data-jwks endpoint (Phase 2)
 ================================================================================
 
 ================================================================================
@@ -460,7 +460,7 @@ server: uvicorn
 
 Status: 200
 Response: {'message': 'Access granted', 'data': 'This is protected data', 'scheme': 'jwks', 'method': 'GET', 'agent_id': 'http://127.0.0.1:8001'}
-✓ sig=jwks works on /data-jwks endpoint
+✓ sig=jwks_uri works on /data-jwks endpoint
   Agent ID: http://127.0.0.1:8001
 
 Press Enter to continue to Demo 3...
@@ -669,7 +669,7 @@ Phase 2 Demo Complete!
 
 Summary:
 - sig=hwk works on /data-hwk endpoint (Phase 1)
-- sig=jwks works on /data-jwks endpoint (Phase 2)
+- sig=jwks_uri works on /data-jwks endpoint (Phase 2)
 - Agent metadata endpoint works
 - Agent JWKS endpoint works
 - Wrong scheme correctly rejected

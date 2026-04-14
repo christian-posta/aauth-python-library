@@ -36,7 +36,7 @@ def generate_agent_metadata(
         Agent metadata dictionary
     """
     metadata = {
-        "agent": agent_id,
+        "issuer": agent_id,
         "jwks_uri": jwks_uri,
     }
 

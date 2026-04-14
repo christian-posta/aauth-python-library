@@ -20,11 +20,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.keys.jwk import public_key_to_jwk, generate_jwks
+from aauth.identifiers import agent_identifier_from_server_url
 from aauth.signing.signer import sign_request
 from aauth.metadata.agent import generate_agent_metadata
 from aauth.metadata.auth_server import fetch_auth_metadata
 from aauth.agent.poller import poll_pending_url, PollingResult
-from aauth.headers.aauth_header import parse_aauth_header, get_challenge_header_value
+from aauth.headers.aauth_header import (
+    parse_aauth_header,
+    parse_accept_signature,
+    get_challenge_header_value,
+    build_aauth_capabilities_header,
+    parse_authorization_aauth_header,
+    SIGKEY_JKT,
+    SIGKEY_URI,
+)
 from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
 import json
 import re
@@ -46,29 +55,42 @@ class Agent:
         use_user_simulator: bool = True,
         clarification_supported: bool = True,
         mm_url: Optional[str] = None,
+        capabilities: Optional[list] = None,
+        agent_sub: Optional[str] = None,
     ):
         """Initialize agent.
-        
+
         Args:
-            agent_id: Agent identifier (HTTPS URL)
+            agent_id: Agent server URL (HTTPS URL used as ``iss`` in agent tokens and
+                for JWKS/metadata discovery).
             port: Port to run agent server on
             use_user_simulator: If True, use user simulator for automated consent flow.
                                If False, pause and wait for manual browser interaction.
             clarification_supported: Whether this agent supports clarification chat.
-            mm_url: Optional Mission Manager base URL; when set, auth token requests
-                go to MM (which federates to the AS) instead of directly to the AS.
+            mm_url: Optional Person Server base URL; when set, auth token requests
+                go to PS (which federates to the AS) instead of directly to the AS.
+            capabilities: List of capability tokens to advertise via AAuth-Capabilities
+                header (e.g. ["interaction", "clarification"]). Defaults to
+                ["interaction", "clarification"].
+            agent_sub: The agent's ``aauth:local@domain`` identifier used as the ``sub``
+                claim in agent tokens. If omitted, derived from ``agent_id``.
         """
         self.agent_id = agent_id
+        # agent_sub is the aauth:local@domain identifier (used as sub in agent tokens).
+        # Derived from agent_id if not explicitly provided.
+        self.agent_sub: str = agent_sub or agent_identifier_from_server_url(agent_id)
         self.port = port
         self.use_user_simulator = use_user_simulator
         self.clarification_supported = clarification_supported
         self.mm_url = mm_url.rstrip("/") if mm_url else None
+        self.capabilities: list = capabilities if capabilities is not None else ["interaction", "clarification"]
         self.approved_mission: Optional[Dict[str, Any]] = None
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "key-1"
-        
+
         # Token storage
         self.auth_token = None
+        self.aauth_access_token: Optional[str] = None  # AAuth-Access opaque token (two-party mode)
         self.resource_token = None  # Store resource token for debug output
         self.clarification_history = []
 
@@ -226,24 +248,32 @@ class Agent:
         
         if headers is None:
             headers = {}
-        
+
         if body is None:
             body = b""
-        
+
+        # Advertise agent capabilities on every outbound request
+        if self.capabilities:
+            headers = {**headers, "AAuth-Capabilities": build_aauth_capabilities_header(self.capabilities)}
+
+        # Two-party mode: include AAuth-Access token if we have one
+        if self.aauth_access_token and sig_scheme not in ("jwt",):
+            headers = {**headers, "Authorization": f"AAuth {self.aauth_access_token}"}
+
         # Phase 3: Use auth token if available and sig_scheme allows
         if sig_scheme != "jwt" and self.auth_token:
             # Try with auth token first
             if debug:
                 print(f"DEBUG AGENT: Using stored auth token for request", file=sys.stderr, flush=True)
             sig_scheme = "jwt"
-        
+
         # Sign the request
         sig_headers = self.sign_request(
             method, resource_url, headers, body,
             sig_scheme=sig_scheme,
             jwt=self.auth_token if sig_scheme == "jwt" else None
         )
-        
+
         # Add signature headers to request
         request_headers = {**headers, **sig_headers}
         
@@ -296,54 +326,77 @@ class Agent:
                     print(f"[Binary body: {len(response.content)} bytes]", file=sys.stderr)
             print("=" * 80 + "\n", file=sys.stderr)
         
-        # Handle auth token challenge (AAuth-Requirement, AAuth, or Agent-Auth header)
+        # Handle auth token challenge (AAuth-Requirement, Accept-Signature, or legacy headers)
         if response.status_code == 401:
             aauth_header = get_challenge_header_value(response.headers)
             if debug:
                 logger.debug(f"Received 401, challenge header: {aauth_header}")
 
             if aauth_header:
-                parsed = parse_aauth_header(aauth_header)
-                require = parsed.get("requirement") or parsed.get("require", "")
-                # Fall back to old Agent-Auth format
-                if not require and "resource_token" in aauth_header:
-                    import re as _re
-                    rt = _re.search(r'resource_token="([^"]+)"', aauth_header)
-                    asrv = _re.search(r'auth_server="([^"]+)"', aauth_header)
-                    if rt:
-                        parsed["resource-token"] = rt.group(1)
-                    if asrv:
-                        parsed["auth-server"] = asrv.group(1)
-                    require = "auth-token"
-
-                if require == "auth-token":
-                    resource_token_val = parsed.get("resource_token") or parsed.get("resource-token")
-                    # Auth server from header (backward compat) or from resource token aud claim
-                    auth_server = parsed.get("auth_server") or parsed.get("auth-server")
-                    if not auth_server and resource_token_val:
-                        try:
-                            import jwt as jwt_lib
-                            rt_payload = jwt_lib.decode(resource_token_val, options={"verify_signature": False})
-                            auth_server = rt_payload.get("aud")
-                        except Exception:
-                            pass
-
-                    if resource_token_val and auth_server:
-                        self.resource_token = resource_token_val
+                # Accept-Signature: sig=(...);sigkey=jkt|uri  — pseudonym or identity challenge
+                if "sigkey=" in aauth_header:
+                    accept_sig = parse_accept_signature(aauth_header)
+                    sigkey = accept_sig.get("sigkey")
+                    if sigkey == SIGKEY_URI and sig_scheme not in ("jwks_uri", "jwt"):
                         if debug:
-                            logger.debug(f"Auth token challenge: auth_server={auth_server} (from {'header' if parsed.get('auth_server') or parsed.get('auth-server') else 'resource token aud'})")
+                            logger.debug("Accept-Signature sigkey=uri — retrying with jwks_uri")
+                        return await self.request_resource(
+                            resource_url=resource_url,
+                            method=method,
+                            headers=headers,
+                            body=body,
+                            sig_scheme="jwks_uri",
+                        )
+                    # sigkey=jkt (pseudonym/hwk) — agent already signs with hwk by default; fall through
+                else:
+                    parsed = parse_aauth_header(aauth_header)
+                    require = parsed.get("requirement") or parsed.get("require", "")
+                    # Fall back to old Agent-Auth format
+                    if not require and "resource_token" in aauth_header:
+                        import re as _re
+                        rt = _re.search(r'resource_token="([^"]+)"', aauth_header)
+                        asrv = _re.search(r'auth_server="([^"]+)"', aauth_header)
+                        if rt:
+                            parsed["resource-token"] = rt.group(1)
+                        if asrv:
+                            parsed["auth-server"] = asrv.group(1)
+                        require = "auth-token"
 
-                        auth_token = await self._request_auth_token(resource_token_val, auth_server)
-                        if auth_token:
+                    if require == "auth-token":
+                        resource_token_val = parsed.get("resource_token") or parsed.get("resource-token")
+                        # Auth server from header (backward compat) or from resource token aud claim
+                        auth_server = parsed.get("auth_server") or parsed.get("auth-server")
+                        if not auth_server and resource_token_val:
+                            try:
+                                import jwt as jwt_lib
+                                rt_payload = jwt_lib.decode(resource_token_val, options={"verify_signature": False})
+                                auth_server = rt_payload.get("aud")
+                            except Exception:
+                                pass
+
+                        if resource_token_val and auth_server:
+                            self.resource_token = resource_token_val
                             if debug:
-                                logger.debug("Auth token obtained, retrying request")
-                            return await self.request_resource(
-                                resource_url=resource_url,
-                                method=method,
-                                headers=headers,
-                                body=body,
-                                sig_scheme="jwt",
-                            )
+                                logger.debug(f"Auth token challenge: auth_server={auth_server} (from {'header' if parsed.get('auth_server') or parsed.get('auth-server') else 'resource token aud'})")
+
+                            auth_token = await self._request_auth_token(resource_token_val, auth_server)
+                            if auth_token:
+                                if debug:
+                                    logger.debug("Auth token obtained, retrying request")
+                                return await self.request_resource(
+                                    resource_url=resource_url,
+                                    method=method,
+                                    headers=headers,
+                                    body=body,
+                                    sig_scheme="jwt",
+                                )
+
+        # Capture AAuth-Access opaque token from any successful response
+        new_access_token = response.headers.get("aauth-access") or response.headers.get("AAuth-Access")
+        if new_access_token:
+            self.aauth_access_token = new_access_token
+            if debug:
+                logger.debug(f"Stored AAuth-Access token from response")
 
         # Handle deferred response directly from a resource (interaction chaining via Resource 1).
         if response.status_code == 202:
@@ -353,7 +406,12 @@ class Agent:
             except Exception:
                 pass
             if pending_url:
-                return await self._poll_resource_pending(response)
+                final = await self._poll_resource_pending(response)
+                # Capture AAuth-Access from the final polled response too
+                polled_access = final.headers.get("aauth-access") or final.headers.get("AAuth-Access")
+                if polled_access:
+                    self.aauth_access_token = polled_access
+                return final
 
         return response
 
@@ -441,7 +499,7 @@ class Agent:
 
         # Fetch auth server metadata
         try:
-            metadata_url = f"{auth_server}/.well-known/aauth-issuer"
+            metadata_url = f"{auth_server}/.well-known/aauth-access"
             metadata = await fetch_auth_metadata(metadata_url)
             token_endpoint = metadata.get("token_endpoint")
             if debug:
@@ -500,7 +558,7 @@ class Agent:
 
         # Fetch auth server metadata (direct agent → AS)
         try:
-            metadata_url = f"{auth_server}/.well-known/aauth-issuer"
+            metadata_url = f"{auth_server}/.well-known/aauth-access"
             metadata = await fetch_auth_metadata(metadata_url)
             token_endpoint = metadata.get("token_endpoint")
             if debug:
@@ -553,7 +611,7 @@ class Agent:
         if not s256:
             return None
         self.approved_mission = {
-            "manager": self.mm_url,
+            "approver": self.mm_url,
             "s256": s256,
             "approved": mission.get("approved", ""),
         }
@@ -581,7 +639,7 @@ class Agent:
             from aauth.headers.aauth_header import build_aauth_mission_header
 
             base_headers["AAuth-Mission"] = build_aauth_mission_header(
-                self.approved_mission["manager"],
+                self.approved_mission["approver"],
                 self.approved_mission["s256"],
             )
         sig_headers = self.sign_request(
@@ -740,7 +798,7 @@ class Agent:
                         if as_base:
                             try:
                                 metadata = await fetch_auth_metadata(
-                                    f"{as_base.rstrip('/')}/.well-known/aauth-issuer"
+                                    f"{as_base.rstrip('/')}/.well-known/aauth-access"
                                 )
                                 interaction_endpoint = metadata.get("interaction_endpoint")
                             except Exception:
@@ -750,7 +808,7 @@ class Agent:
                     else:
                         try:
                             metadata = await fetch_auth_metadata(
-                                f"{auth_server}/.well-known/aauth-issuer"
+                                f"{auth_server}/.well-known/aauth-access"
                             )
                             interaction_endpoint = metadata.get("interaction_endpoint")
                         except Exception:
@@ -886,7 +944,17 @@ class Agent:
                 status_code=400,
                 content={"error": "invalid_request", "error_description": "Missing 'sub' parameter (delegate identifier)"}
             )
-        
+
+        # Validate aauth: URI scheme format per spec
+        try:
+            from aauth.identifiers import validate_agent_identifier
+            validate_agent_identifier(delegate_sub)
+        except ValueError as e:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_request", "error_description": str(e)}
+            )
+
         if not cnf_jwk:
             return JSONResponse(
                 status_code=400,

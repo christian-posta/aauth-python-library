@@ -1,4 +1,4 @@
-"""Auth server participant - issues auth tokens for autonomous authorization.
+"""Access server participant - issues auth tokens for autonomous authorization.
 
 Updated for SPEC_UPDATED.md:
 - JSON request bodies (not form-encoded)
@@ -35,11 +35,11 @@ from aauth.http.deferred import (
 )
 from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
 
-logger = logging.getLogger("aauth.auth_server")
+logger = logging.getLogger("aauth.access_server")
 
 
-class AuthServer:
-    """Auth server that issues auth tokens for autonomous authorization."""
+class AccessServer:
+    """Access server that issues auth tokens for autonomous authorization."""
 
     def __init__(
         self,
@@ -47,18 +47,20 @@ class AuthServer:
         port: int = 8003,
         require_user_consent: bool = False,
         trusted_auth_servers: Optional[List[str]] = None,
-        trusted_mission_managers: Optional[List[str]] = None,
+        trusted_person_servers: Optional[List[str]] = None,
+        trusted_mission_managers: Optional[List[str]] = None,  # deprecated: use trusted_person_servers
         clarification_questions: Optional[List[str]] = None,
         max_clarification_rounds: int = 5,
     ):
-        """Initialize auth server.
+        """Initialize access server.
 
         Args:
-            auth_id: Auth server identifier (HTTPS URL)
-            port: Port to run auth server on
-            trusted_auth_servers: List of trusted auth server identifiers for call chaining
-            trusted_mission_managers: If set, ``POST /token`` may be called by an MM (HTTPSig ``jwks_uri``)
+            auth_id: Access server identifier (HTTPS URL)
+            port: Port to run access server on
+            trusted_auth_servers: List of trusted access server identifiers for call chaining
+            trusted_person_servers: If set, ``POST /token`` may be called by a PS (HTTPSig ``jwks_uri``)
                 with JSON body ``resource_token`` and ``agent_token`` (federation path).
+            trusted_mission_managers: Deprecated alias for trusted_person_servers.
             require_user_consent: If True, require user consent for all requests (Phase 4 demo mode)
             clarification_questions: Optional queued clarification prompts for demo flows.
             max_clarification_rounds: Maximum clarification answers accepted.
@@ -81,12 +83,17 @@ class AuthServer:
             "testuser": {"password": "testpass", "name": "Test User", "email": "testuser@example.com"}
         }
 
-        # Federation trust - list of trusted auth servers for call chaining
+        # Federation trust - list of trusted access servers for call chaining
         self.trusted_auth_servers: List[str] = trusted_auth_servers if trusted_auth_servers else []
-        self.trusted_mission_managers: List[str] = trusted_mission_managers if trusted_mission_managers else []
+        # trusted_mission_managers is a deprecated alias for trusted_person_servers
+        self.trusted_person_servers: List[str] = trusted_person_servers or trusted_mission_managers or []
+
+        # Revocation: track issued auth token JTIs and revoked JTIs
+        self.issued_tokens: Dict[str, Dict] = {}   # jti -> {aud, agent, ...}
+        self.revoked_jtis: set = set()
 
         # Create FastAPI app
-        self.app = FastAPI(title="AAuth Auth Server")
+        self.app = FastAPI(title="AAuth Access Server")
 
         # Setup routes
         self._setup_routes()
@@ -104,10 +111,10 @@ class AuthServer:
             jwk = public_key_to_jwk(self.public_key, kid=self.kid)
             return generate_jwks([jwk])
 
-        @self.app.get("/.well-known/aauth-issuer")
-        @self.app.get("/.well-known/aauth-issuer.json")
+        @self.app.get("/.well-known/aauth-access")
+        @self.app.get("/.well-known/aauth-access.json")
         async def metadata():
-            """Auth server metadata endpoint per spec Section 13.2."""
+            """Access server metadata endpoint per AAuth spec."""
             jwks_uri = f"{self.auth_id}/jwks.json"
             token_endpoint = f"{self.auth_id}/token"
             interaction_endpoint = f"{self.auth_id}/interact"
@@ -116,7 +123,13 @@ class AuthServer:
                 jwks_uri=jwks_uri,
                 token_endpoint=token_endpoint,
                 interaction_endpoint=interaction_endpoint,
+                revocation_endpoint=f"{self.auth_id}/revoke",
             )
+
+        @self.app.post("/revoke")
+        async def revoke(request: Request):
+            """Token revocation endpoint per AAuth spec Section 14."""
+            return await self._handle_revocation(request)
 
         @self.app.post("/token")
         async def token_endpoint(request: Request):
@@ -179,10 +192,10 @@ class AuthServer:
                     sch = pk.get("scheme")
                     sid = (pk.get("params") or {}).get("id", "")
                     if sch in ("jwks", "jwks_uri") and sid:
-                        trusted = {x.rstrip("/") for x in self.trusted_mission_managers}
+                        trusted = {x.rstrip("/") for x in self.trusted_person_servers}
                         if trusted and sid.rstrip("/") in trusted:
                             banner = (
-                                "Incoming: POST /token — Mission Manager → AS federation "
+                                "Incoming: POST /token — Person Server → AS federation "
                                 f"(Signature-Key id={sid})"
                             )
                         else:
@@ -237,15 +250,15 @@ class AuthServer:
             return await self._handle_token_refresh(request, params_dict, body_bytes)
         # resource_access and self_access share the same authorization flow
 
-        # MM federation: trusted MM calls AS with resource_token (+ optional upstream_token)
-        # This covers both "resource_access" mode and "call_chaining" mode when caller is MM.
-        if mode in ("resource_access", "call_chaining") and self.trusted_mission_managers:
+        # PS federation: trusted PS calls AS with resource_token (+ optional upstream_token)
+        # This covers both "resource_access" mode and "call_chaining" mode when caller is PS.
+        if mode in ("resource_access", "call_chaining") and self.trusted_person_servers:
             try:
                 pk = parse_signature_key(request.headers.get("signature-key", ""))
                 sch = pk.get("scheme")
-                mm_id = (pk.get("params") or {}).get("id")
-                if sch in ("jwks", "jwks_uri") and mm_id and mm_id.rstrip("/") in {x.rstrip("/") for x in self.trusted_mission_managers}:
-                    return await self._handle_mm_federated_token_request(request, params_dict, body_bytes)
+                ps_id = (pk.get("params") or {}).get("id")
+                if sch in ("jwks", "jwks_uri") and ps_id and ps_id.rstrip("/") in {x.rstrip("/") for x in self.trusted_person_servers}:
+                    return await self._handle_ps_federated_token_request(request, params_dict, body_bytes)
             except Exception:
                 pass
 
@@ -581,13 +594,13 @@ class AuthServer:
 
         return JSONResponse(content=response_data)
 
-    async def _handle_mm_federated_token_request(
+    async def _handle_ps_federated_token_request(
         self,
         request: Request,
         params_dict: Dict[str, Any],
         body_bytes: bytes,
     ) -> Response:
-        """AS token endpoint when called by a trusted Mission Manager (spec MM–AS federation)."""
+        """AS token endpoint when called by a trusted Person Server (spec PS–AS federation)."""
         debug = _is_debug_enabled()
         headers_dict = dict(request.headers)
         method = request.method
@@ -596,10 +609,10 @@ class AuthServer:
         signature_header = headers_dict.get("signature", "")
         signature_key_header = headers_dict.get("signature-key", "")
 
-        def mm_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+        def ps_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
             try:
                 import httpx
-                for path in ("/.well-known/aauth-mission.json", "/.well-known/aauth-mission"):
+                for path in ("/.well-known/aauth-person.json", "/.well-known/aauth-person"):
                     r = httpx.get(f"{issuer_url.rstrip('/')}{path}", timeout=10.0)
                     if r.status_code == 200:
                         ju = r.json().get("jwks_uri")
@@ -758,7 +771,7 @@ class AuthServer:
             try:
                 upstream_header = jwt_lib.get_unverified_header(upstream_token_str)
                 upstream_kid = upstream_header.get("kid")
-                metadata_url = f"{upstream_iss}/.well-known/aauth-issuer"
+                metadata_url = f"{upstream_iss}/.well-known/aauth-access"
                 import httpx as _httpx
                 meta_r = _httpx.get(metadata_url, timeout=10.0)
                 meta_r.raise_for_status()
@@ -1402,6 +1415,17 @@ class AuthServer:
             if sub:
                 print(f"DEBUG AUTH:   User (sub): {sub}", file=sys.stderr, flush=True)
 
+        # Derive pairwise pseudonymous sub per resource per spec Section 15.4.
+        # Each resource sees a different sub for the same user, preserving privacy.
+        pairwise_sub = None
+        if sub:
+            import hashlib as _hashlib
+            raw = f"{sub}:{resource}:{self.auth_id}".encode("utf-8")
+            pairwise_sub = _hashlib.sha256(raw).hexdigest()[:32]
+
+        if debug and sub:
+            print(f"DEBUG AUTH:   Pairwise sub: {pairwise_sub} (user={sub}, resource={resource})", file=sys.stderr, flush=True)
+
         # Create auth token
         token = create_auth_token(
             iss=self.auth_id,
@@ -1412,13 +1436,23 @@ class AuthServer:
             private_key=self.private_key,
             kid=self.kid,
             exp=None,  # Default 1 hour
-            sub=sub,
+            sub=pairwise_sub,
             mission=kwargs.get("mission"),
         )
         
         if debug:
             print(f"DEBUG AUTH:   Auth token issued successfully", file=sys.stderr, flush=True)
-        
+
+        # Track issued token JTI for revocation support
+        try:
+            import jwt as _jwt
+            payload_check = _jwt.decode(token, options={"verify_signature": False})
+            jti = payload_check.get("jti")
+            if jti:
+                self.issued_tokens[jti] = {"aud": resource, "agent": agent, "scope": scope}
+        except Exception:
+            pass
+
         return token
     
     # NOTE: _generate_request_token, _generate_authorization_code, and _handle_code_exchange
@@ -1573,7 +1607,7 @@ class AuthServer:
             import httpx
             
             # Fetch upstream auth server metadata
-            metadata_url = f"{upstream_iss}/.well-known/aauth-issuer"
+            metadata_url = f"{upstream_iss}/.well-known/aauth-access"
             if debug:
                 print(f"DEBUG AUTH:   Fetching upstream auth server metadata from {metadata_url}", file=sys.stderr, flush=True)
             
@@ -2020,13 +2054,137 @@ button{{flex:1;padding:12px;border:none;border-radius:4px;font-size:16px;font-we
 
         return HTMLResponse(content=html)
 
+    async def _handle_revocation(self, request: Request) -> Response:
+        """Handle POST /revoke — revoke an issued auth token by JTI.
+
+        Per spec Section 14: verify caller identity, check JTI is known, mark revoked.
+        Returns 200 (revoked/already invalid) or 404 (JTI not recognized).
+        """
+        import json as _json
+        import httpx as _httpx
+
+        body_bytes = await request.body()
+        try:
+            body = _json.loads(body_bytes)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Body must be JSON"})
+
+        jti = body.get("jti")
+        if not jti:
+            return JSONResponse(status_code=400, content={"error": "invalid_request", "error_description": "Missing 'jti'"})
+
+        # Already revoked — idempotent
+        if jti in self.revoked_jtis:
+            return JSONResponse(content={"status": "revoked"})
+
+        if jti not in self.issued_tokens:
+            return JSONResponse(status_code=404, content={"error": "not_found", "error_description": "JTI not recognized"})
+
+        # Verify caller signature (trusted PS or the token recipient)
+        headers_dict = dict(request.headers)
+        hl = {k.lower(): v for k, v in headers_dict.items()}
+        sig_in = hl.get("signature-input", "")
+        sig = hl.get("signature", "")
+        sig_key = hl.get("signature-key", "")
+        if not sig_in or not sig or not sig_key:
+            return JSONResponse(status_code=401, content={"error": "invalid_signature", "error_description": "Missing signature headers"})
+
+        try:
+            from aauth.headers.signature_key import parse_signature_key
+            pk = parse_signature_key(sig_key)
+            caller_id = pk["params"].get("id") or pk["params"].get("uri")
+        except Exception as e:
+            return JSONResponse(status_code=401, content={"error": "invalid_signature", "error_description": str(e)})
+
+        caller_trusted = caller_id and (
+            caller_id in self.trusted_person_servers
+            or caller_id == self.issued_tokens[jti].get("aud")
+        )
+        if not caller_trusted:
+            return JSONResponse(status_code=403, content={"error": "forbidden", "error_description": "Not authorized to revoke"})
+
+        def jwks_fetcher(issuer_url, kid_param=None):
+            try:
+                for path in ("/.well-known/aauth-person.json", "/.well-known/aauth-access.json",
+                             "/.well-known/aauth-person", "/.well-known/aauth-access"):
+                    r = _httpx.get(f"{issuer_url.rstrip('/')}{path}", timeout=10.0)
+                    if r.status_code == 200:
+                        jwks_uri = r.json().get("jwks_uri")
+                        if jwks_uri:
+                            j = _httpx.get(jwks_uri, timeout=10.0)
+                            return j.json() if j.status_code == 200 else None
+            except Exception:
+                return None
+
+        from aauth.signing.verifier import verify_signature
+        ok = verify_signature(
+            method=request.method,
+            target_uri=str(request.url),
+            headers=headers_dict,
+            body=body_bytes,
+            signature_input_header=sig_in,
+            signature_header=sig,
+            signature_key_header=sig_key,
+            jwks_fetcher=jwks_fetcher,
+        )
+        if not ok:
+            return JSONResponse(status_code=401, content={"error": "invalid_signature"})
+
+        self.revoked_jtis.add(jti)
+        logger.debug(f"Revoked token JTI {jti} (requested by {caller_id})")
+        return JSONResponse(content={"status": "revoked"})
+
+    async def revoke_token(self, jti: str, resource_url: str) -> bool:
+        """Revoke an auth token at the resource's revocation endpoint.
+
+        The AS signs the revocation request using its own key and sends it to
+        the resource's ``/revoke`` endpoint.
+
+        Args:
+            jti: JTI of the auth token to revoke
+            resource_url: Base URL of the resource (revocation_endpoint = resource_url + /revoke)
+
+        Returns:
+            True if successfully revoked, False otherwise
+        """
+        import json as _json
+        import httpx as _httpx
+
+        revoke_url = f"{resource_url.rstrip('/')}/revoke"
+        body_dict = {"jti": jti}
+        body_bytes = _json.dumps(body_dict).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+
+        from aauth.signing.signer import sign_request
+        sig_headers = sign_request(
+            method="POST",
+            target_uri=revoke_url,
+            headers=headers,
+            body=body_bytes,
+            private_key=self.private_key,
+            sig_scheme="jwks_uri",
+            id=self.auth_id,
+            kid=self.kid,
+        )
+        req_headers = {**headers, **sig_headers}
+        try:
+            async with _httpx.AsyncClient() as client:
+                resp = await client.post(revoke_url, content=body_bytes, headers=req_headers, timeout=10.0)
+            return resp.status_code == 200
+        except Exception as e:
+            logger.warning(f"Failed to revoke token {jti} at {revoke_url}: {e}")
+            return False
+
     def run(self):
         """Run the auth server."""
         import uvicorn
         uvicorn.run(self.app, host="0.0.0.0", port=self.port)
 
 
+# Backward-compatibility alias
+AuthServer = AccessServer
+
 if __name__ == "__main__":
-    auth_server = AuthServer("https://auth.example", port=8003)
-    auth_server.run()
+    access_server = AccessServer("https://access.example", port=8003)
+    access_server.run()
 

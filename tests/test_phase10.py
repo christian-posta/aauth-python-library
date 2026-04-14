@@ -16,7 +16,7 @@ def test_resource_metadata_includes_authorization_endpoint():
 
 
 def test_aauth_mission_header_roundtrip():
-    h = build_aauth_mission_header("https://mm.example", "abcds256")
+    h = build_aauth_mission_header("https://ps.example", "abcds256")
     p = parse_aauth_mission_header(h)
-    assert p["manager"] == "https://mm.example"
+    assert p["approver"] == "https://ps.example"
     assert p["s256"] == "abcds256"

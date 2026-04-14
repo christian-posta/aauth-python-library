@@ -12,7 +12,7 @@ Phase 6 implements agent delegation (SPEC.md Section 3.3 and Section 5) where ag
 2. **Agent delegate requests agent token** (`POST /delegate/token`)
    - Delegate generates ephemeral key pair
    - Delegate sends public key (`cnf_jwk`) and delegate identifier (`sub`) to agent server
-   - Agent server issues agent token (agent+jwt) binding delegate's key to agent server's identity
+   - Agent server issues agent token (aa-agent+jwt) binding delegate's key to agent server's identity
    
 3. **Agent delegate accesses resource** using agent token
    - Signs request with `scheme=jwt` and agent token
@@ -25,13 +25,13 @@ Phase 6 implements agent delegation (SPEC.md Section 3.3 and Section 5) where ag
 4. **Agent delegate requests auth token** using agent token
    - Signs request to auth server with `scheme=jwt` and agent token
    - Auth server validates agent token
-   - Auth server issues auth token with `agent_delegate` claim
+   - Auth server issues auth token with `agent` claim in `local@domain` format
 
 ## Key Features
 
-### Agent Token (agent+jwt)
+### Agent Token (aa-agent+jwt)
 
-- **Token Type**: `typ: "agent+jwt"` (distinct from `auth+jwt`)
+- **Token Type**: `typ: "aa-agent+jwt"` (distinct from `aa-auth+jwt`)
 - **Required Claims**:
   - `iss`: Agent server identifier (HTTPS URL) - also the agent identifier
   - `sub`: Agent delegate identifier (persists across key rotations)
@@ -42,7 +42,7 @@ Phase 6 implements agent delegation (SPEC.md Section 3.3 and Section 5) where ag
 
 ### Delegation Model
 
-- **Agent Server**: Uses `scheme=jwks` directly (no agent token needed)
+- **Agent Server**: Uses `scheme=jwks_uri` directly (no agent token needed)
 - **Agent Delegate**: Uses `scheme=jwt` with agent token
 - **Shared Identity**: Both share the same agent identifier (from `iss` claim)
 - **Persistent Delegate Identity**: `sub` claim persists across key rotations, enabling refresh token continuity
@@ -69,7 +69,7 @@ Both validations must succeed for the request to be authenticated.
 
 ## Token Claims Structure
 
-**Agent Token (agent+jwt):**
+**Agent Token (aa-agent+jwt):**
 ```json
 {
   "iss": "https://agent.example",      // Agent server identifier
@@ -85,13 +85,12 @@ Both validations must succeed for the request to be authenticated.
 }
 ```
 
-**Auth Token with Agent Delegate (auth+jwt):**
+**Auth Token (aa-auth+jwt):**
 ```json
 {
   "iss": "https://auth.example",
   "aud": "https://resource.example",
-  "agent": "https://agent.example",    // Agent server identifier
-  "agent_delegate": "spiffe://example.com/workload/api-service",  // Delegate identifier
+  "agent": "delegate-1@agent.example",  // local@domain format per spec Section 12.1
   "scope": "data.read",
   "cnf": {
     "jwk": {                            // Delegate's public key
@@ -129,10 +128,10 @@ pytest tests/test_phase6.py -v
    - `create_agent_token()`: Creates agent tokens with required claims
    - `verify_agent_token()`: Validates agent tokens per SPEC.md Section 5.7
 
-2. **JWT Type Detection** (`core/httpsig.py`)
+2. **JWT Type Detection** (`aauth/headers/aauth_header.py`)
    - Updated `verify_signature()` to check JWT `typ` claim
-   - Routes to `verify_agent_token()` for `agent+jwt`
-   - Routes to existing auth token validation for `auth+jwt`
+   - Routes to `verify_agent_token()` for `aa-agent+jwt`
+   - Routes to existing auth token validation for `aa-auth+jwt`
 
 3. **Agent Server** (`participants/agent.py`)
    - Added `POST /delegate/token` endpoint to issue agent tokens
@@ -151,8 +150,7 @@ pytest tests/test_phase6.py -v
 
 6. **Auth Server** (`participants/auth_server.py`)
    - Updated `_handle_token_request()` to accept and validate agent tokens
-   - Updated `_handle_code_exchange()` to support agent tokens
-   - Includes `agent_delegate` claim in issued auth tokens
+   - Issues auth tokens with `agent` claim in `local@domain` format (`sub@domain` from agent token)
 
 7. **Demo Script** (`demo_phase6.py`)
    - Interactive demonstration of delegation flow
@@ -192,12 +190,12 @@ Desktop and CLI tools use agent delegation:
 
 | Aspect | Previous Phases | Phase 6 |
 |--------|----------------|---------|
-| **Agent Identity** | Agent server uses `scheme=jwks` | Agent delegate uses `scheme=jwt` with agent token |
-| **Token Type** | `auth+jwt` (auth tokens) | `agent+jwt` (agent tokens) |
+| **Agent Identity** | Agent server uses `scheme=jwks_uri` | Agent delegate uses `scheme=jwt` with agent token |
+| **Token Type** | `aa-auth+jwt` (auth tokens) | `aa-agent+jwt` (agent tokens) |
 | **Identity Source** | Agent server's JWKS | Agent token's `iss` claim |
 | **Key Binding** | Agent server's key | Delegate's key (in `cnf.jwk`) |
 | **Use Case** | Single agent instance | Distributed instances with shared identity |
-| **Auth Token Claims** | `agent` claim only | `agent` + `agent_delegate` claims |
+| **Auth Token Claims** | `agent` claim only | `agent` claim using `local@domain` format |
 
 ## Implementation Notes
 
@@ -233,7 +231,7 @@ This demo shows the agent delegation flow:
 3. Agent delegate accesses resource using agent token
 4. Resource validates agent token and grants access
 5. Agent delegate requests auth token using agent token
-6. Auth server validates agent token and issues auth token with agent_delegate claim
+6. Auth server validates agent token and issues auth token with agent in local@domain format
 
 Debug output is enabled by default.
 ================================================================================
@@ -328,7 +326,7 @@ Verifying agent token claims:
   Token header: {
   "alg": "EdDSA",
   "kid": "key-1",
-  "typ": "agent+jwt"
+  "typ": "aa-agent+jwt"
 }
   Token payload: {
   "iss": "http://127.0.0.1:8001",
@@ -343,7 +341,7 @@ Verifying agent token claims:
     }
   }
 }
-  ✓ typ claim correct: agent+jwt
+  ✓ typ claim correct: aa-agent+jwt
   ✓ iss claim correct: http://127.0.0.1:8001
   ✓ sub claim correct: delegate-1
   ✓ cnf.jwk claim present
@@ -394,7 +392,7 @@ content-length: 206
 content-type: application/json
 
 [Body (206 bytes)]
-{"message":"Access granted","data":"This is protected data (identified via agent token)","scheme":"jwt","token_type":"agent+jwt","method":"GET","agent":"http://127.0.0.1:8001","agent_delegate":"delegate-1"}
+{"message":"Access granted","data":"This is protected data (identified via agent token)","scheme":"jwt","token_type":"aa-agent+jwt","method":"GET","agent":"http://127.0.0.1:8001"}
 ================================================================================
 
 INFO:     127.0.0.1:58713 - "GET /data-jwks HTTP/1.1" 200 OK
@@ -409,7 +407,7 @@ date: Mon, 19 Jan 2026 01:30:21 GMT
 server: uvicorn
 
 [Body (206 bytes)]
-{"message":"Access granted","data":"This is protected data (identified via agent token)","scheme":"jwt","token_type":"agent+jwt","method":"GET","agent":"http://127.0.0.1:8001","agent_delegate":"delegate-1"}
+{"message":"Access granted","data":"This is protected data (identified via agent token)","scheme":"jwt","token_type":"aa-agent+jwt","method":"GET","agent":"http://127.0.0.1:8001"}
 ================================================================================
 
 
@@ -418,10 +416,9 @@ server: uvicorn
   "message": "Access granted",
   "data": "This is protected data (identified via agent token)",
   "scheme": "jwt",
-  "token_type": "agent+jwt",
+  "token_type": "aa-agent+jwt",
   "method": "GET",
-  "agent": "http://127.0.0.1:8001",
-  "agent_delegate": "delegate-1"
+  "agent": "http://127.0.0.1:8001"
 }
   ✓ Resource recognized agent token
 

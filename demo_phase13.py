@@ -34,8 +34,8 @@ from uvicorn import Config, Server
 from aauth.debug import print_stderr_localhost_port_map
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
-from participants.auth_server import AuthServer
-from participants.mission_manager import MissionManager
+from participants.auth_server import AccessServer
+from participants.mission_manager import PersonServer
 from participants.resource import Resource
 
 _uvicorn_servers: List[Server] = []
@@ -91,18 +91,18 @@ async def main() -> None:
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
     as_id = "http://127.0.0.1:8003"
-    mm_id = "http://127.0.0.1:8004"
+    ps_id = "http://127.0.0.1:8004"
 
-    # MM configured for direct approval (simulates push/email approval after 2 s).
-    agent = Agent(agent_id, port=8001, mm_url=mm_id)
+    # PS configured for direct approval (simulates push/email approval after 2 s).
+    agent = Agent(agent_id, port=8001, mm_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
-    auth = AuthServer(as_id, port=8003, trusted_mission_managers=[mm_id])
-    mm = MissionManager(mm_id, port=8004, require_approval=True, approval_delay=2.0, approval_outcome="approve")
+    auth = AccessServer(as_id, port=8003, trusted_person_servers=[ps_id])
+    ps = PersonServer(ps_id, port=8004, require_approval=True, approval_delay=2.0, approval_outcome="approve")
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth.app, auth.port, "Auth Server")
-    start_uvicorn(mm.app, mm.port, "Mission Manager")
+    start_uvicorn(auth.app, auth.port, "Access Server")
+    start_uvicorn(ps.app, ps.port, "Person Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
@@ -163,17 +163,17 @@ async def main() -> None:
         )
 
         # Start a second MM (port 8014) configured to deny, and a second agent (port 8011).
-        mm2_id = "http://127.0.0.1:8014"
+        ps2_id = "http://127.0.0.1:8014"
         agent2_id = "http://127.0.0.1:8011"
 
-        mm2 = MissionManager(
-            mm2_id, port=8014,
+        ps2 = PersonServer(
+            ps2_id, port=8014,
             require_approval=True,
             approval_delay=2.0,
             approval_outcome="deny",
         )
-        agent2 = Agent(agent2_id, port=8011, mm_url=mm2_id)
-        start_uvicorn(mm2.app, 8014, "Mission Manager 2 (deny)")
+        agent2 = Agent(agent2_id, port=8011, mm_url=ps2_id)
+        start_uvicorn(ps2.app, 8014, "Person Server 2 (deny)")
         start_uvicorn(agent2.app, 8011, "Agent 2")
         await asyncio.sleep(1)
 
@@ -187,7 +187,7 @@ async def main() -> None:
             f"Expected None (denied), got token: {auth_token2}"
         )
         print("  ✓ TEST 2 PASSED: MM denied approval → agent received 403 → auth_token is None", file=sys.stderr)
-        print(f"  (polling terminated with 403 denied after {mm2.approval_delay}s)", file=sys.stderr)
+        print(f"  (polling terminated with 403 denied after {ps2.approval_delay}s)", file=sys.stderr)
 
         print("\nPhase 13 direct approval demo complete.", file=sys.stderr)
     finally:

@@ -1,13 +1,16 @@
-"""Signature-Requirement and Signature-Error HTTP response header parsing and building.
+"""AAuth and Signature-Key HTTP header parsing and building.
 
-Per draft-hardt-httpbis-signature-key, the Signature-Requirement header is a
-Structured Fields Dictionary (RFC 8941) with a `requirement` key indicating
-the requirement level. The Signature-Error header is a Structured Fields
-Dictionary with an `error` key indicating the error code.
+Per draft-hardt-httpbis-signature-key:
+- ``Accept-Signature`` is the response header resources use to declare they accept
+  HTTP Message Signatures. It replaces the old ``Signature-Requirement`` header for
+  pseudonym and identity requirement levels.
+  Format: ``sig=("@method" "@authority" "@path");sigkey=<type>``
+  where ``sigkey=jkt`` (pseudonym/hwk) or ``sigkey=uri`` (identity/jwks_uri).
+- ``Signature-Error`` conveys signature validation failures.
 
-Base requirement levels (pseudonym, identity) are defined in the Signature-Key spec.
-Additional levels (auth-token, interaction, approval) are registered by the AAuth
-protocol spec (draft-hardt-aauth-protocol).
+Per draft-hardt-aauth-protocol:
+- ``AAuth-Requirement`` conveys AAuth-specific requirements (auth-token, interaction,
+  approval, clarification, claims). These remain unchanged.
 """
 
 import re
@@ -26,9 +29,24 @@ REQUIRE_CLARIFICATION = "clarification"
 REQUIRE_CLAIMS = "claims"
 
 # HTTP header field names (spec: Signature-Key draft + AAuth protocol)
-HEADER_SIGNATURE_REQUIREMENT = "Signature-Requirement"
+HEADER_ACCEPT_SIGNATURE = "Accept-Signature"        # Replaces Signature-Requirement for pseudonym/identity
+HEADER_SIGNATURE_REQUIREMENT = "Signature-Requirement"  # Deprecated — use HEADER_ACCEPT_SIGNATURE
 HEADER_AAUTH_REQUIREMENT = "AAuth-Requirement"
+HEADER_AAUTH_ACCESS = "AAuth-Access"
+HEADER_AAUTH_CAPABILITIES = "AAuth-Capabilities"
 HEADER_SIGNATURE_ERROR = "Signature-Error"
+
+# Accept-Signature sigkey types (draft-hardt-httpbis-signature-key)
+SIGKEY_JKT = "jkt"   # Pseudonym: inline public key / JWK thumbprint (sig=hwk)
+SIGKEY_URI = "uri"   # Identity: JWKS endpoint discovery (sig=jwks_uri)
+
+# Default covered components for Accept-Signature
+_DEFAULT_COMPONENTS = ["@method", "@authority", "@path"]
+
+# AAuth-Capabilities values (agent declares what interaction channels it supports)
+CAPABILITY_INTERACTION = "interaction"
+CAPABILITY_CLARIFICATION = "clarification"
+CAPABILITY_PAYMENT = "payment"
 
 # Signature-Error codes (from draft-hardt-httpbis-signature-key)
 ERROR_INVALID_REQUEST = "invalid_request"
@@ -212,17 +230,106 @@ def build_claims_requirement() -> str:
     return "requirement=claims"
 
 
-def build_aauth_mission_header(manager: str, s256: str) -> str:
+def build_accept_signature(
+    sigkey: str = SIGKEY_URI,
+    components: Optional[List[str]] = None,
+) -> str:
+    """Build ``Accept-Signature`` header value per draft-hardt-httpbis-signature-key.
+
+    Resources return this header to declare they accept HTTP Message Signatures.
+    Replaces the old ``Signature-Requirement: requirement=pseudonym/identity`` format.
+
+    Args:
+        sigkey: Key discovery type — ``"jkt"`` for pseudonym (hwk/inline key) or
+                ``"uri"`` for identity (jwks_uri/JWKS endpoint).
+        components: Covered component identifiers. Defaults to
+                    ``["@method", "@authority", "@path"]``.
+
+    Returns:
+        ``Accept-Signature`` header value, e.g.
+        ``sig=("@method" "@authority" "@path");sigkey=uri``
+    """
+    comps = components or _DEFAULT_COMPONENTS
+    inner = " ".join(f'"{c}"' for c in comps)
+    return f'sig=({inner});sigkey={sigkey}'
+
+
+def parse_accept_signature(header_value: str) -> Dict[str, Any]:
+    """Parse ``Accept-Signature`` header value.
+
+    Returns a dict with:
+    - ``sigkey``: ``"jkt"`` or ``"uri"`` (or whatever sigkey value is present)
+    - ``components``: list of covered component strings
+    """
+    result: Dict[str, Any] = {"sigkey": None, "components": []}
+    # Extract sigkey parameter
+    sk_match = re.search(r'sigkey=([^\s;,]+)', header_value)
+    if sk_match:
+        result["sigkey"] = sk_match.group(1)
+    # Extract inner list of components from sig=(...)
+    comp_match = re.search(r'sig=\(([^)]*)\)', header_value)
+    if comp_match:
+        result["components"] = re.findall(r'"([^"]+)"', comp_match.group(1))
+    return result
+
+
+def build_aauth_capabilities_header(capabilities: List[str]) -> str:
+    """Build ``AAuth-Capabilities`` request header value.
+
+    The agent declares what interaction channels it supports so the PS/resource
+    knows which channels are available to reach the user.
+
+    Args:
+        capabilities: List of capability tokens, e.g. ["interaction", "clarification"]
+
+    Returns:
+        Header value string, e.g. ``interaction, clarification``
+    """
+    return ", ".join(capabilities)
+
+
+def parse_aauth_capabilities_header(header_value: str) -> List[str]:
+    """Parse ``AAuth-Capabilities`` header into a list of capability tokens."""
+    return [c.strip() for c in header_value.split(",") if c.strip()]
+
+
+def build_aauth_access_header(token: str) -> str:
+    """Build ``AAuth-Access`` response header value (opaque access token).
+
+    The resource returns this after two-party authorization. The agent echoes
+    it back via ``Authorization: AAuth <token>`` on subsequent requests.
+
+    Args:
+        token: Opaque access token string
+
+    Returns:
+        Header value (the token itself)
+    """
+    return token
+
+
+def parse_authorization_aauth_header(header_value: str) -> Optional[str]:
+    """Extract the opaque token from an ``Authorization: AAuth <token>`` request header.
+
+    Returns the token string, or None if the header is not an AAuth bearer.
+    """
+    if header_value and header_value.lower().startswith("aauth "):
+        return header_value[6:].strip() or None
+    return None
+
+
+def build_aauth_mission_header(approver: str, s256: str) -> str:
     """Build ``AAuth-Mission`` request header value (spec Section 8.2)."""
-    return f'manager="{manager}"; s256="{s256}"'
+    return f'approver="{approver}"; s256="{s256}"'
 
 
 def parse_aauth_mission_header(header_value: str) -> Dict[str, Optional[str]]:
-    """Parse ``AAuth-Mission`` header into manager URL and s256 hash."""
-    result: Dict[str, Optional[str]] = {"manager": None, "s256": None}
-    m = re.search(r'manager="([^"]+)"', header_value)
+    """Parse ``AAuth-Mission`` header into approver URL and s256 hash."""
+    result: Dict[str, Optional[str]] = {"approver": None, "s256": None}
+    # Support both new "approver=" and old "manager=" for backward compatibility
+    m = re.search(r'approver="([^"]+)"', header_value) or re.search(r'manager="([^"]+)"', header_value)
     if m:
-        result["manager"] = m.group(1)
+        result["approver"] = m.group(1)
     s = re.search(r's256="([^"]+)"', header_value)
     if s:
         result["s256"] = s.group(1)
@@ -243,17 +350,26 @@ def aauth_protocol_requirement_levels() -> frozenset:
 
 
 def requirement_header_for_level(requirement_level: str) -> str:
-    """Return the correct response header name for a requirement level."""
+    """Return the correct response header name for a requirement level.
+
+    Per updated spec, pseudonym and identity levels use ``Accept-Signature``
+    (from draft-hardt-httpbis-signature-key). All AAuth-specific levels use
+    ``AAuth-Requirement``.
+    """
     if requirement_level in (REQUIRE_PSEUDONYM, REQUIRE_IDENTITY):
-        return HEADER_SIGNATURE_REQUIREMENT
+        return HEADER_ACCEPT_SIGNATURE
     return HEADER_AAUTH_REQUIREMENT
 
 
 def get_challenge_header_value(headers: Union[Mapping[str, Any], None]) -> str:
     """Extract requirement header value from a mapping of HTTP response headers.
 
-    Checks ``AAuth-Requirement``, ``Signature-Requirement``, and legacy ``AAuth`` /
-    ``Agent-Auth``. Keys are matched case-insensitively.
+    Checks ``AAuth-Requirement``, ``Accept-Signature``, ``Signature-Requirement``
+    (deprecated), and legacy ``AAuth`` / ``Agent-Auth``. Keys are matched
+    case-insensitively.
+
+    ``AAuth-Requirement`` takes priority (covers auth-token, interaction, approval,
+    clarification, claims). ``Accept-Signature`` is checked next (pseudonym/identity).
     """
     if headers is None:
         return ""
@@ -263,6 +379,7 @@ def get_challenge_header_value(headers: Union[Mapping[str, Any], None]) -> str:
     lower = {str(k).lower(): v for k, v in headers.items()}
     return (
         lower.get("aauth-requirement", "")
+        or lower.get("accept-signature", "")
         or lower.get("signature-requirement", "")
         or lower.get("aauth", "")
         or lower.get("agent-auth", "")

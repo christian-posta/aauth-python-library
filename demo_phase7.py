@@ -3,7 +3,7 @@
 Per spec Section "Call Chaining": when Resource 1 needs to call Resource 2 to fulfil a
 request, it acts as an agent. It sends the downstream resource token (from Resource 2's
 challenge) plus the upstream auth token (that Agent 1 used to access Resource 1) to its
-own Mission Manager. The MM evaluates the chain and federates with Resource 2's AS to
+own Person Server. The PS evaluates the chain and federates with Resource 2's AS to
 issue a downstream auth token. Resource 1 then accesses Resource 2 with that token.
 """
 
@@ -20,8 +20,8 @@ from uvicorn import Config, Server
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
 from participants.resource import Resource
-from participants.auth_server import AuthServer
-from participants.mission_manager import MissionManager
+from participants.auth_server import AccessServer
+from participants.mission_manager import PersonServer
 from flows.autonomous import run_autonomous_flow
 
 _uvicorn_servers: List[Server] = []
@@ -68,8 +68,8 @@ async def main() -> None:
     print("\n" + "=" * 80, file=sys.stderr)
     print("Phase 7: Call Chaining — Resource 1 -> MM -> AS2 -> Resource 2", file=sys.stderr)
     print(
-        "Per spec: Resource 1 acts as agent; sends resource_token + upstream_token to its MM. "
-        "MM federates with AS2 which verifies the chain and issues a downstream auth token.",
+        "Per spec: Resource 1 acts as agent; sends resource_token + upstream_token to its PS. "
+        "PS federates with AS2 which verifies the chain and issues a downstream auth token.",
         file=sys.stderr,
     )
     print("=" * 80 + "\n", file=sys.stderr)
@@ -77,26 +77,26 @@ async def main() -> None:
     agent_id    = "http://127.0.0.1:8001"
     resource1_id = "http://127.0.0.1:8002"
     as1_id      = "http://127.0.0.1:8003"
-    mm_id       = "http://127.0.0.1:8004"
+    ps_id       = "http://127.0.0.1:8004"
     resource2_id = "http://127.0.0.1:8005"
     as2_id      = "http://127.0.0.1:8006"
 
-    agent1   = Agent(agent_id, port=8001, use_user_simulator=False, mm_url=mm_id)
-    resource1 = Resource(resource1_id, port=8002, auth_server=as1_id, mm_url=mm_id)
-    as1      = AuthServer(as1_id, port=8003, require_user_consent=False,
-                          trusted_mission_managers=[mm_id])
-    mm       = MissionManager(mm_id, port=8004, require_user_consent=False)
+    agent1   = Agent(agent_id, port=8001, use_user_simulator=False, mm_url=ps_id)
+    resource1 = Resource(resource1_id, port=8002, auth_server=as1_id, mm_url=ps_id)
+    as1      = AccessServer(as1_id, port=8003, require_user_consent=False,
+                          trusted_person_servers=[ps_id])
+    ps       = PersonServer(ps_id, port=8004, require_user_consent=False)
     resource2 = Resource(resource2_id, port=8005, auth_server=as2_id)
-    as2      = AuthServer(as2_id, port=8006, require_user_consent=False,
-                          trusted_mission_managers=[mm_id],
+    as2      = AccessServer(as2_id, port=8006, require_user_consent=False,
+                          trusted_person_servers=[ps_id],
                           trusted_auth_servers=[as1_id])
 
     start_uvicorn(agent1.app,   8001, "Agent 1")
     start_uvicorn(resource1.app, 8002, "Resource 1")
-    start_uvicorn(as1.app,      8003, "Auth Server 1")
-    start_uvicorn(mm.app,       8004, "Mission Manager")
+    start_uvicorn(as1.app,      8003, "Access Server 1")
+    start_uvicorn(ps.app,       8004, "Person Server")
     start_uvicorn(resource2.app, 8005, "Resource 2")
-    start_uvicorn(as2.app,      8006, "Auth Server 2")
+    start_uvicorn(as2.app,      8006, "Access Server 2")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
@@ -105,17 +105,17 @@ async def main() -> None:
     print("127.0.0.1 port map (JWT iss / aud / agent URLs below refer to these):", file=sys.stderr)
     print(f"  8001  Agent 1              — iss for agent identity; /.well-known/aauth-agent.json", file=sys.stderr)
     print(f"  8002  Resource 1           — iss in resource tokens; also acts as agent for Resource 2", file=sys.stderr)
-    print(f"  8003  Auth Server 1        — iss in auth tokens for Resource 1; aud in Resource 1 tokens", file=sys.stderr)
-    print(f"  8004  Mission Manager      — Agent 1 + Resource 1 send token requests here", file=sys.stderr)
+    print(f"  8003  Access Server 1       — iss in auth tokens for Resource 1; aud in Resource 1 tokens", file=sys.stderr)
+    print(f"  8004  Person Server        — Agent 1 + Resource 1 send token requests here", file=sys.stderr)
     print(f"  8005  Resource 2           — downstream resource; iss in Resource 2 tokens", file=sys.stderr)
-    print(f"  8006  Auth Server 2        — iss in downstream auth tokens; aud in Resource 2 tokens", file=sys.stderr)
+    print(f"  8006  Access Server 2      — iss in downstream auth tokens; aud in Resource 2 tokens", file=sys.stderr)
     print("-" * 80 + "\n", file=sys.stderr)
 
     all_passed = True
 
     # --- TEST 1: Agent 1 -> Resource 1 via MM (autonomous flow) ---
     print("=" * 80, file=sys.stderr)
-    print("TEST 1: Agent 1 accesses Resource 1 via Mission Manager", file=sys.stderr)
+    print("TEST 1: Agent 1 accesses Resource 1 via Person Server", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
 
     auth_token_for_resource1 = None

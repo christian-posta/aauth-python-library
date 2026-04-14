@@ -96,7 +96,7 @@ class TestAuthTokenClaims:
         payload = claims["payload"]
 
         # Verify dwk claim is present with correct value
-        assert payload["dwk"] == "aauth-issuer.json"
+        assert payload["dwk"] == "aauth-access.json"
 
     def test_create_auth_token_has_jti_claim(self):
         """Test that auth token includes jti claim for replay detection."""
@@ -256,7 +256,7 @@ async def test_token_exchange_returns_required_claims(
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
         
-        agent_auth_header = initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
         
         assert resource_token_match, f"Should have resource_token in challenge, got: {agent_auth_header}"
@@ -352,7 +352,7 @@ async def test_untrusted_auth_server_rejected(
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
         
-        agent_auth_header = initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
+        agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
         
         assert resource_token_match, f"Should have resource_token in challenge"

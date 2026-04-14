@@ -18,6 +18,7 @@ def create_agent_token(
     exp: Optional[int] = None,
     aud: Optional[str] = None,
     aud_sub: Optional[str] = None,
+    ps: Optional[str] = None,
 ) -> str:
     """Create an agent token (aa-agent+jwt) per AAuth spec Section 7.1.
 
@@ -30,6 +31,7 @@ def create_agent_token(
         exp: Expiration timestamp. Defaults to 1 hour from now.
         aud: Optional audience restriction (single URL or array)
         aud_sub: Optional user identifier hint for the auth server in aud
+        ps: Optional HTTPS URL of the agent's person server
 
     Returns:
         Signed JWT string (aa-agent+jwt)
@@ -58,6 +60,8 @@ def create_agent_token(
         payload["aud"] = aud
     if aud_sub is not None:
         payload["aud_sub"] = aud_sub
+    if ps is not None:
+        payload["ps"] = ps
 
     return jwt.encode(
         payload,

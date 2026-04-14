@@ -11,8 +11,8 @@ from uvicorn import Config, Server
 
 from participants.agent import Agent
 from participants.resource import Resource
-from participants.auth_server import AuthServer
-from participants.mission_manager import MissionManager
+from participants.auth_server import AccessServer
+from participants.mission_manager import PersonServer
 from participants.user_simulator import UserSimulator
 from flows.user_delegated import run_user_delegated_flow
 from aauth.debug import print_stderr_localhost_port_map
@@ -70,7 +70,7 @@ async def main():
 
     print("\n" + "=" * 80, file=sys.stderr)
     print("Phase 4: User Delegation Demo", file=sys.stderr)
-    print("Spec: agents send token requests to the Mission Manager; MM federates with the AS.", file=sys.stderr)
+    print("Spec: agents send token requests to the Person Server; PS federates with the AS.", file=sys.stderr)
     print("=" * 80, file=sys.stderr)
 
     if args.manual:
@@ -78,7 +78,7 @@ async def main():
         print("=" * 80, file=sys.stderr)
         print("This demo shows user delegation with manual browser interaction:", file=sys.stderr)
         print("1. Agent requests resource (401 + resource token in AAuth header)", file=sys.stderr)
-        print("2. Agent POSTs resource token to MM /token; MM forwards to AS (may return 202 + pending)", file=sys.stderr)
+        print("2. Agent POSTs resource token to PS /token; PS forwards to AS (may return 202 + pending)", file=sys.stderr)
         print("3. **OPEN THE INTERACTION URL** (often on the AS: /interact?code=…)", file=sys.stderr)
         print("4. Authenticate and grant consent in the browser", file=sys.stderr)
         print("5. Agent polls pending URL (GET) until 200 with auth_token — no authorization code", file=sys.stderr)
@@ -92,7 +92,7 @@ async def main():
         print("=" * 80, file=sys.stderr)
         print("This demo shows user delegation (MM → AS federation + consent):", file=sys.stderr)
         print("1. Agent requests resource (401 + resource token in AAuth header)", file=sys.stderr)
-        print("2. Agent POSTs resource token to MM /token; MM calls AS /token (202 + pending + code)", file=sys.stderr)
+        print("2. Agent POSTs resource token to PS /token; PS calls AS /token (202 + pending + code)", file=sys.stderr)
         print("3. User simulator completes interaction at AS /interact (consent)", file=sys.stderr)
         print("4. Agent polls pending URL until auth_token (deferred responses; SPEC Section 10)", file=sys.stderr)
         print("5. Agent retries resource request with auth token", file=sys.stderr)
@@ -104,24 +104,24 @@ async def main():
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
     auth_id = "http://127.0.0.1:8003"
-    mm_id = "http://127.0.0.1:8004"
+    ps_id = "http://127.0.0.1:8004"
 
     use_user_simulator = not args.manual
 
-    agent = Agent(agent_id, port=8001, use_user_simulator=use_user_simulator, mm_url=mm_id)
+    agent = Agent(agent_id, port=8001, use_user_simulator=use_user_simulator, mm_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=auth_id)
-    auth_server = AuthServer(
+    auth_server = AccessServer(
         auth_id,
         port=8003,
         require_user_consent=True,
-        trusted_mission_managers=[mm_id],
+        trusted_person_servers=[ps_id],
     )
-    mm = MissionManager(mm_id, port=8004, require_user_consent=False)
+    ps = PersonServer(ps_id, port=8004, require_user_consent=False)
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth_server.app, auth_server.port, "Auth Server")
-    start_uvicorn(mm.app, mm.port, "Mission Manager")
+    start_uvicorn(auth_server.app, auth_server.port, "Access Server")
+    start_uvicorn(ps.app, ps.port, "Person Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)

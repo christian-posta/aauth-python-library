@@ -1,9 +1,9 @@
-"""Demo Phase 11: MM–AS Trust — federated token path via Mission Manager.
+"""Demo Phase 11: PS–AS Trust — federated token path via Person Server.
 
-The agent is configured with ``mm_url`` so its auth token requests go to the MM's
-``token_endpoint`` instead of the AS directly.  The MM verifies the resource token,
+The agent is configured with ``mm_url`` so its auth token requests go to the PS's
+``token_endpoint`` instead of the AS directly.  The PS verifies the resource token,
 then calls the AS using its own HTTP Message Signature (``scheme=jwks_uri``).  The AS
-trusts the MM (``trusted_mission_managers``) and issues an auth token.  The agent
+trusts the PS (``trusted_person_servers``) and issues an auth token.  The agent
 never speaks to the AS directly.
 
 TEST 2 shows the contrast: an identical agent WITHOUT ``mm_url`` calls the AS
@@ -21,8 +21,8 @@ from uvicorn import Config, Server
 from aauth.debug import print_stderr_localhost_port_map
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
-from participants.auth_server import AuthServer
-from participants.mission_manager import MissionManager
+from participants.auth_server import AccessServer
+from participants.mission_manager import PersonServer
 from participants.resource import Resource
 
 _uvicorn_servers: List[Server] = []
@@ -67,10 +67,10 @@ async def main() -> None:
     _server_threads.clear()
 
     print("\n" + "=" * 80, file=sys.stderr)
-    print("Phase 11: MM–AS Trust (federated token path via Mission Manager)", file=sys.stderr)
+    print("Phase 11: PS–AS Trust (federated token path via Person Server)", file=sys.stderr)
     print(
-        "Spec: Agent sends resource token to MM token_endpoint; MM signs request\n"
-        "with its own key (scheme=jwks_uri); AS verifies MM identity and issues auth token.",
+        "Spec: Agent sends resource token to PS token_endpoint; PS signs request\n"
+        "with its own key (scheme=jwks_uri); AS verifies PS identity and issues auth token.",
         file=sys.stderr,
     )
     print("=" * 80 + "\n", file=sys.stderr)
@@ -78,18 +78,18 @@ async def main() -> None:
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
     as_id = "http://127.0.0.1:8003"
-    mm_id = "http://127.0.0.1:8004"
+    ps_id = "http://127.0.0.1:8004"
 
-    # Agent WITH mm_url — all auth token requests go through the MM.
-    agent = Agent(agent_id, port=8001, mm_url=mm_id)
+    # Agent WITH mm_url — all auth token requests go through the PS.
+    agent = Agent(agent_id, port=8001, mm_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
-    auth = AuthServer(as_id, port=8003, trusted_mission_managers=[mm_id])
-    mm = MissionManager(mm_id, port=8004)
+    auth = AccessServer(as_id, port=8003, trusted_person_servers=[ps_id])
+    ps = PersonServer(ps_id, port=8004)
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth.app, auth.port, "Auth Server")
-    start_uvicorn(mm.app, mm.port, "Mission Manager")
+    start_uvicorn(auth.app, auth.port, "Access Server")
+    start_uvicorn(ps.app, ps.port, "Person Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
@@ -98,7 +98,7 @@ async def main() -> None:
     try:
         # ------------------------------------------------------------------
         print(
-            "TEST 1: Reactive MM-federated flow — 401 challenge → MM → AS → auth token",
+            "TEST 1: Reactive PS-federated flow — 401 challenge → PS → AS → auth token",
             file=sys.stderr,
         )
 
@@ -131,7 +131,7 @@ async def main() -> None:
         assert auth_token, "Agent should have stored auth_token"
         at_claims = parse_token_claims(auth_token)
         print("\n" + "=" * 80, file=sys.stderr)
-        print("AUTH TOKEN (aa-auth+jwt) — issued by AS via MM federation", file=sys.stderr)
+        print("AUTH TOKEN (aa-auth+jwt) — issued by AS via PS federation", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("Header:", file=sys.stderr)
         print(json.dumps(at_claims["header"], indent=2), file=sys.stderr)
@@ -144,7 +144,7 @@ async def main() -> None:
         assert at_claims["payload"].get("iss") == as_id
         assert at_claims["payload"].get("aud") == resource_id
         assert at_claims["payload"].get("agent") == agent_id
-        print("  ✓ TEST 1 PASSED: MM-federated auth token obtained; resource returned 200", file=sys.stderr)
+        print("  ✓ TEST 1 PASSED: PS-federated auth token obtained; resource returned 200", file=sys.stderr)
         print(f"  Final response: {data}", file=sys.stderr)
 
         # ------------------------------------------------------------------
@@ -186,10 +186,10 @@ async def main() -> None:
         assert at2_claims["payload"].get("aud") == resource_id
         assert at2_claims["payload"].get("agent") == agent2_id
         print("  ✓ TEST 2 PASSED: Direct AS path also works; same AS issued both tokens", file=sys.stderr)
-        print(f"  MM-federated iss: {at_claims['payload']['iss']}  (via MM → AS)", file=sys.stderr)
+        print(f"  PS-federated iss: {at_claims['payload']['iss']}  (via PS → AS)", file=sys.stderr)
         print(f"  Direct AS iss:    {at2_claims['payload']['iss']}  (agent → AS)", file=sys.stderr)
 
-        print("\nPhase 11 MM–AS trust demo complete.", file=sys.stderr)
+        print("\nPhase 11 PS–AS trust demo complete.", file=sys.stderr)
     finally:
         await shutdown_uvicorn_servers()
 

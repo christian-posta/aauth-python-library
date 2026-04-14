@@ -1,8 +1,8 @@
-"""Demo Phase 5: Missions — MM approval, AAuth-Mission, mission in resource token.
+“””Demo Phase 5: Missions — PS approval, AAuth-Mission, mission in resource token.
 
 Replaces the older “agent-as-resource” Phase 5 demo. For self-access / scope-only
 tokens see PHASE5-agent-is-resource.md and ``Agent.request_self_authorization``.
-"""
+“””
 
 import asyncio
 import json
@@ -14,8 +14,8 @@ import jwt
 from uvicorn import Config, Server
 
 from participants.agent import Agent
-from participants.auth_server import AuthServer
-from participants.mission_manager import MissionManager
+from participants.auth_server import AccessServer
+from participants.mission_manager import PersonServer
 from participants.resource import Resource
 
 # Filled by ``start_uvicorn`` threads; used for graceful shutdown.
@@ -61,23 +61,23 @@ async def main():
     _server_threads.clear()
 
     print("\n" + "=" * 80, file=sys.stderr)
-    print("Phase 5: Missions (MM + resource + AS)", file=sys.stderr)
+    print("Phase 5: Missions (PS + resource + AS)", file=sys.stderr)
     print("=" * 80 + "\n", file=sys.stderr)
 
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
     as_id = "http://127.0.0.1:8003"
-    mm_id = "http://127.0.0.1:8004"
+    ps_id = "http://127.0.0.1:8004"
 
-    agent = Agent(agent_id, port=8001, mm_url=mm_id)
+    agent = Agent(agent_id, port=8001, mm_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
-    auth = AuthServer(as_id, port=8003, trusted_mission_managers=[mm_id])
-    mm = MissionManager(mm_id, port=8004)
+    auth = AccessServer(as_id, port=8003, trusted_person_servers=[ps_id])
+    ps = PersonServer(ps_id, port=8004)
 
     start_uvicorn(agent.app, agent.port, "Agent")
     start_uvicorn(resource.app, resource.port, "Resource")
-    start_uvicorn(auth.app, auth.port, "Auth Server")
-    start_uvicorn(mm.app, mm.port, "Mission Manager")
+    start_uvicorn(auth.app, auth.port, "Access Server")
+    start_uvicorn(ps.app, ps.port, "Person Server")
 
     print("Waiting for servers to start...", file=sys.stderr, flush=True)
     await asyncio.sleep(2)
@@ -97,7 +97,7 @@ async def main():
         payload = jwt.decode(rt, options={"verify_signature": False})
         assert hdr.get("typ") == "aa-resource+jwt"
         miss = payload.get("mission")
-        assert miss and miss.get("manager") and miss.get("s256")
+        assert miss and miss.get("approver") and miss.get("s256")
         print(f"  ✓ mission claim: {json.dumps(miss)}", file=sys.stderr)
 
         print("\nPhase 5 missions demo complete.", file=sys.stderr)
