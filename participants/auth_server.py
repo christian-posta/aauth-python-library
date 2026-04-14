@@ -307,12 +307,22 @@ class AccessServer:
             print(f"DEBUG AUTH:   Signature scheme: {scheme}", file=sys.stderr, flush=True)
             print(f"DEBUG AUTH:   Key params: {json.dumps(key_params, indent=2)}", file=sys.stderr, flush=True)
         
-        # Extract agent identifier from signature
+        # Extract agent identifier from signature.
+        # agent_url  – the agent server's HTTP URL; used for resource-token validation and JWKS fetch.
+        # agent_id   – the aauth:local@domain identifier; used in the issued auth token's `agent` claim.
+        agent_url = None
         agent_id = None
         agent_jwk = None  # delegate's key from agent token (jwt/aa-agent+jwt scheme)
 
         if scheme in ("jwks", "jwks_uri"):
-            agent_id = key_params.get("id")
+            raw_id = key_params.get("id")
+            if raw_id:
+                from aauth.identifiers import agent_identifier_from_server_url
+                agent_url = raw_id
+                agent_id = agent_identifier_from_server_url(raw_id)
+            else:
+                agent_url = None
+                agent_id = None
         elif scheme == "jwt":
             # Phase 6: Agent delegation - validate agent token
             jwt_token = key_params.get("jwt")
@@ -377,6 +387,8 @@ class AccessServer:
                     # Per spec Section 12.1: the sub claim IS the aauth:local@domain identifier.
                     agent_sub = agent_claims.get("sub", "")
                     agent_id = agent_sub or agent_claims.get("iss", "")
+                    # iss is the agent server's HTTP URL — used for resource-token expected_agent check
+                    agent_url = agent_claims.get("iss", "")
                     cnf = agent_claims.get("cnf", {})
                     agent_jwk = cnf.get("jwk")  # Delegate's key for cnf.jwk in auth token
 
@@ -507,8 +519,9 @@ class AccessServer:
         agent_is_resource = (mode == "self_access")
 
         # JWK for agent_jkt / cnf: from JWKS (jwks_uri) or already set from aa-agent+jwt cnf (delegate)
+        # Use agent_url (HTTP URL) for JWKS discovery, not agent_id (aauth:)
         if scheme in ("jwks", "jwks_uri"):
-            agent_jwk = self._extract_agent_jwk(scheme, key_params, agent_id, debug)
+            agent_jwk = self._extract_agent_jwk(scheme, key_params, agent_url or agent_id, debug)
 
         if debug:
             logger.debug(f"agent_jwk for resource/cnf: {agent_jwk is not None}")
@@ -521,9 +534,17 @@ class AccessServer:
             if debug:
                 logger.debug(f"Self-access mode: resource_id={resource_id}, scope={scope}")
         else:
-            # Validate resource token
+            # What the resource stores in the resource token's `agent` field depends on the scheme
+            # used by the agent when it first challenged the resource:
+            #   scheme=jwks_uri → resource stores the raw HTTP URL (agent_url)
+            #   scheme=jwt (agent token) → resource stores the aauth: sub (agent_id)
+            # Match accordingly so _verify_resource_token's equality check passes.
+            if scheme in ("jwks", "jwks_uri"):
+                expected_agent_for_rt = agent_url  # HTTP URL stored in resource token
+            else:
+                expected_agent_for_rt = agent_id   # aauth: identifier stored in resource token
             try:
-                resource_claims = await self._verify_resource_token(resource_token, agent_id, agent_jwk)
+                resource_claims = await self._verify_resource_token(resource_token, expected_agent_for_rt, agent_jwk)
             except Exception as e:
                 if debug:
                     logger.debug(f"Resource token validation FAILED: {e}")
@@ -573,11 +594,13 @@ class AccessServer:
             )
 
         # Issue auth token (direct grant)
+        # act.sub = agent_id per spec Section 9.1 (actor claim required)
         auth_token = self._issue_auth_token(
             agent=agent_id,
             resource=resource_id,
             scope=scope,
             cnf_jwk=agent_key,
+            act={"sub": agent_id},
         )
 
         if debug:
@@ -686,13 +709,17 @@ class AccessServer:
                 )
 
             cnf_jwk = agent_claims.get("cnf", {}).get("jwk")
-            agent_id_for_policy = agent_claims.get("iss")
+            # sub is the aauth:local@domain identifier (used for agent claim + act)
+            # iss is the agent server HTTP URL (used for resource-token validation and upstream_aud check)
+            agent_id_for_policy = agent_claims.get("sub") or agent_claims.get("iss")
+            agent_server_url_for_policy = agent_claims.get("iss")
             if not cnf_jwk or not agent_id_for_policy:
                 return JSONResponse(status_code=400, content={"error": "invalid_agent_token"})
 
             try:
+                # Resource token's `agent` field is the agent server HTTP URL (iss from agent token).
                 resource_claims = await self._verify_resource_token(
-                    resource_token_str, agent_id_for_policy, cnf_jwk
+                    resource_token_str, agent_server_url_for_policy, cnf_jwk
                 )
             except Exception as e:
                 return JSONResponse(
@@ -716,14 +743,21 @@ class AccessServer:
                         "error_description": str(e),
                     },
                 )
-            agent_id_for_policy = unverified.get("agent")
+            # The resource token's `agent` field contains the HTTP URL of the agent server
+            # (used for JWKS discovery).  Convert to aauth: identifier for the auth token.
+            agent_url_for_policy = unverified.get("agent")  # HTTP URL
+            from aauth.identifiers import agent_identifier_from_server_url as _aauth_from_url
+            agent_id_for_policy = (
+                _aauth_from_url(agent_url_for_policy) if agent_url_for_policy else None
+            )
+            agent_server_url_for_policy = agent_url_for_policy  # HTTP URL for upstream_aud check
             thumb = unverified.get("agent_jkt")
-            if not agent_id_for_policy:
+            if not agent_url_for_policy:
                 return JSONResponse(
                     status_code=400,
                     content={"error": "invalid_resource_token", "error_description": "missing agent claim"},
                 )
-            cnf_jwk = self._fetch_agent_jwk_by_jkt(agent_id_for_policy, thumb)
+            cnf_jwk = self._fetch_agent_jwk_by_jkt(agent_url_for_policy, thumb)
             if not cnf_jwk:
                 return JSONResponse(
                     status_code=400,
@@ -733,8 +767,9 @@ class AccessServer:
                     },
                 )
             try:
+                # Resource token's `agent` is the HTTP URL — use agent_url_for_policy here
                 resource_claims = await self._verify_resource_token(
-                    resource_token_str, agent_id_for_policy, cnf_jwk
+                    resource_token_str, agent_url_for_policy, cnf_jwk
                 )
             except Exception as e:
                 return JSONResponse(
@@ -749,6 +784,7 @@ class AccessServer:
 
         # Call Chaining: if upstream_token is provided, verify it before issuing auth token.
         upstream_token_str = params_dict.get("upstream_token")
+        upstream_act = None  # act from upstream token for nested delegation chain
         if upstream_token_str:
             import jwt as jwt_lib
             try:
@@ -765,10 +801,12 @@ class AccessServer:
                     status_code=401,
                     content={"error": "untrusted_auth_server", "error_description": f"Upstream AS not trusted: {upstream_iss}"},
                 )
-            if upstream_aud != agent_id_for_policy:
+            # upstream_aud MUST match the intermediary's server URL (agent token iss).
+            # agent_server_url_for_policy is the HTTP URL of the agent server (iss from agent token).
+            if upstream_aud != agent_server_url_for_policy:
                 return JSONResponse(
                     status_code=401,
-                    content={"error": "invalid_upstream_token", "error_description": f"upstream_aud {upstream_aud} does not match agent {agent_id_for_policy}"},
+                    content={"error": "invalid_upstream_token", "error_description": f"upstream_aud {upstream_aud!r} does not match agent server {agent_server_url_for_policy!r}"},
                 )
             # Verify upstream token signature via upstream AS's JWKS
             try:
@@ -802,6 +840,10 @@ class AccessServer:
             except Exception as e:
                 return JSONResponse(status_code=401, content={"error": "invalid_upstream_token", "error_description": str(e)})
 
+            # Collect upstream act for nested delegation chain in the downstream token.
+            # Prefer explicit act; fall back to agent claim as a sub-only act object.
+            upstream_act = upstream_payload.get("act") or {"sub": upstream_payload.get("agent", "")}
+
         policy_result = self._evaluate_policy(agent_id_for_policy, resource_id, scope)
         agent_clarification_supported = self._agent_supports_clarification(agent_id_for_policy, debug)
 
@@ -822,12 +864,20 @@ class AccessServer:
                 content={"error": "denied", "error_description": policy_result.get("reason", "Access denied")},
             )
 
+        # Build act claim per spec.
+        # Direct: act.sub = intermediary's aauth: identifier.
+        # Call chaining: act.sub = intermediary's aauth: id, act.act = upstream act.
+        act_claim: Dict[str, Any] = {"sub": agent_id_for_policy}
+        if upstream_act:
+            act_claim["act"] = upstream_act
+
         auth_token = self._issue_auth_token(
             agent=agent_id_for_policy,
             resource=resource_id,
             scope=scope,
             cnf_jwk=cnf_jwk,
             mission=mission,
+            act=act_claim,
         )
         return JSONResponse(content=build_success_response(auth_token))
 
@@ -1393,17 +1443,20 @@ class AccessServer:
         cnf_jwk: Dict[str, Any],
         sub: Optional[str] = None,
         agent_is_resource: bool = False,
+        act: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> str:
         """Issue auth token per AAuth spec Section 9.1.
 
         Args:
-            agent: Agent identifier (local@domain or HTTPS URL)
+            agent: Agent identifier (aauth:local@domain)
             resource: Resource identifier (audience)
             scope: Authorized scope
             cnf_jwk: Agent's public signing key (JWK format)
             sub: Optional user identifier
             agent_is_resource: Ignored (kept for caller compatibility during migration)
+            act: Actor claim per RFC 8693 §4.1. ``{"sub": agent_id}`` for direct grants;
+                 ``{"sub": intermediary_id, "act": upstream_act}`` for call chaining.
 
         Returns:
             Signed auth token JWT string
@@ -1441,6 +1494,7 @@ class AccessServer:
             exp=None,  # Default 1 hour
             sub=pairwise_sub,
             mission=kwargs.get("mission"),
+            act=act,
         )
         
         if debug:

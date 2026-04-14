@@ -359,7 +359,10 @@ class PersonServer:
         def ps_jwks_fetcher(agent_id_param: str, kid_param: str = None):
             return self._ps_jwks_fetcher(agent_id_param, kid_param)
 
-        verify_fetcher = agent_jwks_fetcher if scheme in ("jwks", "jwks_uri") else ps_jwks_fetcher
+        # For scheme=jwt (agent token), the verifier fetches the agent server's JWKS
+        # (from {agent_iss}/.well-known/aauth-agent.json) to verify the agent token
+        # and then uses cnf.jwk for the HTTP signature. Use agent_jwks_fetcher in all cases.
+        verify_fetcher = agent_jwks_fetcher
 
         ok = verify_signature(
             method=request.method,
@@ -403,6 +406,30 @@ class PersonServer:
             return JSONResponse(status_code=400, content={"error": "invalid_resource_token", "error_description": "no aud"})
 
         upstream_token = params_dict.get("upstream_token")
+
+        # Upstream token verification (call chaining) per spec Section 16.6.
+        # When an upstream_token is provided, verify that its aud matches the intermediary
+        # resource's server URL (iss from the agent token), confirming the call chain.
+        if upstream_token and agent_token_for_as:
+            try:
+                upstream_payload = pyjwt.decode(upstream_token, options={"verify_signature": False})
+                upstream_aud = upstream_payload.get("aud")
+                # agent_token_for_as.iss is the intermediary's server URL
+                agent_tok_claims = pyjwt.decode(agent_token_for_as, options={"verify_signature": False})
+                intermediary_iss = agent_tok_claims.get("iss")
+                if upstream_aud and intermediary_iss and upstream_aud != intermediary_iss:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "invalid_upstream_token",
+                            "error_description": (
+                                f"upstream_token.aud {upstream_aud!r} does not match "
+                                f"intermediary server {intermediary_iss!r}"
+                            ),
+                        },
+                    )
+            except Exception:
+                pass  # non-fatal; AS will re-verify
 
         if self.require_user_consent:
             # Check if agent declares the interaction capability.

@@ -20,13 +20,15 @@ def create_auth_token(
     sub: Optional[str] = None,
     exp: Optional[int] = None,
     mission: Optional[Dict[str, Any]] = None,
+    act: Optional[Dict[str, Any]] = None,
+    dwk: str = "aauth-access.json",
 ) -> str:
     """Create an auth token (aa-auth+jwt) per AAuth spec Section 9.1.
 
     Args:
         iss: Auth server identifier (HTTPS URL)
         aud: Resource identifier, or agent identifier for self-access
-        agent: Agent identifier (local@domain) - omitted from token when agent == aud (self-access)
+        agent: Agent identifier (aauth:local@domain)
         cnf_jwk: Agent's public signing key (JWK format)
         private_key: Auth server's Ed25519 private key for signing
         kid: Key ID for signing key
@@ -34,6 +36,10 @@ def create_auth_token(
         sub: User identifier (at least one of scope or sub MUST be present)
         exp: Expiration timestamp. Defaults to 1 hour from now.
         mission: Optional mission object when issued in mission context.
+        act: Actor claim per RFC 8693 §4.1. In direct auth: ``{"sub": agent_id}``.
+             In call chaining: nested ``{"sub": intermediary_id, "act": upstream_act}``.
+        dwk: Well-known metadata document name for key discovery. Defaults to
+             ``aauth-access.json`` (AS-issued); use ``aauth-person.json`` for PS-issued tokens.
 
     Returns:
         Signed JWT string (aa-auth+jwt)
@@ -60,7 +66,7 @@ def create_auth_token(
     payload = {
         "iss": iss,
         "aud": aud,
-        "dwk": "aauth-access.json",
+        "dwk": dwk,
         "jti": str(uuid.uuid4()),
         "cnf": {"jwk": cnf_jwk},
         "iat": now,
@@ -70,6 +76,12 @@ def create_auth_token(
     # agent is REQUIRED per spec Section 9.1
     if agent:
         payload["agent"] = agent
+
+    # act is REQUIRED per spec — identifies the entity that requested the token.
+    # In direct authorization: {"sub": agent_id}.
+    # In call chaining: {"sub": intermediary_id, "act": upstream_act}.
+    if act is not None:
+        payload["act"] = act
 
     if sub:
         payload["sub"] = sub

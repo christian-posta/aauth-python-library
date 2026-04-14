@@ -76,16 +76,20 @@ def parse_agent_identifier(identifier: str):
 def agent_identifier_from_server_url(server_url: str, local: str = "agent") -> str:
     """Derive an aauth: identifier from an agent server URL.
 
-    Extracts the hostname (and port for localhost) from the URL and combines
-    with the given local part.
+    For URLs with a port (e.g. localhost demos), the port is appended to the
+    ``local`` part so that multiple participants on the same host get distinct
+    identifiers.  Production URLs without a port use ``local`` as-is.
 
     Examples:
-        ``http://127.0.0.1:8001`` → ``aauth:agent@127.0.0.1``
-        ``https://agent.example`` → ``aauth:agent@agent.example``
+        ``http://127.0.0.1:8001`` → ``aauth:agent-8001@127.0.0.1``
+        ``http://127.0.0.1:8002`` → ``aauth:agent-8002@127.0.0.1``
+        ``https://agent.example``  → ``aauth:agent@agent.example``
     """
     parsed = urlparse(server_url)
     host = parsed.hostname or "localhost"
-    return f"aauth:{local}@{host}"
+    port = parsed.port
+    local_part = f"{local}-{port}" if port else local
+    return f"aauth:{local_part}@{host}"
 
 
 def validate_server_identifier(url: str) -> str:

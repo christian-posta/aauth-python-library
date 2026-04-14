@@ -133,14 +133,23 @@ async def main() -> None:
 
         claims = parse_token_claims(auth_token_for_resource1)
         payload = claims["payload"]
-        print(f"  Resource token (from challenge) decoded — agent: {payload.get('agent', '?')}", file=sys.stderr)
+        # Agent identifiers in auth tokens use aauth:local-PORT@host format (spec Section 9.1)
+        expected_agent1_aauth = "aauth:agent-8001@127.0.0.1"
         print(f"  Auth token claims:", file=sys.stderr)
         print(f"    iss   = {payload.get('iss')}", file=sys.stderr)
         print(f"    aud   = {payload.get('aud')}", file=sys.stderr)
         print(f"    agent = {payload.get('agent')}", file=sys.stderr)
+        print(f"    act   = {payload.get('act')}", file=sys.stderr)
         assert payload.get("iss") == as1_id, f"iss mismatch: {payload.get('iss')}"
         assert payload.get("aud") == resource1_id, f"aud mismatch: {payload.get('aud')}"
-        assert payload.get("agent") == agent_id, f"agent mismatch: {payload.get('agent')}"
+        assert payload.get("agent") == expected_agent1_aauth, (
+            f"agent mismatch: expected {expected_agent1_aauth!r}, got {payload.get('agent')!r}"
+        )
+        act = payload.get("act")
+        assert act is not None, "act claim missing from auth token (required per spec Section 9.1)"
+        assert act.get("sub") == expected_agent1_aauth, (
+            f"act.sub mismatch: expected {expected_agent1_aauth!r}, got {act.get('sub')!r}"
+        )
         print("PASSED: TEST 1", file=sys.stderr)
     except Exception as exc:
         print(f"FAILED: TEST 1 — {exc}", file=sys.stderr)
@@ -186,13 +195,29 @@ async def main() -> None:
         try:
             claims = parse_token_claims(downstream_token)
             payload = claims["payload"]
+            # Resource 1 acting as agent: its aauth: identifier is derived from its server URL
+            expected_resource1_aauth = "aauth:agent-8002@127.0.0.1"
+            expected_agent1_aauth = "aauth:agent-8001@127.0.0.1"
             print(f"  Downstream auth token claims:", file=sys.stderr)
             print(f"    iss   = {payload.get('iss')}", file=sys.stderr)
             print(f"    aud   = {payload.get('aud')}", file=sys.stderr)
             print(f"    agent = {payload.get('agent')}", file=sys.stderr)
+            print(f"    act   = {payload.get('act')}", file=sys.stderr)
             assert payload.get("iss") == as2_id, f"iss mismatch: expected {as2_id}, got {payload.get('iss')}"
             assert payload.get("aud") == resource2_id, f"aud mismatch: expected {resource2_id}, got {payload.get('aud')}"
-            assert payload.get("agent") == resource1_id, f"agent mismatch: expected {resource1_id}, got {payload.get('agent')}"
+            assert payload.get("agent") == expected_resource1_aauth, (
+                f"agent mismatch: expected {expected_resource1_aauth!r}, got {payload.get('agent')!r}"
+            )
+            act = payload.get("act")
+            assert act is not None, "act claim missing from downstream auth token (required for call chaining)"
+            assert act.get("sub") == expected_resource1_aauth, (
+                f"act.sub mismatch: expected {expected_resource1_aauth!r}, got {act.get('sub')!r}"
+            )
+            nested_act = act.get("act")
+            assert nested_act is not None, "nested act claim missing (required for call chaining delegation chain)"
+            assert nested_act.get("sub") == expected_agent1_aauth, (
+                f"nested act.sub mismatch: expected {expected_agent1_aauth!r}, got {nested_act.get('sub')!r}"
+            )
             print("PASSED: TEST 3", file=sys.stderr)
         except Exception as exc:
             print(f"FAILED: TEST 3 — {exc}", file=sys.stderr)

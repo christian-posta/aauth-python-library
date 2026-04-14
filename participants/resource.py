@@ -80,7 +80,12 @@ class Resource:
         self.revoked_jtis: set = set()
         # Trusted parties allowed to send revocation requests (PSs/ASes)
         self.trusted_revokers: list = []
-        
+
+        # aauth: identifier for this resource when it acts as an agent (call chaining).
+        # Derived from the resource URL so each resource on a different port is unique.
+        from aauth.identifiers import agent_identifier_from_server_url
+        self.resource_sub: str = agent_identifier_from_server_url(resource_id)
+
         # Generate key pair for resource token signing
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "resource-key-1"
@@ -717,7 +722,7 @@ class Resource:
         agent_jkt = None
         
         if scheme in ("jwks", "jwks_uri"):
-            agent_id = params.get("id")
+            agent_id = params.get("id")  # HTTP URL — kept as-is for JWKS discovery
             if agent_id:
                 # Fetch agent's JWKS to calculate thumbprint
                 kid = params.get("kid")
@@ -775,6 +780,29 @@ class Resource:
         
         return response
     
+    def _self_issue_agent_token(self) -> str:
+        """Self-issue an agent token so this resource can act as an agent in call chaining.
+
+        The token has:
+        - ``iss`` = this resource's URL (used for upstream_aud matching)
+        - ``sub`` = this resource's ``aauth:`` identifier (``resource_sub``)
+        - ``cnf.jwk`` = this resource's public signing key
+
+        Returns:
+            Signed aa-agent+jwt string
+        """
+        from aauth.tokens.agent_token import create_agent_token
+        from aauth.keys.jwk import public_key_to_jwk
+
+        cnf_jwk = public_key_to_jwk(self.public_key, kid=self.kid)
+        return create_agent_token(
+            iss=self.resource_id,
+            sub=self.resource_sub,
+            cnf_jwk=cnf_jwk,
+            private_key=self.private_key,
+            kid=self.kid,
+        )
+
     def _issue_resource_token(
         self,
         agent_id: str,
@@ -1982,10 +2010,13 @@ class Resource:
             print(f"DEBUG RESOURCE:   Auth server: {auth_server}", file=sys.stderr, flush=True)
 
         if self.mm_url:
-            # Call Chaining via MM: send resource_token + upstream_token to MM
+            # Call Chaining via PS/MM: send resource_token + upstream_token to PS.
+            # Per spec: resource MUST sign with scheme=jwt (self-issued agent token) so the PS
+            # can extract agent identity and forward agent_token to the downstream AS.
             if debug:
                 print(f"DEBUG RESOURCE:   Using MM for call chaining: {self.mm_url}", file=sys.stderr, flush=True)
             token_endpoint = f"{self.mm_url.rstrip('/')}/token"
+            self_agent_token = self._self_issue_agent_token()
             request_data = {
                 "resource_token": resource_token,
                 "upstream_token": upstream_auth_token,
@@ -2000,9 +2031,8 @@ class Resource:
                 headers=base_headers,
                 body=request_body_bytes,
                 private_key=self.private_key,
-                sig_scheme="jwks_uri",
-                id=self.resource_id,
-                kid=self.kid,
+                sig_scheme="jwt",
+                jwt=self_agent_token,
             )
             request_headers = {**base_headers, **sig_headers}
             async with httpx.AsyncClient() as client:
