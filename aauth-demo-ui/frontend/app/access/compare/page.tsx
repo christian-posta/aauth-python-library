@@ -20,23 +20,25 @@ const MODES = [
     tradeoff: "Resource must maintain its own access policy",
   },
   {
-    id: "resource-managed",
-    label: "Resource-Managed",
-    parties: "2-party + interaction",
+    id: "user-delegation",
+    label: "User Delegation",
+    parties: "5-party deferred",
     color: "text-blue-400",
     border: "border-blue-500/30",
     href: "/access/user-delegation",
-    participants: ["Agent", "Resource", "User"],
+    participants: ["Agent", "Resource", "Person Server", "Access Server", "User"],
     flow: [
-      { arrow: "Agent → Resource", note: "Signed request" },
-      { arrow: "Resource → Agent", note: "202 + interaction URL" },
-      { arrow: "User → Resource", note: "Authenticate & approve" },
-      { arrow: "Agent → Resource", note: "Poll → 200 + access token" },
+      { arrow: "Agent → Resource", note: "Signed request → 401 + resource token" },
+      { arrow: "Agent → PS → AS", note: "Federation request reaches AS" },
+      { arrow: "AS → PS → Agent", note: "202 + pending URL + interaction URL" },
+      { arrow: "User → AS", note: "Authenticate and approve consent" },
+      { arrow: "Agent → PS", note: "Poll pending URL: 202 → 202 → 200" },
+      { arrow: "Agent → Resource", note: "Present auth token → 200" },
     ],
-    tokens: ["Resource-managed access token (opaque)"],
-    infra: "Resource handles its own OAuth/OIDC or custom auth",
-    useCase: "First-call registration, existing auth infrastructure",
-    tradeoff: "Resource must implement auth logic itself",
+    tokens: ["aa-resource+jwt", "aa-agent+jwt", "aa-auth+jwt"],
+    infra: "Person Server + Access Server + user interaction",
+    useCase: "When human consent is required before delegated agent access",
+    tradeoff: "Extra round-trips and polling before access is granted",
   },
   {
     id: "ps-managed",
@@ -175,11 +177,11 @@ export default function AccessComparePage() {
         <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-muted-foreground">
           <span className="text-green-400">Identity-Based</span>
           <ArrowRight className="h-3 w-3" />
-          <span className="text-blue-400">Resource-Managed</span>
+          <span className="text-blue-400">User Delegation</span>
           <ArrowRight className="h-3 w-3" />
           <span className="text-purple-400">PS-Managed</span>
           <ArrowRight className="h-3 w-3" />
-          <span className="text-orange-400">Full Federation</span>
+          <span className="text-orange-400">PS-AS Trust</span>
         </div>
       </div>
     </div>

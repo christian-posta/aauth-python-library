@@ -11,6 +11,9 @@ import { HeaderInspector } from "@/components/core/HeaderInspector";
 import { SignatureVisualizer } from "@/components/core/SignatureVisualizer";
 import { StepController } from "@/components/core/StepController";
 import { TokenFlowDiagram } from "@/components/core/TokenFlowDiagram";
+import { DeferredResponseTimeline } from "@/components/core/DeferredResponseTimeline";
+import { MissionBlobViewer } from "@/components/core/MissionBlobViewer";
+import { S256ChainVisualization } from "@/components/core/S256ChainVisualization";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_COLORS = {
@@ -139,6 +142,20 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
                   currentStep={currentStep}
                   onStepSelect={setCurrentStep}
                 />
+              )}
+
+              {scenario.deferred_timeline && (
+                <DeferredResponseTimeline
+                  timeline={scenario.deferred_timeline}
+                  currentStep={currentStep}
+                  onStepSelect={setCurrentStep}
+                />
+              )}
+
+              {scenario.mission_blob && <MissionBlobViewer mission={scenario.mission_blob} />}
+
+              {scenario.s256_chain && scenario.s256_chain.length > 0 && (
+                <S256ChainVisualization links={scenario.s256_chain} />
               )}
 
               {/* Headers & Body (always shown) */}

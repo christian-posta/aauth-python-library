@@ -52,7 +52,7 @@ const ACCESS_CARDS = [
     href: "/access/user-delegation",
     label: "User Delegation",
     sublabel: "deferred 202",
-    desc: "Resource or AS returns 202 + pending URL. Agent polls while user consents.",
+    desc: "AS defers token issuance with pending and interaction URLs while the user approves in the browser.",
     color: "border-green-500/30 hover:border-green-500/60",
     dot: "bg-green-400",
     phase: 4,

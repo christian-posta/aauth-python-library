@@ -526,7 +526,8 @@ def generate_federated() -> None:
 def generate_user_delegation() -> None:
     print("Generating: user-delegation (Phase 4)")
     agent_priv, _, agent_jwk, agent_jkt = make_keypair("agent-key-1")
-    as_priv, _, as_jwk, _ = make_keypair("as-key-1")
+    as_priv, _, _, _ = make_keypair("as-key-1")
+    make_keypair("ps-key-1")
 
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
@@ -538,9 +539,14 @@ def generate_user_delegation() -> None:
         iss=resource_id, aud=as_id, agent=agent_id, agent_jkt=agent_jkt,
         scope="read write", private_key=as_priv, kid="as-key-1",
     )
+    agent_token = create_agent_token(
+        iss=agent_id, sub="aauth:local@127.0.0.1",
+        cnf_jwk=agent_jwk, private_key=agent_priv, kid=kid, ps=ps_id,
+    )
     auth_token = create_auth_token(
         iss=as_id, aud=resource_id, agent="aauth:local@127.0.0.1",
         cnf_jwk=agent_jwk, private_key=as_priv, kid="as-key-1", scope="read write",
+        act={"sub": agent_id},
     )
 
     interaction_code = "a3f8c2d1e94b7065"
@@ -567,6 +573,46 @@ def generate_user_delegation() -> None:
             {"id": "as", "label": "Access Server", "type": "access-server", "port": 8003},
             {"id": "user", "label": "User", "type": "user"},
         ],
+        "token_flow": [
+            {
+                "token": "resource-token",
+                "label": "Resource Token",
+                "tokenType": "aa-resource+jwt",
+                "accent": "resource",
+                "events": [
+                    {"step": 1, "participant": "resource", "label": "Issued in 401 challenge", "kind": "issued"},
+                    {"step": 2, "participant": "agent", "label": "Forwarded to the PS", "kind": "forwarded"},
+                    {"step": 3, "participant": "ps", "label": "Presented to the AS", "kind": "presented"},
+                ],
+            },
+            {
+                "token": "agent-token",
+                "label": "Agent Token",
+                "tokenType": "aa-agent+jwt",
+                "accent": "agent",
+                "events": [
+                    {"step": 3, "participant": "ps", "label": "Used to prove the agent's PS binding", "kind": "presented"},
+                ],
+            },
+            {
+                "token": "auth-token",
+                "label": "Auth Token",
+                "tokenType": "aa-auth+jwt",
+                "accent": "auth",
+                "events": [
+                    {"step": 7, "participant": "as", "label": "Released after user approval", "kind": "issued"},
+                    {"step": 8, "participant": "agent", "label": "Presented to the resource", "kind": "presented"},
+                ],
+            },
+        ],
+        "deferred_timeline": {
+            "title": "Deferred Authorization Polling",
+            "events": [
+                {"step": 4, "status": 202, "label": "Initial deferred response", "detail": "AS returns pending and interaction URLs."},
+                {"step": 5, "status": 202, "label": "First poll", "detail": "User has not approved yet; keep polling the pending URL."},
+                {"step": 7, "status": 200, "label": "Approved", "detail": "After consent, the next poll returns the auth token."},
+            ],
+        },
         "steps": [
             {
                 "step": 1, "from": "agent", "to": "resource",
@@ -579,15 +625,79 @@ def generate_user_delegation() -> None:
                 },
                 "response_body": {"error": "auth_token_required"},
                 "tokens": [token_fixture("Resource Token", resource_token)],
-                "signature": None, "annotations": ["Resource issues 401 + resource token challenge."],
+                "signature": {
+                    "scheme": "jwks_uri",
+                    "signature_base": (
+                        '"@method": GET\n"@authority": 127.0.0.1:8002\n"@path": /data-auth\n'
+                        f'"signature-key": {sig_key}\n"@signature-params": {sig_input}'
+                    ),
+                    "signature_input": f"sig={sig_input}",
+                    "signature_key": sig_key,
+                    "covered_components": ["@method", "@authority", "@path", "signature-key"],
+                },
+                "annotations": [
+                    "Resource issues 401 + resource token challenge.",
+                    "The flow starts like Phase 3, but the AS will defer issuance pending user consent.",
+                ],
                 "is_response": False,
             },
             {
                 "step": 2, "from": "agent", "to": "ps",
-                "label": "POST resource token to PS → 202 + pending URL",
+                "label": "POST resource token to PS",
+                "method": "POST", "url": f"{ps_id}/token",
+                "request_headers": {"Content-Type": "application/json", **sig_headers(sig_key, sig_input, 21)},
+                "request_body": {"resource_token": resource_token},
+                "response_status": 202,
+                "response_headers": {"Content-Type": "application/json"},
+                "response_body": {
+                    "status": "ps_forwarding_to_as",
+                },
+                "tokens": [token_fixture("Resource Token", resource_token)],
+                "signature": None,
+                "annotations": [
+                    "Agent hands the resource token to its Person Server.",
+                    "The PS will federate to the AS on the agent's behalf in the next step.",
+                ],
+                "is_response": False,
+            },
+            {
+                "step": 3, "from": "ps", "to": "as",
+                "label": "PS federates to AS /token",
+                "method": "POST", "url": f"{as_id}/token",
+                "request_headers": {
+                    "Content-Type": "application/json",
+                    **sig_headers(jwks_uri_sig_key(ps_id, "ps-key-1"), sig_input, 22),
+                },
+                "request_body": {"resource_token": resource_token, "agent_token": agent_token},
+                "response_status": 202,
+                "response_headers": {"Content-Type": "application/json"},
+                "response_body": {
+                    "pending": pending_url,
+                    "interaction": interact_url,
+                    "expires_in": 600,
+                },
+                "tokens": [
+                    token_fixture("Resource Token", resource_token),
+                    token_fixture("Agent Token", agent_token),
+                ],
+                "signature": None,
+                "annotations": [
+                    "PS signs with its own jwks_uri identity while calling the AS token endpoint.",
+                    "AS validates the trusted PS, inspects the resource token, and defers the decision.",
+                    "Instead of minting an auth token immediately, the AS returns 202 + pending URL + interaction URL.",
+                ],
+                "is_response": False,
+            },
+            {
+                "step": 4, "from": "as", "to": "ps",
+                "label": "AS returns 202 → PS → Agent",
                 "method": "POST", "url": f"{ps_id}/token",
                 "request_headers": {"Content-Type": "application/json"},
-                "request_body": {"resource_token": resource_token},
+                "request_body": {
+                    "pending": pending_url,
+                    "interaction": interact_url,
+                    "expires_in": 600,
+                },
                 "response_status": 202,
                 "response_headers": {"Content-Type": "application/json"},
                 "response_body": {
@@ -598,59 +708,90 @@ def generate_user_delegation() -> None:
                 "tokens": [],
                 "signature": None,
                 "annotations": [
-                    "PS forwards to AS. AS requires user consent — returns 202.",
-                    "PS propagates 202 with pending URL (poll here) + interaction URL (user visits here).",
+                    "The PS propagates the deferred response back to the agent unchanged.",
+                    "This is the body the UI needs to highlight: {pending, interaction, expires_in}.",
                     f"pending: {pending_url}",
                     f"interaction: {interact_url}",
                 ],
                 "is_response": False,
             },
             {
-                "step": 3, "from": "user", "to": "as",
-                "label": "User opens interaction URL → approves",
-                "method": "GET", "url": interact_url,
-                "request_headers": {"Cookie": "session=abc123"},
-                "request_body": None, "response_status": 200,
-                "response_headers": {"Content-Type": "text/html"},
-                "response_body": "<!-- Consent page: shows agent identity, scope, resource. User clicks Approve. -->",
-                "tokens": [], "signature": None,
+                "step": 5, "from": "agent", "to": "ps",
+                "label": "Poll pending URL → 202 still pending",
+                "method": "GET", "url": pending_url,
+                "request_headers": {**sig_headers(sig_key, sig_input, 23)},
+                "request_body": None, "response_status": 202,
+                "response_headers": {"Content-Type": "application/json"},
+                "response_body": {
+                    "pending": pending_url,
+                    "status": "waiting_for_user",
+                },
+                "tokens": [],
+                "signature": None,
                 "annotations": [
-                    "AS presents: requesting agent, scope requested, target resource.",
-                    "User authenticates and clicks Approve.",
-                    "AS marks pending request as approved — auth token now available.",
+                    "The agent can poll immediately, but the request is still waiting on user consent.",
+                    "This gives the second 202 in the 202 → 202 → 200 progression.",
                 ],
                 "is_response": False,
             },
             {
-                "step": 4, "from": "agent", "to": "ps",
+                "step": 6, "from": "user", "to": "as",
+                "label": "User opens interaction URL → grants consent",
+                "method": "GET", "url": interact_url,
+                "request_headers": {"Cookie": "session=abc123"},
+                "request_body": None, "response_status": 200,
+                "response_headers": {"Content-Type": "text/html"},
+                "response_body": (
+                    "<div class=\"consent-page\">"
+                    "<h1>Approve Agent Access</h1>"
+                    "<p>Agent: http://127.0.0.1:8001</p>"
+                    "<p>Resource: http://127.0.0.1:8002/data-auth</p>"
+                    "<p>Scope: read write</p>"
+                    "<button>Approve</button>"
+                    "</div>"
+                ),
+                "tokens": [],
+                "signature": None,
+                "annotations": [
+                    "AS renders a consent page summarizing the requesting agent, resource, and scope.",
+                    "The user authenticates and approves the request in the browser.",
+                    "Once approved, the pending request transitions to a token-ready state.",
+                ],
+                "is_response": False,
+            },
+            {
+                "step": 7, "from": "agent", "to": "ps",
                 "label": "Poll pending URL → 200 + auth token",
                 "method": "GET", "url": pending_url,
-                "request_headers": {**sig_headers(sig_key, sig_input, 21)},
+                "request_headers": {**sig_headers(sig_key, sig_input, 24)},
                 "request_body": None, "response_status": 200,
                 "response_headers": {"Content-Type": "application/json"},
                 "response_body": {"auth_token": auth_token},
                 "tokens": [token_fixture("Auth Token", auth_token)],
                 "signature": None,
                 "annotations": [
-                    "Agent polls pending URL — may receive 202 while waiting.",
-                    "Once user approves, next poll returns 200 + auth token.",
+                    "After approval, the next poll returns 200 with the AS-issued auth token.",
+                    "The auth token still binds the agent key via cnf.jwk and records act.sub as the requesting agent.",
                 ],
                 "is_response": False,
             },
             {
-                "step": 5, "from": "agent", "to": "resource",
+                "step": 8, "from": "agent", "to": "resource",
                 "label": "Retry with auth token → 200",
                 "method": "GET", "url": f"{resource_id}/data-auth",
                 "request_headers": {
                     "AAuth-Access": f"token={auth_token[:40]}…",
-                    **sig_headers(sig_key, sig_input, 22),
+                    **sig_headers(sig_key, sig_input, 25),
                 },
                 "request_body": None, "response_status": 200,
                 "response_headers": {"Content-Type": "application/json"},
                 "response_body": {"message": "Access granted!", "scope": "read write"},
                 "tokens": [token_fixture("Auth Token", auth_token)],
                 "signature": None,
-                "annotations": ["Resource verifies auth token — now includes user-delegated scope."],
+                "annotations": [
+                    "Resource verifies the AS-issued auth token and the agent's bound signature.",
+                    "The resulting access now reflects user-delegated scope rather than autonomous approval.",
+                ],
                 "is_response": False,
             },
         ],
@@ -858,6 +999,35 @@ def generate_missions_lifecycle() -> None:
             {"id": "agent", "label": "Agent", "type": "agent", "port": 8001},
             {"id": "ps", "label": "Person Server", "type": "person-server", "port": 8004},
         ],
+        "mission_blob": {
+            "title": "Approved Mission Blob",
+            "description": "Mission proposal approved by the Person Server.",
+            "markdown": mission_blob["description"],
+            "tools": mission_blob["tools"],
+            "approver": ps_id,
+            "s256": s256,
+            "capabilities": ["clarification", "interaction", "tool-approval"],
+        },
+        "s256_chain": [
+            {
+                "label": "Mission Proposal Body",
+                "source": "POST /mission body",
+                "s256": s256,
+                "detail": "The agent computes the canonical mission blob bytes that will be approved.",
+            },
+            {
+                "label": "AAuth-Mission Header",
+                "source": "PS response header",
+                "s256": s256,
+                "detail": "The PS returns approver and s256 so later requests can reference the exact mission blob.",
+            },
+            {
+                "label": "Client Verification",
+                "source": "local hash check",
+                "s256": s256,
+                "detail": "The agent recomputes SHA-256 over the returned blob bytes and confirms the value matches.",
+            },
+        ],
         "steps": [
             {
                 "step": 1, "from": "agent", "to": "ps",
@@ -880,6 +1050,7 @@ def generate_missions_lifecycle() -> None:
                 "method": "POST", "url": f"{ps_id}/mission",
                 "request_headers": {
                     "Content-Type": "application/json",
+                    "AAuth-Capabilities": "clarification, interaction",
                     **sig_headers(sig_key, sig_input, 40),
                 },
                 "request_body": mission_blob,
@@ -896,7 +1067,7 @@ def generate_missions_lifecycle() -> None:
                     "PS approves and responds with body = mission blob + AAuth-Mission header.",
                     f"s256 = SHA-256(blob_bytes) = {s256[:24]}…",
                     "Agent must store this s256 and present it in future requests as AAuth-Mission.",
-                    "AAuth-Capabilities lists what the PS supports (clarification, interaction, etc.).",
+                    "Request AAuth-Capabilities advertises agent support; response capabilities reflect the PS-approved set.",
                 ],
                 "is_response": False,
             },
@@ -930,7 +1101,7 @@ def generate_missions_lifecycle() -> None:
 def generate_missions_proactive() -> None:
     print("Generating: missions-proactive-authz (Phase 10)")
     agent_priv, _, agent_jwk, agent_jkt = make_keypair("agent-key-1")
-    as_priv, _, as_jwk, _ = make_keypair("as-key-1")
+    as_priv, _, _, _ = make_keypair("as-key-1")
 
     agent_id = "http://127.0.0.1:8001"
     resource_id = "http://127.0.0.1:8002"
@@ -940,6 +1111,10 @@ def generate_missions_proactive() -> None:
     mission_blob, s256 = _mission_blob_and_s256()
 
     mission_claim = {"approver": ps_id, "s256": s256}
+    agent_token = create_agent_token(
+        iss=agent_id, sub="aauth:local@127.0.0.1",
+        cnf_jwk=agent_jwk, private_key=agent_priv, kid=kid, ps=ps_id,
+    )
     resource_token = create_resource_token(
         iss=resource_id, aud=as_id, agent=agent_id, agent_jkt=agent_jkt,
         scope="read", private_key=as_priv, kid="as-key-1", mission=mission_claim,
@@ -947,7 +1122,7 @@ def generate_missions_proactive() -> None:
     auth_token = create_auth_token(
         iss=as_id, aud=resource_id, agent="aauth:local@127.0.0.1",
         cnf_jwk=agent_jwk, private_key=as_priv, kid="as-key-1",
-        scope="read", mission=mission_claim,
+        scope="read", mission=mission_claim, act={"sub": agent_id},
     )
 
     sig_key = jwks_uri_sig_key(agent_id, kid)
@@ -971,16 +1146,107 @@ def generate_missions_proactive() -> None:
             {"id": "ps", "label": "Person Server", "type": "person-server", "port": 8004},
             {"id": "as", "label": "Access Server", "type": "access-server", "port": 8003},
         ],
+        "mission_blob": {
+            "title": "Mission Context",
+            "description": "Approved mission reused during proactive authorization.",
+            "markdown": mission_blob["description"],
+            "tools": mission_blob["tools"],
+            "approver": ps_id,
+            "s256": s256,
+            "capabilities": ["clarification", "interaction"],
+        },
+        "token_flow": [
+            {
+                "token": "resource-token",
+                "label": "Resource Token",
+                "tokenType": "aa-resource+jwt",
+                "accent": "resource",
+                "events": [
+                    {"step": 3, "participant": "resource", "label": "Issued with mission claim", "kind": "issued"},
+                    {"step": 4, "participant": "agent", "label": "Forwarded through the PS", "kind": "forwarded"},
+                ],
+            },
+            {
+                "token": "auth-token",
+                "label": "Auth Token",
+                "tokenType": "aa-auth+jwt",
+                "accent": "auth",
+                "events": [
+                    {"step": 4, "participant": "as", "label": "Minted with mission claim intact", "kind": "issued"},
+                    {"step": 5, "participant": "agent", "label": "Presented to the resource", "kind": "presented"},
+                ],
+            },
+            {
+                "token": "agent-token",
+                "label": "Agent Token",
+                "tokenType": "aa-agent+jwt",
+                "accent": "agent",
+                "events": [
+                    {"step": 4, "participant": "ps", "label": "Used during federation to AS", "kind": "presented"},
+                ],
+            },
+        ],
+        "s256_chain": [
+            {
+                "label": "Mission Approval",
+                "source": "AAuth-Mission header",
+                "s256": s256,
+                "detail": "The approved mission reference is the source of truth for later proactive authorization.",
+            },
+            {
+                "label": "Resource Token Claim",
+                "source": "aa-resource+jwt mission.s256",
+                "s256": s256,
+                "detail": "The resource preserves the mission reference when minting the proactive resource token.",
+            },
+            {
+                "label": "Auth Token Claim",
+                "source": "aa-auth+jwt mission.s256",
+                "s256": s256,
+                "detail": "The Access Server carries the same mission hash into the auth token after federation.",
+            },
+            {
+                "label": "Final Access Check",
+                "source": "AAuth-Mission + aa-auth+jwt",
+                "s256": s256,
+                "detail": "At resource access time the mission header and token claim can be compared directly.",
+            },
+        ],
         "steps": [
             {
                 "step": 1, "from": "agent", "to": "resource",
+                "label": "Mission already approved by PS",
+                "method": "POST", "url": f"{ps_id}/mission",
+                "request_headers": {
+                    "Content-Type": "application/json",
+                    "AAuth-Capabilities": "clarification, interaction",
+                    **sig_headers(sig_key, sig_input, 50),
+                },
+                "request_body": mission_blob,
+                "response_status": 200,
+                "response_headers": {
+                    "AAuth-Mission": mission_header,
+                    "AAuth-Capabilities": "clarification, interaction, tool-approval",
+                    "Content-Type": "application/json",
+                },
+                "response_body": mission_blob,
+                "tokens": [],
+                "signature": None,
+                "annotations": [
+                    "Phase 5.2 begins from an approved mission produced by the Phase 5.1 flow.",
+                    "The approver URL and s256 from AAuth-Mission are what propagate through the later token chain.",
+                ],
+                "is_response": False,
+            },
+            {
+                "step": 2, "from": "agent", "to": "resource",
                 "label": "POST /authorize with AAuth-Mission",
                 "method": "POST", "url": f"{resource_id}/authorize",
                 "request_headers": {
                     "Content-Type": "application/json",
                     "AAuth-Mission": mission_header,
                     "AAuth-Capabilities": "clarification, interaction",
-                    **sig_headers(sig_key, sig_input, 50),
+                    **sig_headers(sig_key, sig_input, 51),
                 },
                 "request_body": {"scope": "read"},
                 "response_status": 200,
@@ -992,39 +1258,60 @@ def generate_missions_proactive() -> None:
                     "Agent proactively requests a resource token BEFORE accessing the resource.",
                     "AAuth-Mission header carries the approved mission reference.",
                     f"s256 = {s256[:24]}… — immutable fingerprint of the mission blob.",
-                    "Resource embeds mission claim in the resource token it issues.",
+                    "The resource checks the mission header and prepares to embed the same mission claim in the token it returns.",
                 ],
                 "is_response": False,
             },
             {
-                "step": 2, "from": "agent", "to": "ps",
-                "label": "Exchange resource token → PS federates to AS",
-                "method": "POST", "url": f"{ps_id}/token",
-                "request_headers": {
-                    "Content-Type": "application/json",
-                    **sig_headers(sig_key, sig_input, 51),
-                },
+                "step": 3, "from": "resource", "to": "agent",
+                "label": "Resource issues mission-bound resource token",
+                "method": "POST", "url": f"{resource_id}/authorize",
+                "request_headers": {"Content-Type": "application/json"},
                 "request_body": {"resource_token": resource_token},
                 "response_status": 200,
                 "response_headers": {"Content-Type": "application/json"},
-                "response_body": {"auth_token": auth_token},
-                "tokens": [token_fixture("Resource Token", resource_token), token_fixture("Auth Token", auth_token)],
+                "response_body": {"resource_token": resource_token},
+                "tokens": [token_fixture("Resource Token", resource_token)],
                 "signature": None,
                 "annotations": [
-                    "PS forwards resource token to AS. AS sees mission claim — can check s256.",
-                    "Auth token also carries mission claim — resource can verify mission at access time.",
-                    "Mission context is end-to-end preserved: proposal → resource token → auth token → access.",
+                    "The aa-resource+jwt now contains mission={approver, s256}.",
+                    "This is the first token in the chain carrying the mission reference forward.",
+                ],
+                "is_response": True,
+            },
+            {
+                "step": 4, "from": "agent", "to": "ps",
+                "label": "PS federates mission-bound token to AS",
+                "method": "POST", "url": f"{ps_id}/token",
+                "request_headers": {
+                    "Content-Type": "application/json",
+                    **sig_headers(sig_key, sig_input, 52),
+                },
+                "request_body": {"resource_token": resource_token, "agent_token": agent_token},
+                "response_status": 200,
+                "response_headers": {"Content-Type": "application/json"},
+                "response_body": {"auth_token": auth_token},
+                "tokens": [
+                    token_fixture("Resource Token", resource_token),
+                    token_fixture("Agent Token", agent_token),
+                    token_fixture("Auth Token", auth_token),
+                ],
+                "signature": None,
+                "annotations": [
+                    "The agent hands the mission-bound resource token to the PS for normal federation.",
+                    "The AS observes the mission claim in the resource token and carries it into the auth token unchanged.",
+                    "The resulting aa-auth+jwt now contains both mission and act claims.",
                 ],
                 "is_response": False,
             },
             {
-                "step": 3, "from": "agent", "to": "resource",
+                "step": 5, "from": "agent", "to": "resource",
                 "label": "Access resource with mission-scoped auth token",
                 "method": "GET", "url": f"{resource_id}/data",
                 "request_headers": {
                     "AAuth-Access": f"token={auth_token[:40]}…",
                     "AAuth-Mission": mission_header,
-                    **sig_headers(sig_key, sig_input, 52),
+                    **sig_headers(sig_key, sig_input, 53),
                 },
                 "request_body": None, "response_status": 200,
                 "response_headers": {"Content-Type": "application/json"},
@@ -1038,6 +1325,7 @@ def generate_missions_proactive() -> None:
                 "annotations": [
                     "Resource verifies auth token mission.s256 == AAuth-Mission header s256.",
                     "Resource can now make access decisions with full mission context.",
+                    "Mission context is preserved end-to-end: proposal → AAuth-Mission header → resource token → auth token → access.",
                 ],
                 "is_response": False,
             },
