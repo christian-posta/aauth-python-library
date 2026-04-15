@@ -1078,6 +1078,7 @@ class AccessServer:
         purpose: Optional[str] = None,
         agent_is_resource: bool = False,
         clarification_supported: bool = False,
+        act_claim: Optional[Dict[str, Any]] = None,
     ) -> Response:
         """Create a pending request and return 202 with Location + interaction code.
 
@@ -1105,6 +1106,7 @@ class AccessServer:
             "clarification_supported": clarification_supported,
             "clarification_questions": list(self.clarification_questions),
             "clarification_history": [],
+            "act_claim": act_claim,
         }
 
         if debug:
@@ -1164,6 +1166,7 @@ class AccessServer:
                 scope=scope_val,
                 cnf_jwk=agent_jwk,
                 sub=user_id,
+                act=pending.get("act_claim"),
             )
 
             # Clean up pending request
@@ -1546,8 +1549,11 @@ class AccessServer:
         
         Enables multi-hop resource access. When a resource needs to call a downstream
         resource, it exchanges the upstream auth token for a new token bound to its own key.
-        
-        The upstream auth token MUST be presented via scheme=jwt in the Signature-Key header.
+
+        Spec-compliant call chaining: ``Signature-Key`` carries the intermediary's
+        ``aa-agent+jwt``; the JSON body MUST include ``resource_token``, ``upstream_token``,
+        and ``agent_token`` (matching the Signature-Key JWT). Legacy mode: ``Signature-Key``
+        carries the ``aa-auth+jwt`` upstream token (body may omit ``upstream_token``).
         """
         debug = _is_debug_enabled()
         http_debug = _is_http_debug_enabled()
@@ -1598,29 +1604,69 @@ class AccessServer:
         if debug:
             print(f"DEBUG AUTH:   Signature scheme: {scheme}", file=sys.stderr, flush=True)
         
-        # Token exchange MUST use scheme=jwt with auth token
         if scheme != "jwt":
             if debug:
                 print(f"DEBUG AUTH:   Token exchange requires scheme=jwt, got {scheme}", file=sys.stderr, flush=True)
             return JSONResponse(
                 status_code=401,
-                content={"error": "invalid_request", "error_description": "Token exchange requires scheme=jwt with upstream auth token"}
+                content={"error": "invalid_request", "error_description": "Token exchange requires scheme=jwt"}
             )
         
-        # Extract upstream auth token from Signature-Key
-        upstream_token = key_params.get("jwt")
-        if not upstream_token:
+        sig_jwt = key_params.get("jwt")
+        if not sig_jwt:
             return JSONResponse(
                 status_code=401,
                 content={"error": "invalid_request", "error_description": "Missing jwt parameter in Signature-Key"}
             )
-        
+
+        import jwt as jwt_lib
+        try:
+            sk_header = jwt_lib.get_unverified_header(sig_jwt)
+            sig_jwt_typ = sk_header.get("typ")
+        except Exception as e:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_request", "error_description": f"Invalid Signature-Key JWT: {e}"}
+            )
+
+        body_upstream = params_dict.get("upstream_token")
+        body_agent_token = params_dict.get("agent_token")
+
+        if sig_jwt_typ == "aa-agent+jwt":
+            if not body_upstream:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_request",
+                        "error_description": "upstream_token required in JSON body when Signature-Key carries aa-agent+jwt",
+                    },
+                )
+            if body_agent_token and body_agent_token != sig_jwt:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_request",
+                        "error_description": "agent_token in body must match the JWT in Signature-Key",
+                    },
+                )
+            upstream_token = body_upstream
+            agent_jwt_for_metadata = sig_jwt
+        elif sig_jwt_typ == "aa-auth+jwt":
+            upstream_token = sig_jwt
+            agent_jwt_for_metadata = None
+        else:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "invalid_request",
+                    "error_description": f"Signature-Key jwt must be aa-agent+jwt or aa-auth+jwt, got {sig_jwt_typ!r}",
+                },
+            )
+
         if debug:
             print(f"DEBUG AUTH:   Upstream token: {upstream_token[:100]}...", file=sys.stderr, flush=True)
         
-        # Parse upstream token header to verify it's an auth token
         try:
-            import jwt as jwt_lib
             upstream_header = jwt_lib.get_unverified_header(upstream_token)
             upstream_typ = upstream_header.get("typ")
             
@@ -1635,7 +1681,7 @@ class AccessServer:
         if upstream_typ != "aa-auth+jwt":
             return JSONResponse(
                 status_code=401,
-                content={"error": "invalid_token", "error_description": f"Token exchange requires aa-auth+jwt, got {upstream_typ}"}
+                content={"error": "invalid_token", "error_description": f"upstream_token must be aa-auth+jwt, got {upstream_typ}"}
             )
         
         # Parse upstream token claims (without verification first)
@@ -1814,6 +1860,46 @@ class AccessServer:
         
         if debug:
             print(f"DEBUG AUTH:   Upstream token audience verified: {upstream_aud}", file=sys.stderr, flush=True)
+
+        if agent_jwt_for_metadata:
+            try:
+                from aauth.tokens.agent_token import TokenError, verify_agent_token
+                import httpx as _httpx
+
+                def _agent_jwks_fetcher(issuer_url: str, kid_param=None):
+                    try:
+                        from aauth.metadata.auth_server import fetch_metadata
+
+                        mu = f"{issuer_url.rstrip('/')}/.well-known/aauth-agent.json"
+                        meta = fetch_metadata(mu)
+                        ju = meta.get("jwks_uri")
+                        if not ju:
+                            return None
+                        jr = _httpx.get(ju, timeout=10.0)
+                        jr.raise_for_status()
+                        return jr.json()
+                    except Exception:
+                        return None
+
+                ag_claims = verify_agent_token(agent_jwt_for_metadata, _agent_jwks_fetcher)
+                if ag_claims.get("iss", "").rstrip("/") != str(requesting_agent).rstrip("/"):
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "invalid_token",
+                            "error_description": "Agent token iss must match resource token agent",
+                        },
+                    )
+            except TokenError as e:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_token", "error_description": str(e)},
+                )
+
+        upstream_act = upstream_payload.get("act") or {"sub": upstream_payload.get("agent", "")}
+        act_claim: Dict[str, Any] = {"sub": requesting_agent}
+        if upstream_act:
+            act_claim["act"] = upstream_act
         
         # Verify HTTPSig signature using requesting resource's key
         # The requesting resource signs with its own key (identified by agent_jkt in resource_token)
@@ -1971,6 +2057,7 @@ class AccessServer:
                 purpose="Downstream access via interaction chaining",
                 agent_is_resource=True,
                 clarification_supported=False,
+                act_claim=act_claim,
             )
 
         if not policy_result.get("allowed"):
@@ -1993,6 +2080,7 @@ class AccessServer:
             scope=scope,
             cnf_jwk=resource_jwk_for_cnf,
             sub=upstream_sub,  # Maintain user context through the chain
+            act=act_claim,
         )
         
         if debug:

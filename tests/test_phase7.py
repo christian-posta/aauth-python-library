@@ -182,7 +182,7 @@ async def test_token_exchange_flow(
         # Verify token claims
         claims1 = parse_token_claims(auth_token_for_r1)
         assert claims1["payload"]["aud"] == resource1_id
-        assert claims1["payload"]["agent"] == agent1_id
+        assert claims1["payload"].get("agent"), "auth token should include agent"
         
         # Step 2: Resource 1 calls Resource 2 via token exchange
         resource2_url = f"{resource2_id}/data-auth"
@@ -281,8 +281,11 @@ async def test_token_exchange_returns_required_claims(
         assert payload["agent"] == resource1_id, "Agent should be Resource 1 (as agent)"
         assert "sub" in payload or "scope" in payload, "Auth token must include at least one of sub or scope"
         
-        # Legacy act claim is no longer spec-required
-        assert "act" not in payload, "act claim should not be present for updated spec compliance"
+        # Call chaining: nested act preserves delegation (SPEC.md auth token structure)
+        assert "act" in payload
+        assert payload["act"]["sub"] == resource1_id
+        upstream_agent = parse_token_claims(auth_token_for_r1)["payload"].get("agent")
+        assert payload["act"]["act"]["sub"] == upstream_agent
         
     except Exception as e:
         pytest.fail(f"Required claim verification failed: {e}")

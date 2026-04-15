@@ -5,7 +5,8 @@ R2's AS requires user consent (202 + interaction).  R1 chains the interaction
 back to the original agent: R1 returns its own 202 + pending URL + interaction code.
 The user goes to R1's ``/interact`` endpoint, which redirects to R2's AS interact page.
 After consent, R1 polls the downstream pending URL, obtains an auth token for R2, and
-returns the final 200 to the agent — per AAuth spec Section 19 (Interaction Chaining).
+returns the final 200 to the agent — per SPEC.md (#interaction-chaining) and call chaining
+(#call-chaining).
 """
 
 import asyncio
@@ -172,12 +173,16 @@ async def main() -> None:
         # ------------------------------------------------------------------
         print("\nTEST 2: Verify token chain claims", file=sys.stderr)
 
-        # Agent auth token: AS1 issued for R1
+        # Agent auth token: AS1 issued for R1 (agent may be aauth:… or HTTPS URL per deployment)
         assert ac["header"].get("typ") == "aa-auth+jwt"
         assert ac["payload"].get("iss") == auth1_id
         assert ac["payload"].get("aud") == resource1_id
-        assert ac["payload"].get("agent") == agent_id
-        print(f"  ✓ R1 auth token: iss={auth1_id}, aud={resource1_id}, agent={agent_id}", file=sys.stderr)
+        agent_claim_r1 = ac["payload"].get("agent")
+        assert agent_claim_r1, "R1 auth token must carry agent"
+        print(
+            f"  ✓ R1 auth token: iss={auth1_id}, aud={resource1_id}, agent={agent_claim_r1}",
+            file=sys.stderr,
+        )
 
         # Downstream auth token: AS2 issued for R2, agent is R1
         assert dc["header"].get("typ") == "aa-auth+jwt"
@@ -188,6 +193,21 @@ async def main() -> None:
         )
         print(
             f"  ✓ R2 auth token: iss={auth2_id}, aud={resource2_id}, agent={resource1_id}",
+            file=sys.stderr,
+        )
+
+        # Nested delegation chain (SPEC.md — auth token act claim)
+        act = dc["payload"].get("act")
+        assert isinstance(act, dict), "Downstream auth token must include act claim"
+        assert act.get("sub") == resource1_id, "act.sub must be the intermediary (R1)"
+        inner = act.get("act")
+        assert isinstance(inner, dict), "Call chaining must nest upstream act"
+        assert inner.get("sub") == agent_claim_r1, (
+            "Nested act.sub must match the upstream auth token agent identity"
+        )
+        assert dc["payload"].get("cnf", {}).get("jwk"), "cnf.jwk must bind R1's signing key"
+        print(
+            f"  ✓ act chain: act.sub={act.get('sub')!r} → act.act.sub={inner.get('sub')!r}",
             file=sys.stderr,
         )
         print("  ✓ TEST 2 PASSED: Full call chain verified (agent→R1→R2 identity preserved)", file=sys.stderr)

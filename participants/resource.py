@@ -2020,6 +2020,7 @@ class Resource:
             request_data = {
                 "resource_token": resource_token,
                 "upstream_token": upstream_auth_token,
+                "agent_token": self_agent_token,
             }
             request_body = json.dumps(request_data)
             request_body_bytes = request_body.encode("utf-8")
@@ -2048,11 +2049,14 @@ class Resource:
                     print(f"DEBUG RESOURCE:   Failed to parse MM response: {e}", file=sys.stderr, flush=True)
                 return None
 
-        # Build exchange request (call chaining: resource_token + upstream_token)
+        # Build exchange request (call chaining: resource_token + upstream_token + agent_token).
+        # Per SPEC.md call-chaining: intermediary signs with its own agent token (aa-agent+jwt).
+        self_agent_token = self._self_issue_agent_token()
         token_endpoint = f"{auth_server}/token"
         request_data = {
             "resource_token": resource_token,
-            "upstream_token": upstream_auth_token
+            "upstream_token": upstream_auth_token,
+            "agent_token": self_agent_token,
         }
         request_body = json.dumps(request_data)
         request_body_bytes = request_body.encode('utf-8')
@@ -2062,8 +2066,7 @@ class Resource:
         # Build base headers - sign_request will add Content-Digest to this dict
         base_headers = {"Content-Type": "application/json"}
 
-        # Sign request with scheme=jwt using upstream auth token
-        # Note: sign_request modifies base_headers to add Content-Digest
+        # Sign with self-issued agent token (not the upstream auth token).
         sig_headers = sign_request(
             method="POST",
             target_uri=token_endpoint,
@@ -2071,7 +2074,7 @@ class Resource:
             body=request_body_bytes,
             private_key=self.private_key,
             sig_scheme="jwt",
-            jwt=upstream_auth_token
+            jwt=self_agent_token,
         )
 
         # Combine base headers (now includes Content-Digest) with signature headers
@@ -2189,8 +2192,13 @@ class Resource:
                 pass
         if not auth_server:
             return {"mode": "final_response", "response": challenge_response}
+        self_agent_token = self._self_issue_agent_token()
         token_endpoint = f"{auth_server}/token"
-        request_data = {"resource_token": resource_token, "upstream_token": upstream_auth_token}
+        request_data = {
+            "resource_token": resource_token,
+            "upstream_token": upstream_auth_token,
+            "agent_token": self_agent_token,
+        }
         request_body = json.dumps(request_data).encode("utf-8")
         base_headers = {"Content-Type": "application/json"}
         token_sig_headers = sign_request(
@@ -2200,7 +2208,7 @@ class Resource:
             body=request_body,
             private_key=self.private_key,
             sig_scheme="jwt",
-            jwt=upstream_auth_token,
+            jwt=self_agent_token,
         )
         token_headers = {**base_headers, **token_sig_headers}
 
