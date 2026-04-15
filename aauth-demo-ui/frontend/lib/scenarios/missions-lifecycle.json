@@ -1,7 +1,7 @@
 {
   "id": "missions-lifecycle",
   "title": "Mission Proposal & Approval",
-  "description": "The agent proposes a mission to the Person Server: a markdown description of what it intends to accomplish, plus a list of tools it will use. The PS approves and returns an AAuth-Mission header containing the approver URL and an s256 (SHA-256 hash of the mission blob).",
+  "description": "The agent proposes a mission to the Person Server: a Markdown description of what it intends to accomplish, plus a list of tools it will use. Because the PS acts on behalf of a human, approval requires user interaction \u2014 the PS returns a 202 with an interaction URL so the user can review and approve the mission. Once approved, the PS returns the mission blob and an AAuth-Mission header containing the approver URL and s256 (SHA-256 fingerprint of the blob).",
   "spec_section": "\u00a7 Missions",
   "category": "missions",
   "demo_phase": 5,
@@ -15,6 +15,11 @@
       "id": "ps",
       "label": "Person Server",
       "type": "person-server"
+    },
+    {
+      "id": "user",
+      "label": "User",
+      "type": "user"
     }
   ],
   "mission_blob": {
@@ -39,26 +44,6 @@
       "tool-approval"
     ]
   },
-  "s256_chain": [
-    {
-      "label": "Mission Proposal Body",
-      "source": "POST /mission body",
-      "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
-      "detail": "The agent computes the canonical mission blob bytes that will be approved."
-    },
-    {
-      "label": "AAuth-Mission Header",
-      "source": "PS response header",
-      "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
-      "detail": "The PS returns approver and s256 so later requests can reference the exact mission blob."
-    },
-    {
-      "label": "Client Verification",
-      "source": "local hash check",
-      "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
-      "detail": "The agent recomputes SHA-256 over the returned blob bytes and confirms the value matches."
-    }
-  ],
   "steps": [
     {
       "step": 1,
@@ -84,8 +69,8 @@
       "tokens": [],
       "signature": null,
       "annotations": [
-        "Agent discovers the PS's mission_endpoint from well-known metadata.",
-        "mission_endpoint is where the agent POSTs mission proposals."
+        "Agent fetches PS well-known metadata to discover the mission_endpoint.",
+        "mission_endpoint is where the agent POSTs mission proposals for approval."
       ],
       "is_response": false
     },
@@ -93,15 +78,15 @@
       "step": 2,
       "from": "agent",
       "to": "ps",
-      "label": "POST mission proposal to /mission",
+      "label": "POST /mission (sig=jwt) \u2192 202 + interaction URL",
       "method": "POST",
       "url": "https://ps.example/mission",
       "request_headers": {
         "Content-Type": "application/json",
         "AAuth-Capabilities": "clarification, interaction",
-        "Signature-Key": "sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"content-digest\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "Signature": "sig=:KCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKA:"
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:KCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo:"
       },
       "request_body": {
         "description": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
@@ -116,6 +101,135 @@
           }
         ]
       },
+      "response_status": 202,
+      "response_headers": {
+        "Location": "https://ps.example/pending/m3f7a1b2",
+        "Retry-After": "0",
+        "Cache-Control": "no-store",
+        "AAuth-Requirement": "requirement=interaction; url=\"https://ps.example/interact/m3f7a1b2\"; code=\"M7F2-A9B4\""
+      },
+      "response_body": {
+        "status": "pending"
+      },
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494,
+            "ps": "https://ps.example"
+          },
+          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": POST\n\"@authority\": ps.example\n\"@path\": /mission\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent POSTs the mission proposal signed with its agent token (sig=jwt).",
+        "PS cannot approve without the user \u2014 it returns 202 Accepted.",
+        "Location header gives the pending URL the agent will poll.",
+        "AAuth-Requirement carries the interaction URL and one-time code for the user."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 3,
+      "from": "agent",
+      "to": "ps",
+      "label": "Poll /pending/m3f7a1b2 \u2192 202 (user hasn't approved yet)",
+      "method": "GET",
+      "url": "https://ps.example/pending/m3f7a1b2",
+      "request_headers": {
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:MDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDExMDEx:"
+      },
+      "request_body": null,
+      "response_status": 202,
+      "response_headers": {
+        "Retry-After": "2",
+        "Cache-Control": "no-store"
+      },
+      "response_body": {
+        "status": "pending"
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Agent polls the pending URL from the Location header.",
+        "PS returns 202 \u2014 the user has not yet reviewed or approved the mission.",
+        "Agent waits Retry-After seconds before polling again."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 4,
+      "from": "user",
+      "to": "ps",
+      "label": "User reviews mission \u2192 approves",
+      "method": "GET",
+      "url": "https://ps.example/interact/m3f7a1b2?code=M7F2-A9B4",
+      "request_headers": {
+        "Host": "ps.example"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "text/html"
+      },
+      "response_body": "<div class=\"consent-page\"><h1>Review Agent Mission</h1><h2>Analyze Q2 Customer Feedback</h2><p>The agent <strong>aauth:local@agent.example</strong> is requesting approval for the following mission:</p><blockquote>Read customer feedback records and produce a summary report with sentiment analysis and key themes.</blockquote><h3>Tools the agent will use:</h3><ul><li><strong>FeedbackReader</strong> \u2014 Read customer feedback records</li><li><strong>ReportWriter</strong> \u2014 Write the summary report to the shared drive</li></ul><div class=\"actions\"><button class=\"approve\">Approve Mission</button><button class=\"deny\">Deny</button></div></div>",
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "User opens the interaction URL (from PS notification, email, or app).",
+        "PS displays the mission description and full tool list for review.",
+        "User reads what the agent intends to do and which tools it will use.",
+        "User clicks Approve \u2014 PS marks the mission as approved."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 5,
+      "from": "agent",
+      "to": "ps",
+      "label": "Poll /pending/m3f7a1b2 \u2192 200 + AAuth-Mission",
+      "method": "GET",
+      "url": "https://ps.example/pending/m3f7a1b2",
+      "request_headers": {
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1:"
+      },
+      "request_body": null,
       "response_status": 200,
       "response_headers": {
         "Content-Type": "application/json",
@@ -138,40 +252,42 @@
       "tokens": [],
       "signature": null,
       "annotations": [
-        "Agent sends mission description (Markdown) + tool list.",
-        "PS approves and responds with body = mission blob + AAuth-Mission header.",
-        "s256 = SHA-256(blob_bytes) = R9kNpXeErMQ1Jvk_vxYUp3YE\u2026",
-        "Agent must store this s256 and present it in future requests as AAuth-Mission.",
-        "Request AAuth-Capabilities advertises agent support; response capabilities reflect the PS-approved set."
-      ],
-      "is_response": false
-    },
-    {
-      "step": 3,
-      "from": "agent",
-      "to": "ps",
-      "label": "Verify s256 matches blob",
-      "method": "GET",
-      "url": "(client-side verification)",
-      "request_headers": {},
-      "request_body": null,
-      "response_status": 200,
-      "response_headers": {},
-      "response_body": {
-        "verification": "SHA-256(response_body_bytes) == s256 header value",
-        "blob_bytes_preview": "{\"description\":\"# Analyze Q2 Customer Feedback\\n\\nRead customer \u2026",
-        "computed_s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
-        "header_s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
-        "match": true
-      },
-      "tokens": [],
-      "signature": null,
-      "annotations": [
-        "Agent verifies: SHA-256(response body bytes) == s256 from AAuth-Mission header.",
-        "This binds the mission text to an immutable fingerprint.",
-        "Agent caches: approver URL + s256 for use in resource requests."
+        "User has approved \u2014 the next poll returns 200.",
+        "Response body is the approved mission blob (description + tools).",
+        "AAuth-Mission header carries: approver URL + s256 (SHA-256 of the blob).",
+        "Agent verifies: SHA-256(response_body_bytes) == s256 in AAuth-Mission header.",
+        "Agent caches the approver URL and s256 \u2014 these are presented in every future resource request."
       ],
       "is_response": false
     }
-  ]
+  ],
+  "deferred_timeline": {
+    "title": "Mission Approval Timeline",
+    "events": [
+      {
+        "step": 2,
+        "status": 202,
+        "label": "Proposal submitted",
+        "detail": "PS queues mission for user review, returns pending URL + interaction URL"
+      },
+      {
+        "step": 3,
+        "status": 202,
+        "label": "Still awaiting approval",
+        "detail": "User has not yet opened the interaction URL"
+      },
+      {
+        "step": 4,
+        "status": 200,
+        "label": "User approves",
+        "detail": "User reviews mission description and tool list, clicks Approve"
+      },
+      {
+        "step": 5,
+        "status": 200,
+        "label": "Mission approved",
+        "detail": "PS returns mission blob + AAuth-Mission header with s256 fingerprint"
+      }
+    ]
+  }
 }

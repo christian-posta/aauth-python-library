@@ -50,7 +50,8 @@ const NAV: NavSection[] = [
     color: "text-purple-400",
     items: [
       { label: "Proposal & Approval", href: "/missions/lifecycle", phase: 5 },
-      { label: "Proactive Authorization", href: "/missions/proactive-authz", phase: 10 },
+      { label: "Resource Access", href: "/missions/resource-access", phase: 10 },
+      { label: "Out-of-Bounds Access", href: "/missions/out-of-bounds", phase: 11 },
       { label: "End-to-End Lifecycle", href: "/missions/end-to-end", phase: 12 },
       { label: "With vs Without Missions", href: "/missions/compare" },
     ],

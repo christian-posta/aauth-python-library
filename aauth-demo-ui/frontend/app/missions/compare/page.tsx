@@ -7,21 +7,23 @@ const WITHOUT = {
   border: "border-zinc-700",
   headers: {
     request: {
-      "Signature-Key": 'sig=jwks_uri;id="http://agent:8001";kid="key-1"',
+      "Signature-Key": 'sig=jwt;jwt="eyJhbGc...agent-token..."',
       "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key")',
       Signature: "sig=:base64url…:",
     },
     resourceToken: {
-      iss: "http://resource:8002",
-      aud: "http://as:8003",
-      agent: "aauth:local@127.0.0.1",
+      iss: "https://api.example",
+      aud: "https://as.example",
+      agent: "aauth:local@agent.example",
       agent_jkt: "abc123…",
       scope: "read",
     },
     authToken: {
-      iss: "http://as:8003",
-      aud: "http://resource:8002",
-      agent: "aauth:local@127.0.0.1",
+      iss: "https://as.example",
+      aud: "https://api.example",
+      agent: "aauth:local@agent.example",
+      act: { sub: "aauth:local@agent.example" },
+      cnf: { jwk: { kty: "OKP", crv: "Ed25519", x: "..." } },
       scope: "read",
     },
   },
@@ -33,26 +35,28 @@ const WITH = {
   border: "border-purple-500/40",
   headers: {
     request: {
-      "Signature-Key": 'sig=jwks_uri;id="http://agent:8001";kid="key-1"',
-      "AAuth-Mission": 'approver="http://ps:8004"; s256="sha256ofmission…"',
+      "Signature-Key": 'sig=jwt;jwt="eyJhbGc...agent-token..."',
+      "AAuth-Mission": 'approver="https://ps.example"; s256="sha256ofmission…"',
       "AAuth-Capabilities": "clarification, interaction, tool-approval",
-      "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key")',
+      "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key" "aauth-mission")',
       Signature: "sig=:base64url…:",
     },
     resourceToken: {
-      iss: "http://resource:8002",
-      aud: "http://as:8003",
-      agent: "aauth:local@127.0.0.1",
+      iss: "https://api.example",
+      aud: "https://as.example",
+      agent: "aauth:local@agent.example",
       agent_jkt: "abc123…",
       scope: "read",
-      mission: { approver: "http://ps:8004", s256: "sha256ofmission…" },
+      mission: { approver: "https://ps.example", s256: "sha256ofmission…" },
     },
     authToken: {
-      iss: "http://as:8003",
-      aud: "http://resource:8002",
-      agent: "aauth:local@127.0.0.1",
+      iss: "https://as.example",
+      aud: "https://api.example",
+      agent: "aauth:local@agent.example",
+      act: { sub: "aauth:local@agent.example" },
+      cnf: { jwk: { kty: "OKP", crv: "Ed25519", x: "..." } },
       scope: "read",
-      mission: { approver: "http://ps:8004", s256: "sha256ofmission…" },
+      mission: { approver: "https://ps.example", s256: "sha256ofmission…" },
     },
   },
 };
@@ -60,13 +64,17 @@ const WITH = {
 const ADDITIONS = [
   { item: "AAuth-Mission header on requests", with: true },
   { item: "AAuth-Capabilities header", with: true },
+  { item: "aauth-mission in signature components", with: true },
   { item: "mission claim in resource token", with: true },
   { item: "mission claim in auth token", with: true },
   { item: "PS /mission endpoint for proposals", with: true },
   { item: "s256 verification at each hop", with: true },
-  { item: "HTTP Message Signatures", with: true },
-  { item: "Resource token exchange", with: true },
-  { item: "PS-AS federation", with: true },
+  { item: "Mission log at PS", with: true },
+  { item: "Pre-approved tools (optional)", with: true },
+  { item: "HTTP Message Signatures", with: true, without: true },
+  { item: "Resource token exchange", with: true, without: true },
+  { item: "PS-AS federation (federated mode)", with: true, without: true },
+  { item: "Proof-of-possession (cnf)", with: true, without: true },
 ];
 
 function HeaderBlock({ data }: { data: Record<string, unknown> }) {
@@ -108,9 +116,9 @@ export default function MissionsComparePage() {
                   <td className="px-5 py-3 text-xs text-muted-foreground">{a.item}</td>
                   <td className="px-4 py-3">
                     <div className="flex justify-center">
-                      {i < 6
-                        ? <XCircle className="h-4 w-4 text-zinc-700" />
-                        : <CheckCircle className="h-4 w-4 text-green-400" />}
+                      {a.without
+                        ? <CheckCircle className="h-4 w-4 text-green-400" />
+                        : <XCircle className="h-4 w-4 text-zinc-700" />}
                     </div>
                   </td>
                   <td className="px-4 py-3">
