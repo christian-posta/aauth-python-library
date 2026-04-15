@@ -1,0 +1,500 @@
+{
+  "id": "resource-managed",
+  "title": "Resource-Managed Access (2-party)",
+  "description": "The resource manages authorization entirely itself \u2014 no PS or AS involved. It verifies the agent's signed request, applies its own policy (allowlist, pre-registered key, or internal rule), and issues an opaque AAuth-Access token for subsequent calls. The token is a simple opaque string, not a JWT \u2014 the resource is its own authority.",
+  "spec_section": "\u00a7 Resource-Managed Access (Two-Party)",
+  "category": "access",
+  "demo_phase": 2,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "resource",
+      "label": "Resource",
+      "type": "resource"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "resource",
+      "label": "Signed GET /data \u2192 resource checks policy \u2192 200 + opaque token",
+      "method": "GET",
+      "url": "https://api.example/data",
+      "request_headers": {
+        "Host": "api.example",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:Hh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json",
+        "AAuth-Access": "rm-tok-a8f3c2e1b94d7065f2a1"
+      },
+      "response_body": {
+        "message": "Access granted!",
+        "agent": "aauth:local@agent.example"
+      },
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent presents its agent token in the Signature-Key header using sig=jwt.",
+        "Resource verifies the agent token JWT and HTTP signature, then checks its internal policy.",
+        "This agent's domain is allowlisted \u2014 resource grants access immediately.",
+        "Resource issues an AAuth-Access header with an opaque token for subsequent calls.",
+        "The opaque token is a simple string minted by the resource \u2014 not a JWT, no PS or AS."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "resource",
+      "label": "Subsequent request with opaque token (signed) \u2192 200",
+      "method": "GET",
+      "url": "https://api.example/data",
+      "request_headers": {
+        "Host": "api.example",
+        "Authorization": "AAuth rm-tok-a8f3c2e1b94d7065f2a1",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"authorization\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "message": "Access granted!",
+        "agent": "aauth:local@agent.example"
+      },
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data\n\"authorization\": AAuth rm-tok-a8f3c2e1b94d7065f2a1\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"authorization\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"authorization\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "authorization",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent presents the opaque token via Authorization: AAuth <token>.",
+        "Agent MUST include 'authorization' in the HTTP signature covered components \u2014 this binds the opaque token to the signed request.",
+        "Without the signature binding, the opaque token could be stolen and replayed as a standalone bearer token.",
+        "Resource validates the signature and looks up the token in its own store."
+      ],
+      "is_response": false
+    }
+  ],
+  "interactive": {
+    "description": "The resource requires user interaction before granting access \u2014 for example, the user must log in via the resource's own OIDC provider. The agent initiates the request, is redirected to an interaction URL backed by OIDC/OAuth, polls while the user authenticates, then receives an opaque token. No PS or AS is involved at any point.",
+    "participants": [
+      {
+        "id": "agent",
+        "label": "Agent",
+        "type": "agent"
+      },
+      {
+        "id": "resource",
+        "label": "Resource",
+        "type": "resource"
+      },
+      {
+        "id": "user",
+        "label": "User",
+        "type": "user"
+      }
+    ],
+    "deferred_timeline": {
+      "title": "Resource Interaction Polling",
+      "events": [
+        {
+          "step": 1,
+          "status": 202,
+          "label": "Interaction required",
+          "detail": "Resource returns pending URL and interaction URL backed by its OIDC provider."
+        },
+        {
+          "step": 2,
+          "status": 202,
+          "label": "Polling \u2014 not yet approved",
+          "detail": "User has not completed login. Agent keeps polling."
+        },
+        {
+          "step": 4,
+          "status": 200,
+          "label": "Approved",
+          "detail": "User authenticated via OIDC. Resource issues opaque token."
+        }
+      ]
+    },
+    "steps": [
+      {
+        "step": 1,
+        "from": "agent",
+        "to": "resource",
+        "label": "Signed GET /data \u2192 202 + interaction URL (OIDC login)",
+        "method": "GET",
+        "url": "https://api.example/data",
+        "request_headers": {
+          "Host": "api.example",
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:Hh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg:"
+        },
+        "request_body": null,
+        "response_status": 202,
+        "response_headers": {
+          "Location": "https://api.example/pending/c3e1f2a4b8d90675",
+          "Retry-After": "2",
+          "AAuth-Requirement": "requirement=interaction; url=\"https://api.example/interact?code=c3e1f2a4b8d90675\"; code=\"C3E1-F2A4\""
+        },
+        "response_body": {
+          "status": "pending"
+        },
+        "tokens": [
+          {
+            "name": "Agent Token",
+            "typ": "aa-agent+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpsb2NhbEAxMjcuMC4wLjEiLCJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwianRpIjoiYTZhZTMwMWQtMWRjNy00Yjc1LThmOGItNTYxMjE5NzY2NGE3IiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlRfMS1EWE5JeEl2MHRGRXFyRDlxNExIdTRWY0hKZ3NpRFBOX19SMV9ZMlUiLCJraWQiOiJhZ2VudC1rZXktMSJ9fSwiaWF0IjoxNzc2MjIyODk0LCJleHAiOjE3NzYyMjY0OTR9.Placeholder",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "agent-key-1",
+              "typ": "aa-agent+jwt"
+            },
+            "payload": {
+              "iss": "https://agent.example",
+              "sub": "aauth:local@agent.example",
+              "dwk": "aauth-agent.json",
+              "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+              "cnf": {
+                "jwk": {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                  "kid": "agent-key-1"
+                }
+              },
+              "iat": 1776222894,
+              "exp": 1776226494
+            },
+            "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+          }
+        ],
+        "signature": {
+          "scheme": "jwt",
+          "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "covered_components": [
+            "@method",
+            "@authority",
+            "@path",
+            "signature-key"
+          ]
+        },
+        "annotations": [
+          "Resource verifies the agent's signature and identity.",
+          "Agent is not yet authorized \u2014 user must authenticate first.",
+          "Resource returns 202 with AAuth-Requirement: requirement=interaction.",
+          "The interaction URL is the resource's own OIDC login page \u2014 no PS or AS is involved.",
+          "The agent extracts the pending URL (Location) for polling and the interaction URL for the user."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 2,
+        "from": "agent",
+        "to": "resource",
+        "label": "Poll pending URL \u2192 202 still waiting",
+        "method": "GET",
+        "url": "https://api.example/pending/c3e1f2a4b8d90675",
+        "request_headers": {
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA:"
+        },
+        "request_body": null,
+        "response_status": 202,
+        "response_headers": {
+          "Content-Type": "application/json",
+          "Retry-After": "2"
+        },
+        "response_body": {
+          "status": "pending"
+        },
+        "tokens": [
+          {
+            "name": "Agent Token",
+            "typ": "aa-agent+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "agent-key-1",
+              "typ": "aa-agent+jwt"
+            },
+            "payload": {
+              "iss": "https://agent.example",
+              "sub": "aauth:local@agent.example",
+              "dwk": "aauth-agent.json",
+              "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+              "cnf": {
+                "jwk": {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                  "kid": "agent-key-1"
+                }
+              },
+              "iat": 1776222894,
+              "exp": 1776226494
+            },
+            "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+          }
+        ],
+        "signature": null,
+        "annotations": [
+          "User has not yet completed login. Agent keeps polling."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 3,
+        "from": "user",
+        "to": "resource",
+        "label": "User opens interaction URL \u2192 OIDC login \u2192 approves",
+        "method": "GET",
+        "url": "https://api.example/interact?code=c3e1f2a4b8d90675",
+        "request_headers": {
+          "Cookie": "session=browser-session-xyz"
+        },
+        "request_body": null,
+        "response_status": 200,
+        "response_headers": {
+          "Content-Type": "text/html"
+        },
+        "response_body": "<div class=\"oidc-login\"><h1>Sign in to Resource</h1><p>Agent https://agent.example is requesting access to /data.</p><p>Powered by the resource's OIDC provider.</p><button>Sign in with your account</button></div>",
+        "tokens": [],
+        "signature": null,
+        "annotations": [
+          "The resource serves its standard OIDC login page at the interaction URL.",
+          "The user authenticates with the resource's identity provider (e.g. Google, Okta, internal SSO).",
+          "The resource's backend completes the OAuth/OIDC flow and records authorization for this agent.",
+          "Critically: the agent never sees OAuth tokens. The resource abstracts OIDC into an opaque AAuth-Access token."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 4,
+        "from": "agent",
+        "to": "resource",
+        "label": "Poll pending URL \u2192 200 + opaque token",
+        "method": "GET",
+        "url": "https://api.example/pending/c3e1f2a4b8d90675",
+        "request_headers": {
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ:"
+        },
+        "request_body": null,
+        "response_status": 200,
+        "response_headers": {
+          "Content-Type": "application/json",
+          "AAuth-Access": "rm-tok-d7b2e9f1c4a30587"
+        },
+        "response_body": {
+          "status": "approved",
+          "message": "Access granted!"
+        },
+        "tokens": [
+          {
+            "name": "Agent Token",
+            "typ": "aa-agent+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "agent-key-1",
+              "typ": "aa-agent+jwt"
+            },
+            "payload": {
+              "iss": "https://agent.example",
+              "sub": "aauth:local@agent.example",
+              "dwk": "aauth-agent.json",
+              "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+              "cnf": {
+                "jwk": {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                  "kid": "agent-key-1"
+                }
+              },
+              "iat": 1776222894,
+              "exp": 1776226494
+            },
+            "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+          }
+        ],
+        "signature": null,
+        "annotations": [
+          "User has authenticated. Resource issues opaque AAuth-Access token.",
+          "The opaque token encodes the resource's own session \u2014 backed by the OIDC token it obtained.",
+          "The agent receives the token and can now use it on all subsequent requests."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 5,
+        "from": "agent",
+        "to": "resource",
+        "label": "Subsequent request with opaque token (signed) \u2192 200",
+        "method": "GET",
+        "url": "https://api.example/data",
+        "request_headers": {
+          "Host": "api.example",
+          "Authorization": "AAuth rm-tok-d7b2e9f1c4a30587",
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"authorization\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg:"
+        },
+        "request_body": null,
+        "response_status": 200,
+        "response_headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": {
+          "message": "Access granted!",
+          "agent": "aauth:local@agent.example"
+        },
+        "tokens": [
+          {
+            "name": "Agent Token",
+            "typ": "aa-agent+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "agent-key-1",
+              "typ": "aa-agent+jwt"
+            },
+            "payload": {
+              "iss": "https://agent.example",
+              "sub": "aauth:local@agent.example",
+              "dwk": "aauth-agent.json",
+              "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+              "cnf": {
+                "jwk": {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                  "kid": "agent-key-1"
+                }
+              },
+              "iat": 1776222894,
+              "exp": 1776226494
+            },
+            "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+          }
+        ],
+        "signature": {
+          "scheme": "jwt",
+          "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data\n\"authorization\": AAuth rm-tok-d7b2e9f1c4a30587\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"authorization\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"authorization\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "covered_components": [
+            "@method",
+            "@authority",
+            "@path",
+            "authorization",
+            "signature-key"
+          ]
+        },
+        "annotations": [
+          "Agent presents the opaque token via Authorization: AAuth <token>.",
+          "Agent MUST include 'authorization' in the HTTP signature covered components \u2014 binds the opaque token to the signed request.",
+          "Resource validates the signature and looks up the token in its own store.",
+          "No PS, no AS \u2014 entirely self-contained within the resource."
+        ],
+        "is_response": false
+      }
+    ]
+  }
+}

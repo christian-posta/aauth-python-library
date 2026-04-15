@@ -1,0 +1,1006 @@
+{
+  "id": "federated",
+  "title": "Federated Access (4-party)",
+  "description": "The complete 4-party autonomous flow: Agent \u2192 Resource \u2192 Person Server \u2192 Access Server. The resource issues a resource token with aud=AS URL. The PS federates to the AS on behalf of the agent, and the AS issues the aa-auth+jwt that the agent presents to the resource.",
+  "spec_section": "\u00a7 Federated Access (Four-Party)",
+  "category": "access",
+  "demo_phase": 4,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "resource",
+      "label": "Resource",
+      "type": "resource"
+    },
+    {
+      "id": "ps",
+      "label": "Person Server",
+      "type": "person-server"
+    },
+    {
+      "id": "as",
+      "label": "Access Server",
+      "type": "access-server"
+    }
+  ],
+  "token_flow": [
+    {
+      "token": "resource-token",
+      "label": "Resource Token",
+      "tokenType": "aa-resource+jwt",
+      "accent": "resource",
+      "events": [
+        {
+          "step": 1,
+          "participant": "resource",
+          "label": "Issued in 401 challenge",
+          "kind": "issued"
+        },
+        {
+          "step": 2,
+          "participant": "agent",
+          "label": "Forwarded to the PS",
+          "kind": "forwarded"
+        },
+        {
+          "step": 3,
+          "participant": "ps",
+          "label": "Presented to the AS",
+          "kind": "presented"
+        }
+      ]
+    },
+    {
+      "token": "auth-token",
+      "label": "Auth Token",
+      "tokenType": "aa-auth+jwt",
+      "accent": "auth",
+      "events": [
+        {
+          "step": 3,
+          "participant": "as",
+          "label": "Minted after federation",
+          "kind": "issued"
+        },
+        {
+          "step": 4,
+          "participant": "ps",
+          "label": "Returned to the agent",
+          "kind": "returned"
+        },
+        {
+          "step": 5,
+          "participant": "agent",
+          "label": "Presented to the resource",
+          "kind": "presented"
+        }
+      ]
+    },
+    {
+      "token": "agent-token",
+      "label": "Agent Token",
+      "tokenType": "aa-agent+jwt",
+      "accent": "agent",
+      "events": [
+        {
+          "step": 3,
+          "participant": "ps",
+          "label": "Used to prove the agent's PS binding",
+          "kind": "presented"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "resource",
+      "label": "Signed GET /data-auth \u2192 401 + resource token",
+      "method": "GET",
+      "url": "https://api.example/data-auth",
+      "request_headers": {
+        "Host": "api.example",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCg:"
+      },
+      "request_body": null,
+      "response_status": 401,
+      "response_headers": {
+        "AAuth-Requirement": "requirement=auth_token; resource_token=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlw\u2026\"",
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "error": "auth_token_required"
+      },
+      "tokens": [
+        {
+          "name": "Resource Token",
+          "typ": "aa-resource+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "resource-key-1",
+            "typ": "aa-resource+jwt"
+          },
+          "payload": {
+            "iss": "https://api.example",
+            "aud": "https://as.example",
+            "dwk": "aauth-resource.json",
+            "jti": "ec12c052-ab17-49e1-88d3-5e2317ba82c4",
+            "agent": "aauth:local@agent.example",
+            "agent_jkt": "tcP75aIbpvVmzZ0P-LIZeoLua8SuE8RGM4tO_2OkRpg",
+            "scope": "read",
+            "iat": 1776222894,
+            "exp": 1776223494
+          },
+          "signature_b64": "6QznE3sOp9JX6RY4a0olsuHZSIKAn5t4HwyxK9M8fOOIW9D2nQGR18uObb97Ui6BZdb0F8gTP7BqI5BO0WRsDA"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data-auth\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent signs with sig=jwks_uri (agent identity).",
+        "Resource issues 401 + AAuth-Requirement containing aa-resource+jwt.",
+        "Resource token has aud=AS \u2014 only the AS can honour it.",
+        "The agent token's ps claim tells the ecosystem which Person Server represents this agent."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST resource token to PS /token",
+      "method": "POST",
+      "url": "https://ps.example/token",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCw:"
+      },
+      "request_body": {
+        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiNzliZTNhMmItNGYzMy00YTU1LTgxNjktYTk0ZGU4NGU5N2VlIiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiJ2RTVTZEN0TTRyMGNOMGNZMXI0RlZjWlh6ZjRvVjFBYTZqVGE5aGRrUE13Iiwic2NvcGUiOiJyZWFkIiwiaWF0IjoxNzc2MjIzOTMzLCJleHAiOjE3NzYyMjQ1MzN9.yE5bZijB_SspIDIzOVnecGJNLS8VdY2ACgGJXV228hc_EFItUZeGal_x4TL9MDStrLriwmCRfyVuY-0t-t1AAA"
+      },
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "status": "accepted",
+        "next": "ps_federates_to_as"
+      },
+      "tokens": [
+        {
+          "name": "Resource Token",
+          "typ": "aa-resource+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "resource-key-1",
+            "typ": "aa-resource+jwt"
+          },
+          "payload": {
+            "iss": "https://api.example",
+            "aud": "https://as.example",
+            "dwk": "aauth-resource.json",
+            "jti": "ec12c052-ab17-49e1-88d3-5e2317ba82c4",
+            "agent": "aauth:local@agent.example",
+            "agent_jkt": "tcP75aIbpvVmzZ0P-LIZeoLua8SuE8RGM4tO_2OkRpg",
+            "scope": "read",
+            "iat": 1776222894,
+            "exp": 1776223494
+          },
+          "signature_b64": "6QznE3sOp9JX6RY4a0olsuHZSIKAn5t4HwyxK9M8fOOIW9D2nQGR18uObb97Ui6BZdb0F8gTP7BqI5BO0WRsDA"
+        }
+      ],
+      "signature": null,
+      "annotations": [
+        "Agent sends the resource token to its Person Server (discovered from agent's ps claim).",
+        "PS discovers the AS from the resource token's aud claim.",
+        "The PS does not mint the auth token itself in this mode; it federates to the AS next."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 3,
+      "from": "ps",
+      "to": "as",
+      "label": "PS federates to AS /token",
+      "method": "POST",
+      "url": "https://as.example/token",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwks_uri;id=\"https://ps.example\";kid=\"ps-key-1\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA:"
+      },
+      "request_body": {
+        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiNzliZTNhMmItNGYzMy00YTU1LTgxNjktYTk0ZGU4NGU5N2VlIiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiJ2RTVTZEN0TTRyMGNOMGNZMXI0RlZjWlh6ZjRvVjFBYTZqVGE5aGRrUE13Iiwic2NvcGUiOiJyZWFkIiwiaWF0IjoxNzc2MjIzOTMzLCJleHAiOjE3NzYyMjQ1MzN9.yE5bZijB_SspIDIzOVnecGJNLS8VdY2ACgGJXV228hc_EFItUZeGal_x4TL9MDStrLriwmCRfyVuY-0t-t1AAA",
+        "agent_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpsb2NhbEAxMjcuMC4wLjEiLCJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwianRpIjoiNzUzZjBhZTctZTBiNS00OTJmLTg0ZDgtYmM4MjAxNzIwNGM0IiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlpBVFZPYVBFWV81c2h3eW1BZUIyRV81elhyNnNMcTlhZlB6c0ZmTVV5ajgiLCJraWQiOiJhZ2VudC1rZXktMSJ9fSwiaWF0IjoxNzc2MjIzOTMzLCJleHAiOjE3NzYyMjc1MzMsInBzIjoiaHR0cDovLzEyNy4wLjAuMTo4MDA0In0.E5kKVbtSiVMq6bsPQM-3rSQrZkMLCcPLzfYtyUWhHFE_9UbjzGjPag2cZcXkFhH2lQsTwOb8Zch-ygZymnazBA"
+      },
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImU0ZTgxMTA4LWRkNDMtNDUwYy1hNmU1LTkwY2NmOTkxYmFkMSIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJaQVRWT2FQRVlfNXNod3ltQWVCMkVfNXpYcjZzTHE5YWZQenNGZk1VeWo4Iiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMzkzMywiZXhwIjoxNzc2MjI3NTMzLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIn0.gV4R5tPoUy0K92DWOaJaEL7bkh36AARIMC2YuOnzWQIHRi4eq7jRGwihsScNsWkfp12Il7R7CZ6E4Vw5MUQLAQ"
+      },
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494,
+            "ps": "https://ps.example"
+          },
+          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+        },
+        {
+          "name": "Auth Token",
+          "typ": "aa-auth+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "as-key-1",
+            "typ": "aa-auth+jwt"
+          },
+          "payload": {
+            "iss": "https://as.example",
+            "aud": "https://api.example",
+            "dwk": "aauth-access.json",
+            "jti": "d3f7c2e1-b94d-7065-f2a1-a8f3c2e1b94d",
+            "agent": "aauth:local@agent.example",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "act": {
+              "sub": "aauth:local@agent.example"
+            },
+            "sub": "pairwise-u7f3a9c2",
+            "scope": "read",
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "fA3kP9sXqR7mV2nL8wY5cB1dT6uE0hI4jZ3oN9aQ2vG7sM5rK8xP0lW4yD6cF1i"
+        }
+      ],
+      "signature": null,
+      "annotations": [
+        "PS signs with its own identity (sig=jwks_uri with PS identifier).",
+        "AS verifies PS is in its trusted_person_servers list.",
+        "AS verifies agent_jkt in resource token matches agent token cnf.jwk thumbprint.",
+        "Auth token: iss=AS, aud=resource, agent=aauth:local@agent.example, cnf.jwk=agent key, act.sub=agent URI."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 4,
+      "from": "as",
+      "to": "ps",
+      "label": "AS returns auth token \u2192 PS \u2192 Agent",
+      "method": "POST",
+      "url": "https://ps.example/token",
+      "request_headers": {
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImU0ZTgxMTA4LWRkNDMtNDUwYy1hNmU1LTkwY2NmOTkxYmFkMSIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJaQVRWT2FQRVlfNXNod3ltQWVCMkVfNXpYcjZzTHE5YWZQenNGZk1VeWo4Iiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMzkzMywiZXhwIjoxNzc2MjI3NTMzLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIn0.gV4R5tPoUy0K92DWOaJaEL7bkh36AARIMC2YuOnzWQIHRi4eq7jRGwihsScNsWkfp12Il7R7CZ6E4Vw5MUQLAQ"
+      },
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImU0ZTgxMTA4LWRkNDMtNDUwYy1hNmU1LTkwY2NmOTkxYmFkMSIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJaQVRWT2FQRVlfNXNod3ltQWVCMkVfNXpYcjZzTHE5YWZQenNGZk1VeWo4Iiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMzkzMywiZXhwIjoxNzc2MjI3NTMzLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIn0.gV4R5tPoUy0K92DWOaJaEL7bkh36AARIMC2YuOnzWQIHRi4eq7jRGwihsScNsWkfp12Il7R7CZ6E4Vw5MUQLAQ"
+      },
+      "tokens": [
+        {
+          "name": "Auth Token",
+          "typ": "aa-auth+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "as-key-1",
+            "typ": "aa-auth+jwt"
+          },
+          "payload": {
+            "iss": "https://as.example",
+            "aud": "https://api.example",
+            "dwk": "aauth-access.json",
+            "jti": "d3f7c2e1-b94d-7065-f2a1-a8f3c2e1b94d",
+            "agent": "aauth:local@agent.example",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "act": {
+              "sub": "aauth:local@agent.example"
+            },
+            "sub": "pairwise-u7f3a9c2",
+            "scope": "read",
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "fA3kP9sXqR7mV2nL8wY5cB1dT6uE0hI4jZ3oN9aQ2vG7sM5rK8xP0lW4yD6cF1i"
+        }
+      ],
+      "signature": null,
+      "annotations": [
+        "The AS sends the aa-auth+jwt back to the Person Server.",
+        "The PS returns the same auth token to the agent without altering it.",
+        "This keeps token issuance at the AS while the PS remains the federation intermediary."
+      ],
+      "is_response": true
+    },
+    {
+      "step": 5,
+      "from": "agent",
+      "to": "resource",
+      "label": "Retry with auth token \u2192 200",
+      "method": "GET",
+      "url": "https://api.example/data-auth",
+      "request_headers": {
+        "Host": "api.example",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "message": "Access granted!",
+        "agent": "aauth:local@agent.example",
+        "scope": "read"
+      },
+      "tokens": [
+        {
+          "name": "Auth Token",
+          "typ": "aa-auth+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "as-key-1",
+            "typ": "aa-auth+jwt"
+          },
+          "payload": {
+            "iss": "https://as.example",
+            "aud": "https://api.example",
+            "dwk": "aauth-access.json",
+            "jti": "d3f7c2e1-b94d-7065-f2a1-a8f3c2e1b94d",
+            "agent": "aauth:local@agent.example",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "act": {
+              "sub": "aauth:local@agent.example"
+            },
+            "sub": "pairwise-u7f3a9c2",
+            "scope": "read",
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "fA3kP9sXqR7mV2nL8wY5cB1dT6uE0hI4jZ3oN9aQ2vG7sM5rK8xP0lW4yD6cF1i"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data-auth\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent presents the AS-issued auth token in the Signature-Key header using sig=jwt.",
+        "Resource verifies: typ=aa-auth+jwt, iss=its own AS, aud=this resource, cnf.jwk matches signing key.",
+        "Resource also verifies act.sub matches the agent identifier.",
+        "Access granted. Full 4-party federation complete."
+      ],
+      "is_response": false
+    }
+  ],
+  "interactive": {
+    "description": "Same 4-party flow, but the AS requires user consent before issuing the auth token. It returns 202 with a pending URL and an interaction URL. The agent polls while the user approves in a browser.",
+    "participants": [
+      {
+        "id": "agent",
+        "label": "Agent",
+        "type": "agent"
+      },
+      {
+        "id": "resource",
+        "label": "Resource",
+        "type": "resource"
+      },
+      {
+        "id": "ps",
+        "label": "Person Server",
+        "type": "person-server"
+      },
+      {
+        "id": "as",
+        "label": "Access Server",
+        "type": "access-server"
+      },
+      {
+        "id": "user",
+        "label": "User",
+        "type": "user"
+      }
+    ],
+    "steps": [
+      {
+        "step": 1,
+        "from": "agent",
+        "to": "resource",
+        "label": "GET /data-auth \u2192 401 + resource token",
+        "method": "GET",
+        "url": "https://api.example/data-auth",
+        "request_headers": {
+          "Host": "api.example",
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFA:"
+        },
+        "request_body": null,
+        "response_status": 401,
+        "response_headers": {
+          "AAuth-Requirement": "requirement=auth_token; resource_token=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlw\u2026\""
+        },
+        "response_body": {
+          "error": "auth_token_required"
+        },
+        "tokens": [
+          {
+            "name": "Resource Token",
+            "typ": "aa-resource+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "resource-key-1",
+              "typ": "aa-resource+jwt"
+            },
+            "payload": {
+              "iss": "https://api.example",
+              "aud": "https://as.example",
+              "dwk": "aauth-resource.json",
+              "jti": "ec12c052-ab17-49e1-88d3-5e2317ba82c4",
+              "agent": "aauth:local@agent.example",
+              "agent_jkt": "tcP75aIbpvVmzZ0P-LIZeoLua8SuE8RGM4tO_2OkRpg",
+              "scope": "read",
+              "iat": 1776222894,
+              "exp": 1776223494
+            },
+            "signature_b64": "6QznE3sOp9JX6RY4a0olsuHZSIKAn5t4HwyxK9M8fOOIW9D2nQGR18uObb97Ui6BZdb0F8gTP7BqI5BO0WRsDA"
+          }
+        ],
+        "signature": {
+          "scheme": "jwt",
+          "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data-auth\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "covered_components": [
+            "@method",
+            "@authority",
+            "@path",
+            "signature-key"
+          ]
+        },
+        "annotations": [
+          "Resource issues 401 + resource token challenge.",
+          "The flow starts like Phase 3, but the AS will defer issuance pending user consent."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 2,
+        "from": "agent",
+        "to": "ps",
+        "label": "POST resource token to PS",
+        "method": "POST",
+        "url": "https://ps.example/token",
+        "request_headers": {
+          "Content-Type": "application/json",
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFQ:"
+        },
+        "request_body": {
+          "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiMTJhNjM2ZDAtYTg1Mi00MGE5LTkxMjQtMjA4N2UwZDdmMDY2IiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiIxRk53eGhWMDlaMnFneXBaN3dIS0M0bGdhX2c1ekVZdVE0bDlMQlZkc3pnIiwic2NvcGUiOiJyZWFkIHdyaXRlIiwiaWF0IjoxNzc2MjI0NTAxLCJleHAiOjE3NzYyMjUxMDF9.eLx4tCiLfz1HSXlmxSgPw1578Zbay-91vfiRog00OsBz7El98IWlSqBQG7Qi37zu-7laTJz6Q5md5plgO3_vDw"
+        },
+        "response_status": 202,
+        "response_headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": {
+          "status": "ps_forwarding_to_as"
+        },
+        "tokens": [
+          {
+            "name": "Resource Token",
+            "typ": "aa-resource+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "resource-key-1",
+              "typ": "aa-resource+jwt"
+            },
+            "payload": {
+              "iss": "https://api.example",
+              "aud": "https://as.example",
+              "dwk": "aauth-resource.json",
+              "jti": "ec12c052-ab17-49e1-88d3-5e2317ba82c4",
+              "agent": "aauth:local@agent.example",
+              "agent_jkt": "tcP75aIbpvVmzZ0P-LIZeoLua8SuE8RGM4tO_2OkRpg",
+              "scope": "read",
+              "iat": 1776222894,
+              "exp": 1776223494
+            },
+            "signature_b64": "6QznE3sOp9JX6RY4a0olsuHZSIKAn5t4HwyxK9M8fOOIW9D2nQGR18uObb97Ui6BZdb0F8gTP7BqI5BO0WRsDA"
+          }
+        ],
+        "signature": null,
+        "annotations": [
+          "Agent hands the resource token to its Person Server.",
+          "The PS will federate to the AS on the agent's behalf in the next step."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 3,
+        "from": "ps",
+        "to": "as",
+        "label": "PS federates to AS /token",
+        "method": "POST",
+        "url": "https://as.example/token",
+        "request_headers": {
+          "Content-Type": "application/json",
+          "Signature-Key": "sig=jwks_uri;id=\"https://ps.example\";kid=\"ps-key-1\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg:"
+        },
+        "request_body": {
+          "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiMTJhNjM2ZDAtYTg1Mi00MGE5LTkxMjQtMjA4N2UwZDdmMDY2IiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiIxRk53eGhWMDlaMnFneXBaN3dIS0M0bGdhX2c1ekVZdVE0bDlMQlZkc3pnIiwic2NvcGUiOiJyZWFkIHdyaXRlIiwiaWF0IjoxNzc2MjI0NTAxLCJleHAiOjE3NzYyMjUxMDF9.eLx4tCiLfz1HSXlmxSgPw1578Zbay-91vfiRog00OsBz7El98IWlSqBQG7Qi37zu-7laTJz6Q5md5plgO3_vDw",
+          "agent_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpsb2NhbEAxMjcuMC4wLjEiLCJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwianRpIjoiYjJhZWVlMTMtYTZkZS00YjJkLWJmM2QtMzMxOTRlZDNmMmYxIiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6InJJV3lBUnIwVzB4cXNVY3F0OUdxRGVtVHBLN1J3V2xEMEpiTl9aWWJnb0EiLCJraWQiOiJhZ2VudC1rZXktMSJ9fSwiaWF0IjoxNzc2MjI0NTAxLCJleHAiOjE3NzYyMjgxMDEsInBzIjoiaHR0cDovLzEyNy4wLjAuMTo4MDA0In0.BqxQ5IyGvqEuWKsBcFi5629n1eJsZwuuD7XTDqf_gCuqLYTzwn9p7hjTfP3OTJOiNieSfZ0I4AIzb07g79x3Cg"
+        },
+        "response_status": 202,
+        "response_headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": {
+          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
+          "interaction": "https://as.example/interact?code=a3f8c2d1e94b7065",
+          "expires_in": 600
+        },
+        "tokens": [
+          {
+            "name": "Resource Token",
+            "typ": "aa-resource+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "resource-key-1",
+              "typ": "aa-resource+jwt"
+            },
+            "payload": {
+              "iss": "https://api.example",
+              "aud": "https://as.example",
+              "dwk": "aauth-resource.json",
+              "jti": "ec12c052-ab17-49e1-88d3-5e2317ba82c4",
+              "agent": "aauth:local@agent.example",
+              "agent_jkt": "tcP75aIbpvVmzZ0P-LIZeoLua8SuE8RGM4tO_2OkRpg",
+              "scope": "read",
+              "iat": 1776222894,
+              "exp": 1776223494
+            },
+            "signature_b64": "6QznE3sOp9JX6RY4a0olsuHZSIKAn5t4HwyxK9M8fOOIW9D2nQGR18uObb97Ui6BZdb0F8gTP7BqI5BO0WRsDA"
+          },
+          {
+            "name": "Agent Token",
+            "typ": "aa-agent+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "agent-key-1",
+              "typ": "aa-agent+jwt"
+            },
+            "payload": {
+              "iss": "https://agent.example",
+              "sub": "aauth:local@agent.example",
+              "dwk": "aauth-agent.json",
+              "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+              "cnf": {
+                "jwk": {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                  "kid": "agent-key-1"
+                }
+              },
+              "iat": 1776222894,
+              "exp": 1776226494,
+              "ps": "https://ps.example"
+            },
+            "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+          }
+        ],
+        "signature": null,
+        "annotations": [
+          "PS signs with its own jwks_uri identity while calling the AS token endpoint.",
+          "AS validates the trusted PS, inspects the resource token, and defers the decision.",
+          "Instead of minting an auth token immediately, the AS returns 202 + pending URL + interaction URL."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 4,
+        "from": "as",
+        "to": "ps",
+        "label": "AS returns 202 \u2192 PS \u2192 Agent",
+        "method": "POST",
+        "url": "https://ps.example/token",
+        "request_headers": {
+          "Content-Type": "application/json"
+        },
+        "request_body": {
+          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
+          "interaction": "https://as.example/interact?code=a3f8c2d1e94b7065",
+          "expires_in": 600
+        },
+        "response_status": 202,
+        "response_headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": {
+          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
+          "interaction": "https://as.example/interact?code=a3f8c2d1e94b7065",
+          "expires_in": 600
+        },
+        "tokens": [],
+        "signature": null,
+        "annotations": [
+          "The PS propagates the deferred response back to the agent unchanged.",
+          "This is the body the UI needs to highlight: {pending, interaction, expires_in}.",
+          "pending: https://as.example/pending/a3f8c2d1e94b7065",
+          "interaction: https://as.example/interact?code=a3f8c2d1e94b7065"
+        ],
+        "is_response": false
+      },
+      {
+        "step": 5,
+        "from": "agent",
+        "to": "ps",
+        "label": "Poll pending URL \u2192 202 still pending",
+        "method": "GET",
+        "url": "https://as.example/pending/a3f8c2d1e94b7065",
+        "request_headers": {
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw:"
+        },
+        "request_body": null,
+        "response_status": 202,
+        "response_headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": {
+          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
+          "status": "waiting_for_user"
+        },
+        "tokens": [],
+        "signature": null,
+        "annotations": [
+          "The agent can poll immediately, but the request is still waiting on user consent.",
+          "This gives the second 202 in the 202 \u2192 202 \u2192 200 progression."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 6,
+        "from": "user",
+        "to": "as",
+        "label": "User opens interaction URL \u2192 grants consent",
+        "method": "GET",
+        "url": "https://as.example/interact?code=a3f8c2d1e94b7065",
+        "request_headers": {
+          "Cookie": "session=abc123"
+        },
+        "request_body": null,
+        "response_status": 200,
+        "response_headers": {
+          "Content-Type": "text/html"
+        },
+        "response_body": "<div class=\"consent-page\"><h1>Approve Agent Access</h1><p>Agent: https://agent.example</p><p>Resource: https://api.example/data-auth</p><p>Scope: read write</p><button>Approve</button></div>",
+        "tokens": [],
+        "signature": null,
+        "annotations": [
+          "AS renders a consent page summarizing the requesting agent, resource, and scope.",
+          "The user authenticates and approves the request in the browser.",
+          "Once approved, the pending request transitions to a token-ready state."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 7,
+        "from": "agent",
+        "to": "ps",
+        "label": "Poll pending URL \u2192 200 + auth token",
+        "method": "GET",
+        "url": "https://as.example/pending/a3f8c2d1e94b7065",
+        "request_headers": {
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:GBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGA:"
+        },
+        "request_body": null,
+        "response_status": 200,
+        "response_headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": {
+          "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImJmMDE2ZjllLWY1NjMtNGY5OS1iMGE4LTIwZjM2YjM0NWQ4ZiIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJySVd5QVJyMFcweHFzVWNxdDlHcURlbVRwSzdSd1dsRDBKYk5fWlliZ29BIiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyNDUwMSwiZXhwIjoxNzc2MjI4MTAxLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIHdyaXRlIn0.AP2xZePKyFvqtR8xFI4P0LnvuEjAFjONvEQRPLPKmDicNRjbOt9kotMUrNCTFKI6UMRlXw4CPCITdxMJFbywCw"
+        },
+        "tokens": [
+          {
+            "name": "Auth Token",
+            "typ": "aa-auth+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "as-key-1",
+              "typ": "aa-auth+jwt"
+            },
+            "payload": {
+              "iss": "https://as.example",
+              "aud": "https://api.example",
+              "dwk": "aauth-access.json",
+              "jti": "d3f7c2e1-b94d-7065-f2a1-a8f3c2e1b94d",
+              "agent": "aauth:local@agent.example",
+              "cnf": {
+                "jwk": {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                  "kid": "agent-key-1"
+                }
+              },
+              "act": {
+                "sub": "aauth:local@agent.example"
+              },
+              "sub": "pairwise-u7f3a9c2",
+              "scope": "read",
+              "iat": 1776222894,
+              "exp": 1776226494
+            },
+            "signature_b64": "fA3kP9sXqR7mV2nL8wY5cB1dT6uE0hI4jZ3oN9aQ2vG7sM5rK8xP0lW4yD6cF1i"
+          }
+        ],
+        "signature": null,
+        "annotations": [
+          "After approval, the next poll returns 200 with the AS-issued auth token.",
+          "The auth token still binds the agent key via cnf.jwk and records act.sub as the requesting agent."
+        ],
+        "is_response": false
+      },
+      {
+        "step": 8,
+        "from": "agent",
+        "to": "resource",
+        "label": "Retry with auth token \u2192 200",
+        "method": "GET",
+        "url": "https://api.example/data-auth",
+        "request_headers": {
+          "Host": "api.example",
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ:"
+        },
+        "request_body": null,
+        "response_status": 200,
+        "response_headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": {
+          "message": "Access granted!",
+          "scope": "read write"
+        },
+        "tokens": [
+          {
+            "name": "Auth Token",
+            "typ": "aa-auth+jwt",
+            "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+            "header": {
+              "alg": "EdDSA",
+              "kid": "as-key-1",
+              "typ": "aa-auth+jwt"
+            },
+            "payload": {
+              "iss": "https://as.example",
+              "aud": "https://api.example",
+              "dwk": "aauth-access.json",
+              "jti": "d3f7c2e1-b94d-7065-f2a1-a8f3c2e1b94d",
+              "agent": "aauth:local@agent.example",
+              "cnf": {
+                "jwk": {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                  "kid": "agent-key-1"
+                }
+              },
+              "act": {
+                "sub": "aauth:local@agent.example"
+              },
+              "sub": "pairwise-u7f3a9c2",
+              "scope": "read",
+              "iat": 1776222894,
+              "exp": 1776226494
+            },
+            "signature_b64": "fA3kP9sXqR7mV2nL8wY5cB1dT6uE0hI4jZ3oN9aQ2vG7sM5rK8xP0lW4yD6cF1i"
+          }
+        ],
+        "signature": {
+          "scheme": "jwt",
+          "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data-auth\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
+          "covered_components": [
+            "@method",
+            "@authority",
+            "@path",
+            "signature-key"
+          ]
+        },
+        "annotations": [
+          "Agent presents the AS-issued auth token in the Signature-Key header using sig=jwt.",
+          "Resource verifies: typ=aa-auth+jwt, iss=its own AS, aud=this resource, cnf.jwk matches signing key.",
+          "Resource also verifies act.sub matches the agent identifier.",
+          "Access granted. Full 4-party federation complete."
+        ],
+        "is_response": false
+      }
+    ],
+    "token_flow": [
+      {
+        "token": "resource-token",
+        "label": "Resource Token",
+        "tokenType": "aa-resource+jwt",
+        "accent": "resource",
+        "events": [
+          {
+            "step": 1,
+            "participant": "resource",
+            "label": "Issued in 401 challenge",
+            "kind": "issued"
+          },
+          {
+            "step": 2,
+            "participant": "agent",
+            "label": "Forwarded to the PS",
+            "kind": "forwarded"
+          },
+          {
+            "step": 3,
+            "participant": "ps",
+            "label": "Presented to the AS",
+            "kind": "presented"
+          }
+        ]
+      },
+      {
+        "token": "agent-token",
+        "label": "Agent Token",
+        "tokenType": "aa-agent+jwt",
+        "accent": "agent",
+        "events": [
+          {
+            "step": 3,
+            "participant": "ps",
+            "label": "Used to prove the agent's PS binding",
+            "kind": "presented"
+          }
+        ]
+      },
+      {
+        "token": "auth-token",
+        "label": "Auth Token",
+        "tokenType": "aa-auth+jwt",
+        "accent": "auth",
+        "events": [
+          {
+            "step": 7,
+            "participant": "as",
+            "label": "Released after user approval",
+            "kind": "issued"
+          },
+          {
+            "step": 8,
+            "participant": "agent",
+            "label": "Presented to the resource",
+            "kind": "presented"
+          }
+        ]
+      }
+    ],
+    "deferred_timeline": {
+      "title": "Deferred Authorization Polling",
+      "events": [
+        {
+          "step": 4,
+          "status": 202,
+          "label": "Initial deferred response",
+          "detail": "AS returns pending and interaction URLs."
+        },
+        {
+          "step": 5,
+          "status": 202,
+          "label": "First poll",
+          "detail": "User has not approved yet; keep polling the pending URL."
+        },
+        {
+          "step": 7,
+          "status": 200,
+          "label": "Approved",
+          "detail": "After consent, the next poll returns the auth token."
+        }
+      ]
+    }
+  }
+}

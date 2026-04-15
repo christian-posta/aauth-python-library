@@ -1,0 +1,96 @@
+{
+  "id": "identity-based",
+  "title": "Identity-Based Access",
+  "description": "The simplest resource access mode. The agent signs the request with its agent token (sig=jwt), the resource verifies the signature by resolving the agent server's JWKS via the token's iss and dwk claims, and makes an access decision based on agent identity alone \u2014 no token exchange, no PS, no AS.",
+  "spec_section": "\u00a7 Identity-Based Access",
+  "category": "access",
+  "demo_phase": null,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "resource",
+      "label": "Resource",
+      "type": "resource"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "resource",
+      "label": "Signed GET /data (sig=jwt) \u2192 resource verifies agent token \u2192 200",
+      "method": "GET",
+      "url": "https://api.example/data",
+      "request_headers": {
+        "Host": "api.example",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQ:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "message": "Access granted based on agent identity!",
+        "agent": "https://agent.example",
+        "jkt": "5j5WMuITu8-cV1RdClUeNgnSg3aLJpCYiFvzcwDgYhI",
+        "policy_match": "agent in allowed_agents"
+      },
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent presents its agent token in the Signature-Key header using sig=jwt.",
+        "Resource resolves the token: fetches agent.example/.well-known/aauth-agent.json, verifies JWT signature, extracts cnf.jwk.",
+        "Resource confirms the HTTP signature was made with the key in cnf.jwk.",
+        "Resource checks its internal policy \u2014 this agent identifier is in the allowed list.",
+        "Access granted. No PS, no AS, no token exchange \u2014 pure cryptographic identity."
+      ],
+      "is_response": false
+    }
+  ]
+}

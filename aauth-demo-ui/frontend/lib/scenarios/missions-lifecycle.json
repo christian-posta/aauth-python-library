@@ -1,0 +1,177 @@
+{
+  "id": "missions-lifecycle",
+  "title": "Mission Proposal & Approval",
+  "description": "The agent proposes a mission to the Person Server: a markdown description of what it intends to accomplish, plus a list of tools it will use. The PS approves and returns an AAuth-Mission header containing the approver URL and an s256 (SHA-256 hash of the mission blob).",
+  "spec_section": "\u00a7 Missions",
+  "category": "missions",
+  "demo_phase": 5,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "ps",
+      "label": "Person Server",
+      "type": "person-server"
+    }
+  ],
+  "mission_blob": {
+    "title": "Approved Mission Blob",
+    "description": "Mission proposal approved by the Person Server.",
+    "markdown": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
+    "tools": [
+      {
+        "name": "FeedbackReader",
+        "description": "Read customer feedback records"
+      },
+      {
+        "name": "ReportWriter",
+        "description": "Write the summary report to the shared drive"
+      }
+    ],
+    "approver": "https://ps.example",
+    "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+    "capabilities": [
+      "clarification",
+      "interaction",
+      "tool-approval"
+    ]
+  },
+  "s256_chain": [
+    {
+      "label": "Mission Proposal Body",
+      "source": "POST /mission body",
+      "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+      "detail": "The agent computes the canonical mission blob bytes that will be approved."
+    },
+    {
+      "label": "AAuth-Mission Header",
+      "source": "PS response header",
+      "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+      "detail": "The PS returns approver and s256 so later requests can reference the exact mission blob."
+    },
+    {
+      "label": "Client Verification",
+      "source": "local hash check",
+      "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+      "detail": "The agent recomputes SHA-256 over the returned blob bytes and confirms the value matches."
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "ps",
+      "label": "Discover PS metadata",
+      "method": "GET",
+      "url": "https://ps.example/.well-known/aauth-person.json",
+      "request_headers": {
+        "Host": "ps.example"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "person_server": "https://ps.example",
+        "token_endpoint": "https://ps.example/token",
+        "mission_endpoint": "https://ps.example/mission",
+        "jwks_uri": "https://ps.example/jwks.json"
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Agent discovers the PS's mission_endpoint from well-known metadata.",
+        "mission_endpoint is where the agent POSTs mission proposals."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST mission proposal to /mission",
+      "method": "POST",
+      "url": "https://ps.example/mission",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "AAuth-Capabilities": "clarification, interaction",
+        "Signature-Key": "sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"content-digest\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:KCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKA:"
+      },
+      "request_body": {
+        "description": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
+        "tools": [
+          {
+            "name": "FeedbackReader",
+            "description": "Read customer feedback records"
+          },
+          {
+            "name": "ReportWriter",
+            "description": "Write the summary report to the shared drive"
+          }
+        ]
+      },
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json",
+        "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0\"",
+        "AAuth-Capabilities": "clarification, interaction, tool-approval"
+      },
+      "response_body": {
+        "description": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
+        "tools": [
+          {
+            "name": "FeedbackReader",
+            "description": "Read customer feedback records"
+          },
+          {
+            "name": "ReportWriter",
+            "description": "Write the summary report to the shared drive"
+          }
+        ]
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Agent sends mission description (Markdown) + tool list.",
+        "PS approves and responds with body = mission blob + AAuth-Mission header.",
+        "s256 = SHA-256(blob_bytes) = R9kNpXeErMQ1Jvk_vxYUp3YE\u2026",
+        "Agent must store this s256 and present it in future requests as AAuth-Mission.",
+        "Request AAuth-Capabilities advertises agent support; response capabilities reflect the PS-approved set."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 3,
+      "from": "agent",
+      "to": "ps",
+      "label": "Verify s256 matches blob",
+      "method": "GET",
+      "url": "(client-side verification)",
+      "request_headers": {},
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {},
+      "response_body": {
+        "verification": "SHA-256(response_body_bytes) == s256 header value",
+        "blob_bytes_preview": "{\"description\":\"# Analyze Q2 Customer Feedback\\n\\nRead customer \u2026",
+        "computed_s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+        "header_s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+        "match": true
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Agent verifies: SHA-256(response body bytes) == s256 from AAuth-Mission header.",
+        "This binds the mission text to an immutable fingerprint.",
+        "Agent caches: approver URL + s256 for use in resource requests."
+      ],
+      "is_response": false
+    }
+  ]
+}

@@ -1,0 +1,227 @@
+{
+  "id": "clarification",
+  "title": "Clarification Chat During Consent",
+  "description": "During user consent, the Access Server poses a clarification question to the agent. If the agent declares clarification support via AAuth-Capabilities, it responds to the question before the user grants consent. If unsupported, the AS skips the clarification step.",
+  "spec_section": "\u00a7 Clarification",
+  "category": "advanced",
+  "demo_phase": 8,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "resource",
+      "label": "Resource",
+      "type": "resource"
+    },
+    {
+      "id": "as",
+      "label": "Access Server",
+      "type": "access-server"
+    },
+    {
+      "id": "user",
+      "label": "User",
+      "type": "user"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "resource",
+      "label": "Request resource \u2192 401 + resource token",
+      "method": "GET",
+      "url": "https://api.example/data",
+      "request_headers": {
+        "Signature-Key": "sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWg:",
+        "AAuth-Capabilities": "clarification, interaction"
+      },
+      "request_body": null,
+      "response_status": 401,
+      "response_headers": {
+        "AAuth-Requirement": "requirement=auth_token; resource_token=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlw\u2026\""
+      },
+      "response_body": {
+        "error": "auth_token_required"
+      },
+      "tokens": [
+        {
+          "name": "Resource Token",
+          "typ": "aa-resource+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiZDA3YTc1OWUtMjFmZi00YmE1LThkZGUtN2Y0OTE3YmU4NzQxIiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiJScC1zZlZGRVl5MkFPdHE1c3B3ODRTSWJlb0Y2YzJYdnZYamV4TjF1WjBVIiwic2NvcGUiOiJyZWFkIiwiaWF0IjoxNzc2MjIyODk0LCJleHAiOjE3NzYyMjM0OTR9.ouuGVYcy_PGnxVaY70RR_QM5bT8et2UVqt1o4T2L_ztYtW584ahvqE2jQGHstuQhFb8CrU8p81-JWpxFHu3SCw",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "as-key-1",
+            "typ": "aa-resource+jwt"
+          },
+          "payload": {
+            "iss": "https://api.example",
+            "aud": "https://as.example",
+            "dwk": "aauth-resource.json",
+            "jti": "d07a759e-21ff-4ba5-8dde-7f4917be8741",
+            "agent": "https://agent.example",
+            "agent_jkt": "Rp-sfVFEYy2AOtq5spw84SIbeoF6c2XvvXjexN1uZ0U",
+            "scope": "read",
+            "iat": 1776222894,
+            "exp": 1776223494
+          },
+          "signature_b64": "ouuGVYcy_PGnxVaY70RR_QM5bT8et2UVqt1o4T2L_ztYtW584ahvqE2jQGHstuQhFb8CrU8p81-JWpxFHu3SCw"
+        }
+      ],
+      "signature": null,
+      "annotations": [
+        "Agent declares AAuth-Capabilities: clarification \u2014 signals it can respond to questions."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "as",
+      "label": "POST resource token \u2192 202 + clarification question",
+      "method": "POST",
+      "url": "https://as.example/token",
+      "request_headers": {
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiZDA3YTc1OWUtMjFmZi00YmE1LThkZGUtN2Y0OTE3YmU4NzQxIiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiJScC1zZlZGRVl5MkFPdHE1c3B3ODRTSWJlb0Y2YzJYdnZYamV4TjF1WjBVIiwic2NvcGUiOiJyZWFkIiwiaWF0IjoxNzc2MjIyODk0LCJleHAiOjE3NzYyMjM0OTR9.ouuGVYcy_PGnxVaY70RR_QM5bT8et2UVqt1o4T2L_ztYtW584ahvqE2jQGHstuQhFb8CrU8p81-JWpxFHu3SCw"
+      },
+      "response_status": 202,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "pending": "https://as.example/pending/c7a2f1b4e3d09865",
+        "requirement": "clarification",
+        "question": "What specific data will you read from this resource, and why?"
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "AS returns 202 + a clarification question instead of an interaction URL.",
+        "Agent must answer before AS will present consent to the user."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 3,
+      "from": "agent",
+      "to": "as",
+      "label": "POST clarification response to pending URL",
+      "method": "POST",
+      "url": "https://as.example/pending/c7a2f1b4e3d09865",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbWw:"
+      },
+      "request_body": {
+        "clarification_response": "I will read the Q2 sales summary report to prepare an executive briefing. No PII will be accessed."
+      },
+      "response_status": 202,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "pending": "https://as.example/pending/c7a2f1b4e3d09865",
+        "interaction": "https://as.example/interact?code=c7a2f1b4e3d09865",
+        "note": "Clarification recorded. User consent required."
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Agent posts its answer to the pending URL.",
+        "AS records the clarification and now presents enhanced consent context to the user.",
+        "User sees: agent identity + scope + clarification Q&A."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 4,
+      "from": "user",
+      "to": "as",
+      "label": "User reviews clarification context \u2192 approves",
+      "method": "GET",
+      "url": "https://as.example/interact?code=c7a2f1b4e3d09865",
+      "request_headers": {
+        "Cookie": "session=xyz"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "text/html"
+      },
+      "response_body": "<!-- Consent page shows: agent ID, scope, clarification Q&A. User clicks Approve. -->",
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "User sees the clarification answer as part of the consent context."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 5,
+      "from": "agent",
+      "to": "as",
+      "label": "Poll pending URL \u2192 auth token",
+      "method": "GET",
+      "url": "https://as.example/pending/c7a2f1b4e3d09865",
+      "request_headers": {
+        "Signature-Key": "sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXA:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6IjA5OWJmODc5LTg4ODItNDQ3NS1iMThiLTY0ZTI4MzM2NjM5NCIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJIMmhReDVfMF9nNzBBQ3p0ODNUclRvMzl0dG5BTnhVUXVWdzUwYWFncWJnIiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMjg5NCwiZXhwIjoxNzc2MjI2NDk0LCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsInNjb3BlIjoicmVhZCJ9.Z7e9a9nFi5tpTCbJUEEo6DKrgcpjjCuonj7D-dRD5Sg6NZg2D6xdnUf8L708uigaxeUEYC060zuClb43xdFHAw"
+      },
+      "tokens": [
+        {
+          "name": "Auth Token",
+          "typ": "aa-auth+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6IjA5OWJmODc5LTg4ODItNDQ3NS1iMThiLTY0ZTI4MzM2NjM5NCIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJIMmhReDVfMF9nNzBBQ3p0ODNUclRvMzl0dG5BTnhVUXVWdzUwYWFncWJnIiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMjg5NCwiZXhwIjoxNzc2MjI2NDk0LCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsInNjb3BlIjoicmVhZCJ9.Z7e9a9nFi5tpTCbJUEEo6DKrgcpjjCuonj7D-dRD5Sg6NZg2D6xdnUf8L708uigaxeUEYC060zuClb43xdFHAw",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "as-key-1",
+            "typ": "aa-auth+jwt"
+          },
+          "payload": {
+            "iss": "https://as.example",
+            "aud": "https://api.example",
+            "dwk": "aauth-access.json",
+            "jti": "099bf879-8882-4475-b18b-64e283366394",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "H2hQx5_0_g70ACzt83TrTo39ttnANxUQuVw50aagqbg",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494,
+            "agent": "aauth:local@agent.example",
+            "scope": "read"
+          },
+          "signature_b64": "Z7e9a9nFi5tpTCbJUEEo6DKrgcpjjCuonj7D-dRD5Sg6NZg2D6xdnUf8L708uigaxeUEYC060zuClb43xdFHAw"
+        }
+      ],
+      "signature": null,
+      "annotations": [
+        "User approved \u2014 polling returns auth token."
+      ],
+      "is_response": false
+    }
+  ]
+}

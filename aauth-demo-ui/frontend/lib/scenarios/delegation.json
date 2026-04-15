@@ -1,0 +1,161 @@
+{
+  "id": "delegation",
+  "title": "Agent Tokens (sig=jwt)",
+  "description": "An agent server issues an aa-agent+jwt whose cnf.jwk is the delegate's own public key \u2014 binding the token to the delegate's signing key. The delegate then signs requests using sig=jwt, embedding the agent token in Signature-Key. The resource verifies that the key used to sign matches cnf.jwk in the token, establishing the delegate's identity.",
+  "spec_section": "\u00a7 Agent Tokens / sig=jwt",
+  "category": "signing",
+  "demo_phase": 6,
+  "participants": [
+    {
+      "id": "agent-server",
+      "label": "Agent Server",
+      "type": "agent"
+    },
+    {
+      "id": "delegate",
+      "label": "Delegate",
+      "type": "delegate"
+    },
+    {
+      "id": "resource",
+      "label": "Resource",
+      "type": "resource"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "delegate",
+      "to": "agent-server",
+      "label": "Request agent token (delegate's key in cnf)",
+      "method": "POST",
+      "url": "https://agent.example/delegate/token",
+      "request_headers": {
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "delegate_jwk": {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "OK41bXI2IfSWc_sfpUA1FrIBbZLtb_GOj1S3inS1Fcg",
+          "kid": "delegate-key-1"
+        }
+      },
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "agent_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LXNlcnZlci1rZXktMSIsInR5cCI6ImFhLWFnZW50K2p3dCJ9.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpkZWxlZ2F0ZS0xQDEyNy4wLjAuMSIsImR3ayI6ImFhdXRoLWFnZW50Lmpzb24iLCJqdGkiOiI3YWZlZmRlZC1jYWM2LTRjYTEtOTg1Ni1kNjY1YTE5MDMzMzMiLCJjbmYiOnsiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiT0s0MWJYSTJJZlNXY19zZnBVQTFGcklCYlpMdGJfR09qMVMzaW5TMUZjZyIsImtpZCI6ImRlbGVnYXRlLWtleS0xIn19LCJpYXQiOjE3NzYyMjI4OTQsImV4cCI6MTc3NjIyNjQ5NH0.D8vHslQBE8Aj67fay9Hrad3zKCInlg4k7w5GOOjGhZR4wUxm-Mr9_XzXRUiKwpu2L153ABD-nkvhd1XuLmPiAw"
+      },
+      "tokens": [
+        {
+          "name": "Delegate Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LXNlcnZlci1rZXktMSIsInR5cCI6ImFhLWFnZW50K2p3dCJ9.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpkZWxlZ2F0ZS0xQDEyNy4wLjAuMSIsImR3ayI6ImFhdXRoLWFnZW50Lmpzb24iLCJqdGkiOiI3YWZlZmRlZC1jYWM2LTRjYTEtOTg1Ni1kNjY1YTE5MDMzMzMiLCJjbmYiOnsiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiT0s0MWJYSTJJZlNXY19zZnBVQTFGcklCYlpMdGJfR09qMVMzaW5TMUZjZyIsImtpZCI6ImRlbGVnYXRlLWtleS0xIn19LCJpYXQiOjE3NzYyMjI4OTQsImV4cCI6MTc3NjIyNjQ5NH0.D8vHslQBE8Aj67fay9Hrad3zKCInlg4k7w5GOOjGhZR4wUxm-Mr9_XzXRUiKwpu2L153ABD-nkvhd1XuLmPiAw",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-server-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:delegate-1@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "7afefded-cac6-4ca1-9856-d665a1903333",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "OK41bXI2IfSWc_sfpUA1FrIBbZLtb_GOj1S3inS1Fcg",
+                "kid": "delegate-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "D8vHslQBE8Aj67fay9Hrad3zKCInlg4k7w5GOOjGhZR4wUxm-Mr9_XzXRUiKwpu2L153ABD-nkvhd1XuLmPiAw"
+        }
+      ],
+      "signature": null,
+      "annotations": [
+        "Delegate requests an agent token from the Agent Server.",
+        "Agent Server issues aa-agent+jwt with cnf.jwk = delegate's public key.",
+        "sub = aauth:delegate-1@agent.example (delegate identifier, not agent server).",
+        "The delegate now has a token that asserts its identity and binds its signing key."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "delegate",
+      "to": "resource",
+      "label": "Sign request with sig=jwt (agent token in Signature-Key) \u2192 200",
+      "method": "GET",
+      "url": "https://api.example/data",
+      "request_headers": {
+        "Host": "api.example",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LXNlcnZlci1r\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:D8vHslQBE8Aj67fay9Hrad3zKCInlg4k7w5GOOjGhZR4wUxm-Mr9_XzXRUiKwpu2L153ABD-nkvhd1XuLmPiAw:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "message": "Hello, delegate!",
+        "agent": "aauth:delegate-1@agent.example"
+      },
+      "tokens": [
+        {
+          "name": "Delegate Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LXNlcnZlci1rZXktMSIsInR5cCI6ImFhLWFnZW50K2p3dCJ9.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpkZWxlZ2F0ZS0xQDEyNy4wLjAuMSIsImR3ayI6ImFhdXRoLWFnZW50Lmpzb24iLCJqdGkiOiI3YWZlZmRlZC1jYWM2LTRjYTEtOTg1Ni1kNjY1YTE5MDMzMzMiLCJjbmYiOnsiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiT0s0MWJYSTJJZlNXY19zZnBVQTFGcklCYlpMdGJfR09qMVMzaW5TMUZjZyIsImtpZCI6ImRlbGVnYXRlLWtleS0xIn19LCJpYXQiOjE3NzYyMjI4OTQsImV4cCI6MTc3NjIyNjQ5NH0.D8vHslQBE8Aj67fay9Hrad3zKCInlg4k7w5GOOjGhZR4wUxm-Mr9_XzXRUiKwpu2L153ABD-nkvhd1XuLmPiAw",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-server-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:delegate-1@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "7afefded-cac6-4ca1-9856-d665a1903333",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "OK41bXI2IfSWc_sfpUA1FrIBbZLtb_GOj1S3inS1Fcg",
+                "kid": "delegate-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "D8vHslQBE8Aj67fay9Hrad3zKCInlg4k7w5GOOjGhZR4wUxm-Mr9_XzXRUiKwpu2L153ABD-nkvhd1XuLmPiAw"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LXNlcnZlci1r\u2026\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LXNlcnZlci1r\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Delegate signs with sig=jwt \u2014 the agent token is embedded in Signature-Key.",
+        "Delegate signs with its own private key (matching cnf.jwk inside the agent token).",
+        "Resource extracts the agent token from Signature-Key, fetches the agent server's JWKS to verify the token, then checks that cnf.jwk matches the key that produced the HTTP signature.",
+        "On success the resource knows the delegate's identity: aauth:delegate-1@agent.example."
+      ],
+      "is_response": false
+    }
+  ]
+}

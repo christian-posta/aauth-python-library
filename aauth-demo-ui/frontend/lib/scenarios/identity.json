@@ -1,0 +1,186 @@
+{
+  "id": "identity",
+  "title": "Agent Identity via JWKS (sig=jwks_uri)",
+  "description": "The agent signs requests and includes its identifier URI + key ID in Signature-Key. The resource fetches the agent's JWKS from its well-known endpoint to verify the signature, establishing cryptographic identity \u2014 the resource learns who the agent is.",
+  "spec_section": "\u00a7 Agent Identity",
+  "category": "signing",
+  "demo_phase": 2,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent",
+      "metadata_url": "https://agent.example/.well-known/aauth-agent",
+      "jwks_url": "https://agent.example/jwks.json"
+    },
+    {
+      "id": "resource",
+      "label": "Resource",
+      "type": "resource"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "resource",
+      "label": "Unsigned GET /data-jwks \u2192 401",
+      "method": "GET",
+      "url": "https://api.example/data-jwks",
+      "request_headers": {
+        "Host": "api.example"
+      },
+      "request_body": null,
+      "response_status": 401,
+      "response_headers": {
+        "Accept-Signature": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");sigkey=uri",
+        "WWW-Authenticate": "AAuth"
+      },
+      "response_body": {
+        "error": "signature_required"
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "sigkey=uri challenge: include your agent identifier URI in Signature-Key.",
+        "This enables the resource to fetch your JWKS and discover your identity."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "resource",
+      "label": "Signed GET (sig=jwks_uri) \u2192 resource fetches JWKS",
+      "method": "GET",
+      "url": "https://api.example/data-jwks",
+      "request_headers": {
+        "Host": "api.example",
+        "Signature-Key": "sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "message": "Hello, https://agent.example!",
+        "verified_jkt": "Lr-JK2lDdxXXHHAZuqP7_WHouH4L08_1tM7svoRpLWI"
+      },
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpsb2NhbEAxMjcuMC4wLjEiLCJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwianRpIjoiNGZkOTQ1NzMtODFjNC00MTVjLWEzMmUtOGQxOTA2NjRkMzdhIiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Im1NVEtUVXMxc3liVnF4RWR0cE1rYWhPLTZWeUZGTWkxSkJlN1NBOGhPYTgiLCJraWQiOiJhZ2VudC1rZXktMSJ9fSwiaWF0IjoxNzc2MjIyODk0LCJleHAiOjE3NzYyMjY0OTR9.usKCURjsF74Gi423xuubqNzwbbU_wujxBwtWYFGpf-hZ9GZ2sJ0-sd9aj1Kw7VkFDmiLfwJcOxDvSNhDhx26Bg",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "4fd94573-81c4-415c-a32e-8d190664d37a",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "mMTKTUs1sybVqxEdtpMkahO-6VyFFMi1JBe7SA8hOa8",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494
+          },
+          "signature_b64": "usKCURjsF74Gi423xuubqNzwbbU_wujxBwtWYFGpf-hZ9GZ2sJ0-sd9aj1Kw7VkFDmiLfwJcOxDvSNhDhx26Bg"
+        }
+      ],
+      "signature": {
+        "scheme": "jwks_uri",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data-jwks\n\"signature-key\": sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwks_uri;id=\"https://agent.example\";kid=\"agent-key-1\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Signature-Key contains id=\"https://agent.example\" and kid=\"agent-key-1\".",
+        "Resource resolves /.well-known/aauth-agent on the agent's host to find jwks_uri.",
+        "Resource fetches JWKS, matches key by kid, verifies signature.",
+        "Unlike hwk: resource now knows the full agent identifier \u2014 identity, not pseudonymity."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 3,
+      "from": "resource",
+      "to": "agent",
+      "label": "Fetch /.well-known/aauth-agent",
+      "method": "GET",
+      "url": "https://agent.example/.well-known/aauth-agent",
+      "request_headers": {
+        "Host": "agent.example"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "id": "https://agent.example",
+        "jwks_uri": "https://agent.example/jwks.json",
+        "signing_alg_values_supported": [
+          "ed25519"
+        ],
+        "token_endpoint": "https://agent.example/token"
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Resource discovers the agent's metadata from the id in Signature-Key.",
+        "Metadata contains jwks_uri \u2014 where public keys are published."
+      ],
+      "is_response": true
+    },
+    {
+      "step": 4,
+      "from": "resource",
+      "to": "agent",
+      "label": "Fetch /jwks.json \u2192 verify signature",
+      "method": "GET",
+      "url": "https://agent.example/jwks.json",
+      "request_headers": {
+        "Host": "agent.example"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "mMTKTUs1sybVqxEdtpMkahO-6VyFFMi1JBe7SA8hOa8",
+            "kid": "agent-key-1"
+          }
+        ]
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Resource matches key by kid=\"agent-key-1\" and verifies the HTTP Message Signature.",
+        "JKT = Lr-JK2lDdxXXHHAZuqP7_WHo\u2026 (SHA-256 thumbprint of the public key JWK)."
+      ],
+      "is_response": true
+    }
+  ]
+}

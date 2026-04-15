@@ -1,0 +1,96 @@
+{
+  "id": "pseudonymous",
+  "title": "Pseudonymous Signing (sig=hwk)",
+  "description": "The agent proves possession of a key without revealing its identity. The Ed25519 public key is embedded inline in the Signature-Key header (hwk). The resource verifies the signature but learns nothing about who the agent is.",
+  "spec_section": "\u00a7 HTTP Message Signatures \u2014 Pseudonymous",
+  "category": "signing",
+  "demo_phase": 1,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "resource",
+      "label": "Resource",
+      "type": "resource"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "resource",
+      "label": "Unsigned GET /data \u2192 401",
+      "method": "GET",
+      "url": "https://api.example/data",
+      "request_headers": {
+        "Host": "api.example",
+        "Accept": "application/json"
+      },
+      "request_body": null,
+      "response_status": 401,
+      "response_headers": {
+        "Accept-Signature": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");sigkey=jkt",
+        "WWW-Authenticate": "AAuth",
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "error": "signature_required",
+        "message": "Request must be signed"
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Resource returns 401 + Accept-Signature challenge.",
+        "sigkey=jkt tells the agent: include your public key JWK thumbprint in Signature-Key.",
+        "Covered components (@method, @authority, @path, signature-key) must all be signed."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "resource",
+      "label": "Signed GET (sig=hwk) \u2192 200",
+      "method": "GET",
+      "url": "https://api.example/data",
+      "request_headers": {
+        "Host": "api.example",
+        "Accept": "application/json",
+        "Signature-Key": "sig=hwk;jwk={\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"8SkOhjaTEJPL1PI1Sukzna7LZ4LtzI2lwUxnFyP_fQQ\",\"kid\":\"agent-key-1\"}",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "message": "Hello, pseudonymous agent!",
+        "note": "Agent verified by key possession \u2014 identity unknown to resource"
+      },
+      "tokens": [],
+      "signature": {
+        "scheme": "hwk",
+        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data\n\"signature-key\": sig=hwk;jwk={\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"8SkOhjaTEJPL1PI1Sukzna7LZ4LtzI2lwUxnFyP_fQQ\",\"kid\":\"agent-key-1\"}\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=hwk;jwk={\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"8SkOhjaTEJPL1PI1Sukzna7LZ4LtzI2lwUxnFyP_fQQ\",\"kid\":\"agent-key-1\"}",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent embeds its Ed25519 public key inline in Signature-Key (hwk = inline key).",
+        "No agent identifier is disclosed \u2014 pseudonymous: resource sees 'a key', not 'an agent'.",
+        "Resource verifies the signature against the inline JWK and grants access."
+      ],
+      "is_response": false
+    }
+  ]
+}
