@@ -78,7 +78,7 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Sequence diagram + step controller */}
-        <div className="flex flex-col border-r border-border w-full lg:w-auto lg:min-w-[420px] xl:min-w-[520px]">
+        <div className="flex flex-col border-r border-border w-full lg:w-[420px] xl:w-[520px] shrink-0">
           <div className="flex-1 overflow-auto p-6">
             <SequenceDiagram
               participants={scenario.participants}
@@ -90,9 +90,9 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
 
           {/* Step info */}
           {step && (
-            <div className="border-t border-border px-4 py-3 bg-muted/10 shrink-0">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[10px] font-mono text-muted-foreground">
+            <div className="border-t border-border px-4 py-3 bg-muted/10 shrink-0 overflow-hidden">
+              <div className="flex items-center gap-2 mb-2 min-w-0">
+                <span className="text-[10px] font-mono text-muted-foreground break-all min-w-0">
                   {step.method} {step.url}
                 </span>
                 <span
@@ -126,7 +126,7 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
         </div>
 
         {/* Right: Detail panels (always visible, no tabs) */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto p-6 space-y-4 min-w-0">
           {step && (
             <motion.div
               key={currentStep}

@@ -28,6 +28,7 @@ const NAV: NavSection[] = [
     items: [
       { label: "Pseudonymous (sig=hwk)", href: "/signing/pseudonymous", phase: 1 },
       { label: "Agent Identity (sig=jwks_uri)", href: "/signing/identity", phase: 2 },
+      { label: "Agent Tokens (sig=jwt)", href: "/signing/agent-tokens", phase: 6 },
       { label: "Compare Modes", href: "/signing/compare" },
     ],
   },
@@ -59,8 +60,7 @@ const NAV: NavSection[] = [
     icon: Zap,
     color: "text-orange-400",
     items: [
-      { label: "Agent Delegation", href: "/advanced/delegation", phase: 6 },
-      { label: "Call Chaining", href: "/advanced/call-chaining", phase: 7 },
+{ label: "Call Chaining", href: "/advanced/call-chaining", phase: 7 },
       { label: "Clarification Chat", href: "/advanced/clarification", phase: 8 },
       { label: "Interaction Chaining", href: "/advanced/interaction-chaining", phase: 9 },
     ],
