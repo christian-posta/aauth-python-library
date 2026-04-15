@@ -7,9 +7,9 @@ the resource token to the PS ``token_endpoint``; the PS federates with the resou
 AS and returns an auth token.  The agent presents the auth token to access the resource.
 
 Key spec references:
-- Resource authorization endpoint: AAuth spec Section 8 (Resource Token Issuance)
-- AAuth-Mission header: AAuth spec Section 7 (Missions)
-- PS token endpoint / PS→AS federation: AAuth spec (#access-server-federation)
+- Authorization endpoint request (sig=jwt, ``aauth-mission`` in Signature-Input): SPEC.md §Authorization Endpoint Request
+- AAuth-Mission header: SPEC.md §Missions / §AAuth-Mission Request Header
+- PS token endpoint / PS→AS federation (agent_token via sig=jwt): SPEC.md §PS-to-AS Token Request
 """
 
 import asyncio
@@ -113,6 +113,9 @@ async def main() -> None:
         rt_payload = rt_claims["payload"]
         assert rt_payload.get("mission"), "resource token missing mission claim"
         assert rt_payload["mission"].get("s256") == mission["s256"], "mission s256 mismatch"
+        assert rt_payload["mission"].get("approver") == ps_id.rstrip("/"), "mission.approver must be PS URL"
+        assert rt_payload.get("agent") == agent_id, "resource token agent must match agent iss"
+        assert rt_payload.get("agent_jkt"), "resource token missing agent_jkt"
 
         print("\n" + "=" * 80, file=sys.stderr)
         print("RESOURCE TOKEN (aa-resource+jwt) — decoded", file=sys.stderr)
@@ -141,6 +144,7 @@ async def main() -> None:
         auth_payload = auth_claims["payload"]
         assert auth_payload.get("mission"), "auth token missing mission claim"
         assert auth_payload["mission"].get("s256") == mission["s256"], "auth token mission s256 mismatch"
+        assert auth_payload["mission"].get("approver") == ps_id.rstrip("/"), "auth token mission.approver must be PS URL"
 
         print("\n" + "=" * 80, file=sys.stderr)
         print("AUTH TOKEN (aa-auth+jwt) — decoded", file=sys.stderr)
@@ -158,10 +162,11 @@ async def main() -> None:
         # ------------------------------------------------------------------
         print("\nTEST 3: Access resource with auth token (scheme=jwt)", file=sys.stderr)
 
+        # Access with auth token (scheme=jwt); mission is already in the auth token (no AAuth-Mission header).
         response = await agent.request_resource(
             resource_url=f"{resource_id}/data-auth",
             method="GET",
-            sig_scheme="jwks_uri",
+            sig_scheme="jwt",
         )
         assert response.status_code == 200, (
             f"Expected 200, got {response.status_code}: {response.text}"

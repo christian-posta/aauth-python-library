@@ -70,6 +70,11 @@ def build_signature_base(
                 raise ValueError("content-digest component specified but no body present")
         elif component_name == "signature-key":
             components.append(("signature-key", signature_key_header))
+        elif component_name == "aauth-mission":
+            mission_val = _get_header(headers, "aauth-mission")
+            if not mission_val:
+                raise ValueError("aauth-mission in Signature-Input but AAuth-Mission header missing")
+            components.append(("aauth-mission", mission_val))
         else:
             raise ValueError(f"Unknown component: {component_name}")
 
@@ -93,12 +98,17 @@ def build_signature_base(
 def _determine_covered_components(
     query: Optional[str],
     body: Optional[bytes],
-    additional_components: Optional[List[str]] = None
+    additional_components: Optional[List[str]] = None,
+    *,
+    include_aauth_mission: bool = False,
 ) -> List[str]:
     """Determine covered components based on request structure.
 
     Per AAuth spec Section 15.3, MUST cover:
     - @method, @authority, @path, signature-key
+
+    With ``AAuth-Mission`` on authorization requests, also cover ``aauth-mission`` after
+    ``signature-key`` (spec §Authorization Endpoint Request).
 
     Resources MAY require additional components via additional_signature_components.
 
@@ -106,6 +116,7 @@ def _determine_covered_components(
         query: Query string (None if no query)
         body: Request body (None if no body)
         additional_components: Optional list of additional components to include
+        include_aauth_mission: If True, append ``aauth-mission`` after ``signature-key``.
 
     Returns:
         List of component names
@@ -120,6 +131,9 @@ def _determine_covered_components(
 
     # signature-key MUST always be included
     components.append("signature-key")
+
+    if include_aauth_mission:
+        components.append("aauth-mission")
 
     return components
 

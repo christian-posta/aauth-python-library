@@ -211,7 +211,17 @@ class TestSignatureGeneration:
         )
         assert "content-type" in components
         assert "content-digest" in components
-    
+
+    def test_aauth_mission_component_order(self):
+        """Mission context: signature-key then aauth-mission (spec §Authorization Endpoint Request)."""
+        from aauth.signing.signature_base import _determine_covered_components
+
+        c = _determine_covered_components(None, None, include_aauth_mission=True)
+        assert c[-2:] == ["signature-key", "aauth-mission"]
+        c2 = _determine_covered_components(None, None, include_aauth_mission=False)
+        assert c2[-1] == "signature-key"
+        assert "aauth-mission" not in c2
+
     def test_signature_params_required(self):
         """Test that @signature-params is required in signature base."""
         from aauth.signing.signature_base import build_signature_base

@@ -1631,19 +1631,14 @@ class Resource:
                 content={"error": "invalid_request", "error_description": f"Invalid Signature-Key: {e}"},
             )
 
-        if scheme not in ("jwks", "jwks_uri"):
+        if scheme not in ("jwks", "jwks_uri", "jwt"):
             return JSONResponse(
                 status_code=401,
                 headers={"Accept-Signature": build_accept_signature(SIGKEY_URI)},
-                content={"error": "invalid_request", "error_description": "authorize requires sig=jwks_uri"},
-            )
-
-        agent_id = key_params.get("id")
-        if not agent_id:
-            return JSONResponse(
-                status_code=401,
-                headers={"Accept-Signature": build_accept_signature(SIGKEY_URI)},
-                content={"error": "invalid_request", "error_description": "Could not extract agent identifier"},
+                content={
+                    "error": "invalid_request",
+                    "error_description": "authorize requires sig=jwt, sig=jwks, or sig=jwks_uri",
+                },
             )
 
         target_uri = str(request.url)
@@ -1671,28 +1666,86 @@ class Resource:
                 content={"error": "invalid_signature", "error_description": "Signature verification failed"},
             )
 
-        kid = key_params.get("kid")
-        agent_jwks = self._fetch_jwks_for_agent(agent_id, kid)
-        if not agent_jwks:
-            return JSONResponse(
-                status_code=500,
-                content={"error": "server_error", "error_description": "Failed to fetch agent JWKS"},
-            )
+        if scheme == "jwt":
+            import jwt as jwt_lib
 
-        keys = agent_jwks.get("keys", [])
-        agent_jwk = None
-        for key in keys:
-            if key.get("kid") == kid:
-                agent_jwk = key
-                break
+            jwt_tok = key_params.get("jwt")
+            if not jwt_tok:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Accept-Signature": build_accept_signature(SIGKEY_URI)},
+                    content={"error": "invalid_request", "error_description": "sig=jwt requires jwt param"},
+                )
+            try:
+                payload = jwt_lib.decode(jwt_tok, options={"verify_signature": False})
+            except Exception as e:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": f"Invalid agent JWT: {e}"},
+                )
+            agent_id = payload.get("iss")
+            if not agent_id:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "agent token missing iss"},
+                )
+            cnf = payload.get("cnf") or {}
+            cnf_jwk = cnf.get("jwk")
+            if not cnf_jwk:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "invalid_request", "error_description": "agent token missing cnf.jwk"},
+                )
+            try:
+                agent_jkt = calculate_jwk_thumbprint(cnf_jwk)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "server_error", "error_description": f"cnf.jwk thumbprint: {e}"},
+                )
 
-        if not agent_jwk:
-            return JSONResponse(
-                status_code=500,
-                content={"error": "server_error", "error_description": f"Key with kid={kid} not found in JWKS"},
-            )
+            if mission:
+                ps_claim = payload.get("ps")
+                appr = mission.get("approver")
+                if ps_claim and appr and appr.rstrip("/") != str(ps_claim).rstrip("/"):
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": "invalid_request",
+                            "error_description": "mission.approver does not match agent token ps claim",
+                        },
+                    )
+        else:
+            agent_id = key_params.get("id")
+            if not agent_id:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"Accept-Signature": build_accept_signature(SIGKEY_URI)},
+                    content={"error": "invalid_request", "error_description": "Could not extract agent identifier"},
+                )
 
-        agent_jkt = calculate_jwk_thumbprint(agent_jwk)
+            kid = key_params.get("kid")
+            agent_jwks = self._fetch_jwks_for_agent(agent_id, kid)
+            if not agent_jwks:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "server_error", "error_description": "Failed to fetch agent JWKS"},
+                )
+
+            keys = agent_jwks.get("keys", [])
+            agent_jwk = None
+            for key in keys:
+                if key.get("kid") == kid:
+                    agent_jwk = key
+                    break
+
+            if not agent_jwk:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "server_error", "error_description": f"Key with kid={kid} not found in JWKS"},
+                )
+
+            agent_jkt = calculate_jwk_thumbprint(agent_jwk)
 
         if not self.auth_server:
             if self.two_party_mode:

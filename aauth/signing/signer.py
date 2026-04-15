@@ -72,12 +72,16 @@ def sign_request(
             if "content-type" in body_components and "Content-Type" not in headers:
                 headers["Content-Type"] = "application/octet-stream"
 
+        # Include aauth-mission when the request carries AAuth-Mission (spec §Authorization Endpoint Request).
+        include_aauth_mission = any(k.lower() == "aauth-mission" for k in headers)
+
         # Determine covered components
         from ..signing.signature_base import _determine_covered_components
         covered_components = _determine_covered_components(
             query_string,
             body,
-            additional_components=body_components
+            additional_components=body_components,
+            include_aauth_mission=include_aauth_mission,
         )
 
         # Build signature params (only created is required per spec Section 15.4)

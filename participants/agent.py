@@ -235,7 +235,21 @@ class Agent:
             print(f"DEBUG AGENT:   Signature-Key: {sig_headers.get('Signature-Key', '')[:100]}...", file=sys.stderr, flush=True)
         
         return sig_headers
-    
+
+    def _self_issued_agent_token(self) -> str:
+        """Self-issued ``aa-agent+jwt`` for ``sig=jwt`` (mission, ``/authorize``, PS ``/token``)."""
+        from aauth.tokens.agent_token import create_agent_token
+
+        cnf_jwk = public_key_to_jwk(self.public_key, kid=self.kid)
+        return create_agent_token(
+            iss=self.agent_id,
+            sub=self.agent_sub,
+            cnf_jwk=cnf_jwk,
+            private_key=self.private_key,
+            kid=self.kid,
+            ps=self.mm_url,
+        )
+
     async def request_resource(
         self,
         resource_url: str,
@@ -618,8 +632,6 @@ class Agent:
         if not self.mm_url:
             return None
         from aauth.metadata.mission_manager import fetch_mm_metadata_async
-        from aauth.tokens.agent_token import create_agent_token
-        from aauth.keys.jwk import public_key_to_jwk
         from aauth.headers.aauth_header import parse_aauth_mission_header
 
         try:
@@ -639,15 +651,7 @@ class Agent:
         # Self-issue an agent token so the PS can verify our identity (spec §Mission Creation:
         # "The agent MUST make a signed POST … presenting its agent token via Signature-Key
         # using scheme=jwt").
-        cnf_jwk = public_key_to_jwk(self.public_key, kid=self.kid)
-        self_agent_token = create_agent_token(
-            iss=self.agent_id,
-            sub=self.agent_sub,
-            cnf_jwk=cnf_jwk,
-            private_key=self.private_key,
-            kid=self.kid,
-            ps=self.mm_url,
-        )
+        self_agent_token = self._self_issued_agent_token()
 
         base_headers = {"Content-Type": "application/json"}
         sig_headers = self.sign_request(
@@ -728,12 +732,15 @@ class Agent:
         if all_caps:
             base_headers["AAuth-Capabilities"] = build_aauth_capabilities_header(all_caps)
 
+        # Spec §Authorization Endpoint Request: agent presents agent token via Signature-Key (sig=jwt).
+        self_agent_token = self._self_issued_agent_token()
         sig_headers = self.sign_request(
             method="POST",
             url=authz,
             headers=base_headers,
             body=body_bytes,
-            sig_scheme="jwks_uri",
+            sig_scheme="jwt",
+            jwt=self_agent_token,
         )
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -776,15 +783,26 @@ class Agent:
         body_text = json.dumps(body_dict)
         body_bytes = body_text.encode('utf-8')
 
-        # Sign request
+        # Sign request: PS token endpoint expects sig=jwt with agent token so PS can forward
+        # agent_token to the AS (spec §PS-to-AS Token Request).
         headers = {"Content-Type": "application/json"}
-        sig_headers = self.sign_request(
-            method="POST",
-            url=token_endpoint,
-            headers=headers,
-            body=body_bytes,
-            sig_scheme="jwks_uri",
-        )
+        if token_request_via == "mm":
+            sig_headers = self.sign_request(
+                method="POST",
+                url=token_endpoint,
+                headers=headers,
+                body=body_bytes,
+                sig_scheme="jwt",
+                jwt=self._self_issued_agent_token(),
+            )
+        else:
+            sig_headers = self.sign_request(
+                method="POST",
+                url=token_endpoint,
+                headers=headers,
+                body=body_bytes,
+                sig_scheme="jwks_uri",
+            )
         request_headers = {**headers, **sig_headers}
         request_headers["Prefer"] = "wait=30"
 
