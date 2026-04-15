@@ -1,123 +1,82 @@
-# Phase 11: MM-AS Trust (Federated Token Path)
+# Phase 11: PS–AS Trust (Federated Token Path)
 
-Phase 11 demonstrates the **federated token path via Mission Manager**. When an agent is configured with a `mm_url`, all authorization token requests flow through the Mission Manager instead of going directly to the Auth Server.
+Phase 11 demonstrates **PS–AS federation** as defined in [SPEC.md](SPEC.md) — notably **(#ps-as-federation)** and the **Person Server token endpoint** (see “Person Server” / `#person-server` in the spec).
+
+Normative terminology in the spec is **Person Server (PS)** and **`ps`** (the HTTPS URL of the person server in the agent token). This repository’s reference `Agent` still accepts a legacy parameter name `mm_url` as an alias for the same URL; the preferred name is **`ps_url`** (see `participants/agent.py`).
 
 ## Overview
 
-### Standard Flow (No MM)
+### Four-party federated access (SPEC)
 
-1. Agent → Resource (receives resource token)
-2. Agent → Auth Server directly (receives auth token)
-3. Agent → Resource (with auth token)
+1. Agent → Resource (receives `401` + resource token with `aud` = AS URL).
+2. Agent → **PS `token_endpoint`** (signed POST with resource token; presents `aa-agent+jwt` via `Signature-Key` where required).
+3. PS verifies the resource token, then **POSTs to the AS `token_endpoint`** with its own HTTP Message Signature (`scheme` = `jwks_uri`). The AS verifies the PS and issues `aa-auth+jwt`.
+4. PS → Agent (returns auth token).
+5. Agent → Resource (access with auth token, e.g. `scheme=jwt`).
 
-### Federated Flow (With MM)
+Per **SPEC.md**: *“The PS is the only entity that calls AS token endpoints”* in this federation model — the agent does not POST token requests to the AS in the normative four-party path.
 
-1. Agent → Resource (receives resource token)
-2. Agent → **Mission Manager** (sends resource token)
-3. Mission Manager → Auth Server (federates with HTTP signature)
-4. Auth Server validates MM trust and issues auth token
-5. Mission Manager → Agent (returns auth token)
-6. Agent → Resource (with auth token)
+### Agent configuration (SPEC)
 
-## Architecture Flow
+- The agent’s **`aa-agent+jwt`** MAY include a **`ps`** claim: the Person Server HTTPS URL (SPEC agent tokens).
+- The reference implementation sets `ps` from **`ps_url`** / **`mm_url`** when configuring the agent (`Agent._self_issued_agent_token` → `create_agent_token(..., ps=...)`).
+
+### Auth server configuration
+
+- The AS maintains a trust list for Person Servers that may call its `token_endpoint` (in code: `trusted_person_servers=[...]` on `AccessServer`).
+
+## Architecture flow
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent (with mm_url)
+    participant A as Agent (ps claim)
     participant R as Resource
-    participant MM as Mission Manager
-    participant AS as Auth Server
+    participant PS as Person Server
+    participant AS as Access Server
 
-    Note over A,R: Step 1: Resource Challenge
-    A->>R: GET /data (no auth)
-    R->>A: 401 + resource_token
+    Note over A,R: Step 1: Resource challenge
+    A->>R: GET /data-auth (no auth)
+    R->>A: 401 + aa-resource+jwt (aud = AS)
 
-    Note over A,MM: Step 2: Agent → MM
-    A->>MM: POST /token<br/>resource_token<br/>(scheme=jwks_uri)
+    Note over A,PS: Step 2: Agent to PS token_endpoint
+    A->>PS: POST /token + resource_token
 
-    Note over MM,AS: Step 3: MM → AS Federation
-    MM->>MM: Verify resource token
-    MM->>AS: POST /token<br/>resource_token<br/>(scheme=jwks_uri with MM signature)
-    AS->>AS: Verify MM signature<br/>Check trusted_mission_managers
-    AS->>MM: auth_token
+    Note over PS,AS: Step 3: PS–AS federation
+    PS->>PS: Verify resource token
+    PS->>AS: POST /token + resource_token (PS HTTPSig jwks_uri)
+    AS->>AS: Verify PS in trusted set; issue auth token
+    AS->>PS: aa-auth+jwt
+    PS->>A: aa-auth+jwt
 
-    MM->>A: auth_token
-
-    Note over A,R: Step 4: Resource Access
-    A->>R: GET /data (scheme=jwt with auth_token)
+    Note over A,R: Step 4: Access
+    A->>R: request with auth token
     R->>A: 200 OK
 ```
 
-## Key Features
+## What this codebase implements
 
-### Mission Manager Configuration
+| Component | Role |
+|-----------|------|
+| `participants/mission_manager.py` (`PersonServer`) | PS: `POST /token`, metadata at `/.well-known/aauth-person.json` |
+| `participants/auth_server.py` (`AccessServer`) | AS: `trusted_person_servers`, verifies PS signature on federated `POST /token` |
+| `participants/agent.py` (`Agent`) | `ps_url` / `mm_url` → PS base URL; populates agent token `ps` claim |
 
-- **Agent Configuration**: `mm_url` points to Mission Manager
-- **Token Endpoint Override**: Agent uses MM's `token_endpoint` instead of AS
-- **Transparent to Agent**: Agent code remains the same
-
-### Auth Server Trust
-
-- **Trusted Mission Managers**: AS maintains list of trusted MMs
-- **MM Signature Verification**: AS verifies MM's HTTP signature
-- **Trust Delegation**: AS trusts MM's validation of agent and resource token
-
-### Audit Trail Benefits
-
-- **Centralized Control**: All agent authorizations flow through MM
-- **Enhanced Logging**: MM logs all token requests
-- **Policy Enforcement**: MM can apply organization-wide policies
-- **Federated Identity**: MM acts as intermediary for agent identity
-
-## What Was Implemented
-
-### Core Components
-
-- **`participants/mission_manager.py`**
-  - `POST /token` endpoint for agent token requests
-  - Resource token validation
-  - Federation with Auth Server using HTTP signature
-  - Mission Manager metadata endpoint
-
-- **`participants/auth_server.py`**
-  - `trusted_mission_managers` configuration
-  - MM signature verification
-  - Trust validation for federated requests
-
-- **`participants/agent.py`**
-  - `mm_url` configuration option
-  - Automatic routing to MM's token endpoint
-  - Metadata discovery for MM endpoints
-
-### Demo Script
-
-- **`demo_phase11.py`**
-  - **TEST 1**: Agent WITH `mm_url` (federated flow)
-  - **TEST 2**: Agent WITHOUT `mm_url` (direct AS flow)
-  - Shows contrast between federated and direct paths
-
-## Testing
+## Demo and tests
 
 ```bash
 python demo_phase11.py
 pytest tests/test_phase11.py -v
 ```
 
-## Comparison: Direct vs Federated
+**`demo_phase11.py`** exercises the federated path and asserts SPEC-relevant claims: `ps` on the agent token, `aud` on the resource token (AS URL), and `aa-auth+jwt` from the AS after PS federation.
 
-| Aspect | Direct (No MM) | Federated (With MM) |
-|--------|----------------|---------------------|
-| **Agent Config** | No `mm_url` | Has `mm_url` |
-| **Token Request Path** | Agent → AS | Agent → MM → AS |
-| **Signature** | Agent signs to AS | Agent signs to MM, MM signs to AS |
-| **Trust Model** | AS trusts agent directly | AS trusts MM, MM validates agent |
-| **Audit Trail** | AS logs only | MM logs + AS logs |
-| **Policy Enforcement** | AS only | MM + AS |
+## Spec cross-references
+
+- Federated access overview: SPEC **#federated-access** / **Figure: Federated Access (Four-Party)**.
+- PS–AS federation: **#ps-as-federation**, **#access-server-federation**.
+- PS token endpoint: **#ps-token-endpoint** (Person Server section).
+- Trust establishment (interaction, payment, claims): **#ps-as-federation** — “PS-AS Trust Establishment”.
 
 ## Notes
 
-- Both paths result in valid auth tokens
-- Federated path provides better centralized control
-- Mission Manager acts as authorization intermediary
-- Auth Server must explicitly trust the Mission Manager
-- Agent code doesn't need to change based on configuration
+- The legacy filename `PHASE11-mm-as-trust.md` is kept for continuity; “MM” referred to an older “Mission Manager” name. The spec and code use **Person Server** and **`ps`**.

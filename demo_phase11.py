@@ -1,13 +1,18 @@
-"""Demo Phase 11: PS–AS Trust — federated token path via Person Server.
+"""Demo Phase 11: PS–AS trust — federated token path (SPEC #ps-as-federation).
 
-The agent is configured with ``mm_url`` so its auth token requests go to the PS's
-``token_endpoint`` instead of the AS directly.  The PS verifies the resource token,
-then calls the AS using its own HTTP Message Signature (``scheme=jwks_uri``).  The AS
-trusts the PS (``trusted_person_servers``) and issues an auth token.  The agent
-never speaks to the AS directly.
+Normative flow (four-party, SPEC.md):
 
-TEST 2 shows the contrast: an identical agent WITHOUT ``mm_url`` calls the AS
-directly — the AS grants it too, but the signing path (and audit trail) differs.
+- The agent's ``aa-agent+jwt`` MAY include a ``ps`` claim (Person Server HTTPS URL).
+- The resource issues a resource token with ``aud`` = the Access Server (AS) URL.
+- The agent POSTs the resource token to the PS ``token_endpoint`` (HTTPSig + agent token),
+  not to the AS. The PS verifies the resource token and federates to the AS; the AS
+  trusts the PS (``trusted_person_servers``) and issues ``aa-auth+jwt``.
+
+Per SPEC: "The PS is the only entity that calls AS token endpoints" for this federation
+path — the demo does not show a direct agent→AS token POST as a supported alternative.
+
+The reference ``Agent`` accepts ``ps_url`` (preferred) or legacy ``mm_url`` for the PS
+base URL; that value is placed in the agent token ``ps`` claim (see ``_self_issued_agent_token``).
 """
 
 import asyncio
@@ -19,6 +24,7 @@ from typing import List
 from uvicorn import Config, Server
 
 from aauth.debug import print_stderr_localhost_port_map
+from aauth.identifiers import agent_identifier_from_server_url
 from aauth.tokens.auth_token import parse_token_claims
 from participants.agent import Agent
 from participants.auth_server import AccessServer
@@ -67,10 +73,10 @@ async def main() -> None:
     _server_threads.clear()
 
     print("\n" + "=" * 80, file=sys.stderr)
-    print("Phase 11: PS–AS Trust (federated token path via Person Server)", file=sys.stderr)
+    print("Phase 11: PS–AS trust (federated token path per SPEC #ps-as-federation)", file=sys.stderr)
     print(
-        "Spec: Agent sends resource token to PS token_endpoint; PS signs request\n"
-        "with its own key (scheme=jwks_uri); AS verifies PS identity and issues auth token.",
+        "Spec: Agent POSTs resource token to PS token_endpoint; PS signs to AS\n"
+        "(HTTPSig jwks_uri); AS verifies PS identity (trusted_person_servers) and issues auth token.",
         file=sys.stderr,
     )
     print("=" * 80 + "\n", file=sys.stderr)
@@ -80,8 +86,8 @@ async def main() -> None:
     as_id = "http://127.0.0.1:8003"
     ps_id = "http://127.0.0.1:8004"
 
-    # Agent WITH mm_url — all auth token requests go through the PS.
-    agent = Agent(agent_id, port=8001, mm_url=ps_id)
+    # Agent with PS configured (ps claim + routing to PS token_endpoint).
+    agent = Agent(agent_id, port=8001, ps_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
     auth = AccessServer(as_id, port=8003, trusted_person_servers=[ps_id])
     ps = PersonServer(ps_id, port=8004)
@@ -98,7 +104,7 @@ async def main() -> None:
     try:
         # ------------------------------------------------------------------
         print(
-            "TEST 1: Reactive PS-federated flow — 401 challenge → PS → AS → auth token",
+            "TEST 1: Four-party flow — 401 challenge → PS token_endpoint → AS → aa-auth+jwt",
             file=sys.stderr,
         )
 
@@ -131,7 +137,7 @@ async def main() -> None:
         assert auth_token, "Agent should have stored auth_token"
         at_claims = parse_token_claims(auth_token)
         print("\n" + "=" * 80, file=sys.stderr)
-        print("AUTH TOKEN (aa-auth+jwt) — issued by AS via PS federation", file=sys.stderr)
+        print("AUTH TOKEN (aa-auth+jwt) — issued by AS after PS federation", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
         print("Header:", file=sys.stderr)
         print(json.dumps(at_claims["header"], indent=2), file=sys.stderr)
@@ -143,51 +149,34 @@ async def main() -> None:
         assert at_claims["header"].get("typ") == "aa-auth+jwt"
         assert at_claims["payload"].get("iss") == as_id
         assert at_claims["payload"].get("aud") == resource_id
-        assert at_claims["payload"].get("agent") == agent_id
-        print("  ✓ TEST 1 PASSED: PS-federated auth token obtained; resource returned 200", file=sys.stderr)
+        expected_agent_aauth = agent_identifier_from_server_url(agent_id)
+        assert at_claims["payload"].get("agent") == expected_agent_aauth, (
+            f"auth token agent claim must be aauth: form (SPEC): got {at_claims['payload'].get('agent')!r}"
+        )
+        print("  ✓ TEST 1 PASSED: PS-federated auth token; resource returned 200", file=sys.stderr)
         print(f"  Final response: {data}", file=sys.stderr)
 
         # ------------------------------------------------------------------
         print(
-            "\nTEST 2: Direct flow (no PS) — same resource, agent calls AS directly",
+            "\nTEST 2: SPEC alignment — ps claim on agent token; aud on resource token (four-party)",
             file=sys.stderr,
         )
 
-        # Start a second agent (port 8011) without mm_url — calls AS directly.
-        agent2_id = "http://127.0.0.1:8011"
-        agent2 = Agent(agent2_id, port=8011)  # no mm_url
-        start_uvicorn(agent2.app, agent2.port, "Agent2")
-        await asyncio.sleep(1)
-
-        response2 = await agent2.request_resource(
-            resource_url=f"{resource_id}/data-auth",
-            method="GET",
-            sig_scheme="jwks_uri",
+        agent_jwt = agent._self_issued_agent_token()
+        ag_claims = parse_token_claims(agent_jwt)
+        assert ag_claims["header"].get("typ") == "aa-agent+jwt"
+        assert ag_claims["payload"].get("ps") == ps_id, (
+            "Agent token must carry ps claim matching the configured Person Server (SPEC)"
         )
-        assert response2.status_code == 200, (
-            f"Expected 200, got {response2.status_code}: {response2.text}"
+        assert rt_claims["payload"].get("aud") == as_id, (
+            "Four-party: resource token aud must be the AS URL (SPEC federated access)"
         )
-
-        auth_token2 = agent2.auth_token
-        assert auth_token2, "Agent2 should have stored auth_token"
-        at2_claims = parse_token_claims(auth_token2)
-        print("\n" + "=" * 80, file=sys.stderr)
-        print("AUTH TOKEN 2 (aa-auth+jwt) — issued directly by AS (no PS on path)", file=sys.stderr)
-        print("=" * 80, file=sys.stderr)
-        print("Header:", file=sys.stderr)
-        print(json.dumps(at2_claims["header"], indent=2), file=sys.stderr)
-        print("\nPayload:", file=sys.stderr)
-        print(json.dumps(at2_claims["payload"], indent=2), file=sys.stderr)
-        print("=" * 80, file=sys.stderr)
-
-        # Both paths produce valid aa-auth+jwt from the same AS.
-        assert at2_claims["header"].get("typ") == "aa-auth+jwt"
-        assert at2_claims["payload"].get("iss") == as_id
-        assert at2_claims["payload"].get("aud") == resource_id
-        assert at2_claims["payload"].get("agent") == agent2_id
-        print("  ✓ TEST 2 PASSED: Direct AS path also works; same AS issued both tokens", file=sys.stderr)
-        print(f"  PS-federated iss: {at_claims['payload']['iss']}  (via PS → AS)", file=sys.stderr)
-        print(f"  Direct AS iss:    {at2_claims['payload']['iss']}  (agent → AS)", file=sys.stderr)
+        print(f"  ✓ Agent token ps claim: {ag_claims['payload'].get('ps')}", file=sys.stderr)
+        print(f"  ✓ Resource token aud:   {rt_claims['payload'].get('aud')}", file=sys.stderr)
+        print(
+            "  ✓ TEST 2 PASSED: ps + four-party aud match SPEC bootstrapping / PS-AS federation",
+            file=sys.stderr,
+        )
 
         print("\nPhase 11 PS–AS trust demo complete.", file=sys.stderr)
     finally:

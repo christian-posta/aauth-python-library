@@ -54,6 +54,7 @@ class Agent:
         port: int = 8001,
         use_user_simulator: bool = True,
         clarification_supported: bool = True,
+        ps_url: Optional[str] = None,
         mm_url: Optional[str] = None,
         capabilities: Optional[list] = None,
         agent_sub: Optional[str] = None,
@@ -68,8 +69,10 @@ class Agent:
             use_user_simulator: If True, use user simulator for automated consent flow.
                                If False, pause and wait for manual browser interaction.
             clarification_supported: Whether this agent supports clarification chat.
-            mm_url: Optional Person Server base URL; when set, auth token requests
-                go to PS (which federates to the AS) instead of directly to the AS.
+            ps_url: Person Server (PS) base URL per SPEC (``ps`` claim in the agent token).
+                When set, auth token requests use the PS ``token_endpoint``; the PS federates
+                to the resource's AS (#ps-as-federation). Prefer this name over ``mm_url``.
+            mm_url: Legacy alias for ``ps_url`` (same meaning).
             capabilities: List of capability tokens to advertise via AAuth-Capabilities
                 header (e.g. ["interaction", "clarification"]). Defaults to
                 ["interaction", "clarification"].
@@ -90,7 +93,8 @@ class Agent:
         self.use_user_simulator = use_user_simulator
         self.auto_interact = auto_interact
         self.clarification_supported = clarification_supported
-        self.mm_url = mm_url.rstrip("/") if mm_url else None
+        _ps = ps_url if ps_url is not None else mm_url
+        self.mm_url = _ps.rstrip("/") if _ps else None
         # Derive default AAuth-Capabilities from clarification_supported when not explicit.
         # Spec §AAuth-Capabilities: include "clarification" only when the agent supports it,
         # so that servers can tailor their 202 responses accordingly.
@@ -237,7 +241,11 @@ class Agent:
         return sig_headers
 
     def _self_issued_agent_token(self) -> str:
-        """Self-issued ``aa-agent+jwt`` for ``sig=jwt`` (mission, ``/authorize``, PS ``/token``)."""
+        """Self-issued ``aa-agent+jwt`` for ``sig=jwt`` (mission, ``/authorize``, PS ``/token``).
+
+        When a Person Server is configured (``ps_url`` / ``mm_url``), sets the ``ps`` claim
+        per SPEC (agent tokens — resources discover the PS from this claim).
+        """
         from aauth.tokens.agent_token import create_agent_token
 
         cnf_jwk = public_key_to_jwk(self.public_key, kid=self.kid)
@@ -555,10 +563,12 @@ class Agent:
         )
 
     async def _request_auth_token(self, resource_token: str, auth_server: str) -> Optional[str]:
-        """Request auth token from auth server (resource access mode).
+        """Request auth token for resource access (SPEC: PS ``token_endpoint`` in four-party).
 
-        When ``mm_url`` is configured, sends the request to the Person Server (PS)
-        ``token_endpoint`` (HTTPSig ``jwks_uri``); the PS forwards to the AS.
+        When a Person Server is configured (``ps_url`` / ``mm_url``), sends the request to
+        the PS ``token_endpoint`` per SPEC — the PS federates to the AS (#ps-as-federation).
+        When no PS is configured, this implementation may POST directly to the AS (e.g.
+        agent-delegation demos); that path is not the normative four-party federation flow.
 
         Args:
             resource_token: Resource token from AAuth challenge
