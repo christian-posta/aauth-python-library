@@ -10,7 +10,7 @@ def test_generate_ps_metadata():
         mission_endpoint="https://ps.example/mission",
         jwks_uri="https://ps.example/jwks.json",
     )
-    assert m["person_server"] == "https://ps.example"
+    assert m["issuer"] == "https://ps.example"
     assert m["token_endpoint"] == "https://ps.example/token"
     assert m["mission_endpoint"] == "https://ps.example/mission"
     assert m["jwks_uri"] == "https://ps.example/jwks.json"

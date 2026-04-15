@@ -1,19 +1,22 @@
 """Demo Phase 12: Mission Lifecycle — proposal → approval → token use → resource access.
 
-Walks the complete mission lifecycle end-to-end:
+Walks the complete mission lifecycle end-to-end (SPEC.md: Mission, Mission Approval,
+PS token endpoint, PS–AS federation):
 
-1. Discover Person Server metadata (``/.well-known/aauth-person.json``) to locate the
-   ``mission_endpoint``.
-2. Agent proposes a mission; PS auto-approves and returns the mission text + ``s256``.
-3. Agent proactively obtains a resource token from the resource's
-   ``authorization_endpoint`` (``POST /authorize``) including the ``AAuth-Mission``
-   header — the resource token carries the mission claim.
-4. Agent sends the resource token to the PS ``token_endpoint``; PS federates with
-   the AS and returns an auth token — the auth token also carries the mission claim.
-5. Agent presents the auth token to the resource (``scheme=jwt``) and gets 200.
+1. Discover Person Server metadata (``/.well-known/aauth-person.json``) for
+   ``mission_endpoint`` and ``token_endpoint``.
+2. Agent ``POST``s a mission proposal; PS returns the **mission blob** body and
+   ``AAuth-Mission`` response header (``approver``, ``s256``); ``s256`` hashes the
+   exact response body bytes.
+3. Agent proactively obtains a resource token (``POST /authorize``) with
+   ``AAuth-Mission`` request header; HTTPSig uses ``scheme=jwt`` (agent token), per
+   authorization-endpoint mission examples.
+4. Agent ``POST``s ``resource_token`` to the PS ``token_endpoint`` (not the AS
+   directly); PS federates to the AS and returns an auth token bearing ``mission``.
+5. Agent accesses ``GET /data-auth`` with the auth token (``scheme=jwt``).
 
-The ``mission.s256`` hash is verified at every step to confirm it is preserved
-across the full token chain: mission → resource token → auth token → resource.
+The demo asserts ``mission.s256`` matches the approved mission through: resource
+token, auth token, and the auth token presented for resource access.
 """
 
 import asyncio
@@ -87,7 +90,7 @@ async def main() -> None:
     as_id = "http://127.0.0.1:8003"
     ps_id = "http://127.0.0.1:8004"
 
-    agent = Agent(agent_id, port=8001, mm_url=ps_id)
+    agent = Agent(agent_id, port=8001, ps_url=ps_id)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
     auth = AccessServer(as_id, port=8003, trusted_person_servers=[ps_id])
     ps = PersonServer(ps_id, port=8004)
@@ -106,10 +109,10 @@ async def main() -> None:
         print("TEST 1: Discover PS metadata and propose mission", file=sys.stderr)
 
         async with httpx.AsyncClient() as client:
-            mm_meta_resp = await client.get(f"{ps_id}/.well-known/aauth-person.json")
-        assert mm_meta_resp.status_code == 200, f"PS metadata fetch failed: {mm_meta_resp.status_code}"
-        mm_meta = mm_meta_resp.json()
-        mission_endpoint = mm_meta.get("mission_endpoint")
+            ps_meta_resp = await client.get(f"{ps_id}/.well-known/aauth-person.json")
+        assert ps_meta_resp.status_code == 200, f"PS metadata fetch failed: {ps_meta_resp.status_code}"
+        ps_meta = ps_meta_resp.json()
+        mission_endpoint = ps_meta.get("mission_endpoint")
         assert mission_endpoint, "PS metadata missing mission_endpoint"
         print(f"  PS metadata: mission_endpoint = {mission_endpoint}", file=sys.stderr)
 
@@ -155,7 +158,9 @@ async def main() -> None:
             file=sys.stderr,
         )
 
-        auth_token = await agent._request_auth_token(resource_token, as_id)
+        # Normative flow: agent → PS token_endpoint; PS federates to AS (aud on resource token).
+        # Second argument is only used when no PS is configured; pass PS id for clarity.
+        auth_token = await agent._request_auth_token(resource_token, ps_id)
         assert auth_token, "auth_token missing"
 
         at_claims = parse_token_claims(auth_token)
@@ -167,7 +172,8 @@ async def main() -> None:
         )
         assert at_payload.get("iss") == as_id
         assert at_payload.get("aud") == resource_id
-        assert at_payload.get("agent") == agent_id
+        # Auth token `agent` is the agent identifier (aauth:local@domain), not the HTTP iss URL.
+        assert at_payload.get("agent") == agent.agent_sub
 
         print("\n" + "=" * 80, file=sys.stderr)
         print("AUTH TOKEN (aa-auth+jwt) — decoded", file=sys.stderr)
@@ -195,7 +201,15 @@ async def main() -> None:
         )
         data = response.json()
         assert data.get("token_type") == "aa-auth+jwt"
-        print("  ✓ TEST 4 PASSED: Resource granted access with mission-bearing auth token", file=sys.stderr)
+        # Same JWT the resource verified — mission.s256 must still match approved mission.
+        assert agent.auth_token, "agent should hold auth token after access"
+        access_claims = parse_token_claims(agent.auth_token)
+        access_mission = access_claims["payload"].get("mission") or {}
+        assert access_mission.get("s256") == s256, (
+            f"resource access auth token mission.s256 mismatch: "
+            f"{access_mission.get('s256')!r} != {s256!r}"
+        )
+        print("  ✓ TEST 4 PASSED: Resource granted access; auth token mission.s256 matches", file=sys.stderr)
         print(f"  Response: {data}", file=sys.stderr)
 
         print(

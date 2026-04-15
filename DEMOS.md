@@ -17,7 +17,7 @@ Normative reference for current protocol behavior in this repo: **`SPEC_UPDATED.
 | `demo_phase9.py` | Section 4.5.8.2 Interaction chaining (downstream interaction bubbled via Resource 1) |
 | `demo_phase10.py` | Resource **`authorization_endpoint`**, proactive **`POST /authorize`**, metadata |
 | `demo_phase11.py` | MM–AS trust: agent → MM → AS with trusted MM signing |
-| `demo_phase12.py` | Mission lifecycle: propose → resource token w/ mission → auth via MM |
+| `demo_phase12.py` | Mission lifecycle: propose → resource token w/ mission → PS `token_endpoint` → AS federation |
 
 `demo_phase8.py` now covers clarification chat. Additional behaviors are listed below as remaining gaps.
 
