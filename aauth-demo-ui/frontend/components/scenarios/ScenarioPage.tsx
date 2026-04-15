@@ -28,14 +28,25 @@ interface ScenarioPageProps {
 }
 
 export function ScenarioPage({ scenario }: ScenarioPageProps) {
-  const { currentStep, setCurrentStep, reset } = useScenarioStore();
+  const { currentStep, setCurrentStep, reset, activeVariant, setActiveVariant } = useScenarioStore();
 
   useEffect(() => {
     reset();
   }, [scenario.id, reset]);
 
-  const step = scenario.steps[currentStep];
-  const stepLabels = scenario.steps.map((s) => s.label);
+  const variantData =
+    activeVariant === "interactive" && scenario.interactive
+      ? scenario.interactive
+      : null;
+
+  const participants = variantData?.participants ?? scenario.participants;
+  const steps = variantData?.steps ?? scenario.steps;
+  const description = variantData?.description ?? scenario.description;
+  const tokenFlow = variantData?.token_flow ?? scenario.token_flow;
+  const deferredTimeline = variantData?.deferred_timeline ?? scenario.deferred_timeline;
+
+  const step = steps[currentStep];
+  const stepLabels = steps.map((s) => s.label);
 
   return (
     <div className="flex flex-col h-full">
@@ -57,10 +68,37 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
                   Phase {scenario.demo_phase}
                 </span>
               )}
+              {/* Autonomous / With User Approval toggle */}
+              {scenario.interactive && (
+                <div className="ml-2 flex items-center rounded-md border border-border bg-muted/30 p-0.5 text-[11px] font-medium">
+                  <button
+                    onClick={() => setActiveVariant("autonomous")}
+                    className={cn(
+                      "rounded px-2.5 py-0.5 transition-colors",
+                      activeVariant === "autonomous"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    Autonomous
+                  </button>
+                  <button
+                    onClick={() => setActiveVariant("interactive")}
+                    className={cn(
+                      "rounded px-2.5 py-0.5 transition-colors",
+                      activeVariant === "interactive"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    With User Approval
+                  </button>
+                </div>
+              )}
             </div>
             <h1 className="text-xl font-bold">{scenario.title}</h1>
             <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
-              {scenario.description}
+              {description}
             </p>
           </div>
           {scenario.spec_section && (
@@ -81,8 +119,8 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
         <div className="flex flex-col border-r border-border w-full lg:w-[420px] xl:w-[520px] shrink-0">
           <div className="flex-1 overflow-auto p-6">
             <SequenceDiagram
-              participants={scenario.participants}
-              steps={scenario.steps}
+              participants={participants}
+              steps={steps}
               currentStep={currentStep}
               onStepClick={setCurrentStep}
             />
@@ -97,7 +135,7 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
                 </span>
                 <span
                   className={cn(
-                    "ml-auto text-[10px] font-mono font-bold",
+                    "ml-auto text-[10px] font-mono font-bold shrink-0",
                     step.response_status < 300
                       ? "text-green-400"
                       : step.response_status < 400
@@ -121,32 +159,32 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
           )}
 
           <div className="p-4 border-t border-border shrink-0">
-            <StepController totalSteps={scenario.steps.length} stepLabels={stepLabels} />
+            <StepController totalSteps={steps.length} stepLabels={stepLabels} />
           </div>
         </div>
 
-        {/* Right: Detail panels (always visible, no tabs) */}
+        {/* Right: Detail panels */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4 min-w-0">
           {step && (
             <motion.div
-              key={currentStep}
+              key={`${activeVariant}-${currentStep}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25 }}
               className="space-y-4"
             >
-              {scenario.token_flow && scenario.token_flow.length > 0 && (
+              {tokenFlow && tokenFlow.length > 0 && (
                 <TokenFlowDiagram
-                  flows={scenario.token_flow}
-                  participants={scenario.participants}
+                  flows={tokenFlow}
+                  participants={participants}
                   currentStep={currentStep}
                   onStepSelect={setCurrentStep}
                 />
               )}
 
-              {scenario.deferred_timeline && (
+              {deferredTimeline && (
                 <DeferredResponseTimeline
-                  timeline={scenario.deferred_timeline}
+                  timeline={deferredTimeline}
                   currentStep={currentStep}
                   onStepSelect={setCurrentStep}
                 />
@@ -158,7 +196,7 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
                 <S256ChainVisualization links={scenario.s256_chain} />
               )}
 
-              {/* Headers & Body (always shown) */}
+              {/* Headers & Body */}
               <HeaderInspector
                 requestHeaders={step.request_headers}
                 responseHeaders={step.response_headers}
@@ -167,10 +205,10 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
                 responseStatus={step.response_status}
               />
 
-              {/* HTTP Signature (if present) */}
+              {/* HTTP Signature */}
               {step.signature && <SignatureVisualizer signature={step.signature} />}
 
-              {/* Tokens (if present) */}
+              {/* Tokens */}
               {step.tokens.length > 0 && (
                 <div className="space-y-4">
                   {step.tokens.map((token, i) => (
