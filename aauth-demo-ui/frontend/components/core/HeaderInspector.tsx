@@ -114,6 +114,8 @@ interface HeaderInspectorProps {
   requestBody?: unknown;
   responseBody?: unknown;
   responseStatus?: number;
+  method?: string;
+  url?: string;
 }
 
 export function HeaderInspector({
@@ -122,6 +124,8 @@ export function HeaderInspector({
   requestBody,
   responseBody,
   responseStatus,
+  method,
+  url,
 }: HeaderInspectorProps) {
   const [tab, setTab] = useState<"request" | "response">("request");
 
@@ -159,6 +163,14 @@ export function HeaderInspector({
           <span className={`text-xs font-mono font-bold ${statusColor}`}>{responseStatus}</span>
         )}
       </div>
+
+      {/* Request line */}
+      {tab === "request" && method && url && (
+        <div className="flex items-baseline gap-2 px-4 py-2.5 border-b border-border bg-muted/5">
+          <span className="text-[11px] font-mono font-bold text-foreground/70 shrink-0">{method}</span>
+          <span className="text-[11px] font-mono text-sky-400 break-all">{url}</span>
+        </div>
+      )}
 
       {/* Headers */}
       <div className="divide-y divide-border">

@@ -166,7 +166,7 @@
       "step": 2,
       "from": "agent",
       "to": "ps",
-      "label": "POST resource token to PS /token",
+      "label": "POST resource token to PS \u2192 PS federates to AS \u2192 200 + auth token",
       "method": "POST",
       "url": "https://ps.example/token",
       "request_headers": {
@@ -183,8 +183,8 @@
         "Content-Type": "application/json"
       },
       "response_body": {
-        "status": "accepted",
-        "next": "ps_federates_to_as"
+        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+        "expires_in": 3600
       },
       "tokens": [
         {
@@ -212,9 +212,10 @@
       ],
       "signature": null,
       "annotations": [
-        "Agent sends the resource token to its Person Server (discovered from agent's ps claim).",
-        "PS discovers the AS from the resource token's aud claim.",
-        "The PS does not mint the auth token itself in this mode; it federates to the AS next."
+        "Agent POSTs the resource token to its PS (from the ps claim in the agent token).",
+        "PS sees aud=AS \u2014 it federates to the AS on the agent's behalf (step 3 below).",
+        "In this autonomous flow the PS federates synchronously and returns the auth token directly.",
+        "Agent receives the AS-issued auth token bound to its signing key."
       ],
       "is_response": false
     },
@@ -232,15 +233,15 @@
         "Signature": "sig=:DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA:"
       },
       "request_body": {
-        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiNzliZTNhMmItNGYzMy00YTU1LTgxNjktYTk0ZGU4NGU5N2VlIiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiJ2RTVTZEN0TTRyMGNOMGNZMXI0RlZjWlh6ZjRvVjFBYTZqVGE5aGRrUE13Iiwic2NvcGUiOiJyZWFkIiwiaWF0IjoxNzc2MjIzOTMzLCJleHAiOjE3NzYyMjQ1MzN9.yE5bZijB_SspIDIzOVnecGJNLS8VdY2ACgGJXV228hc_EFItUZeGal_x4TL9MDStrLriwmCRfyVuY-0t-t1AAA",
-        "agent_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpsb2NhbEAxMjcuMC4wLjEiLCJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwianRpIjoiNzUzZjBhZTctZTBiNS00OTJmLTg0ZDgtYmM4MjAxNzIwNGM0IiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IlpBVFZPYVBFWV81c2h3eW1BZUIyRV81elhyNnNMcTlhZlB6c0ZmTVV5ajgiLCJraWQiOiJhZ2VudC1rZXktMSJ9fSwiaWF0IjoxNzc2MjIzOTMzLCJleHAiOjE3NzYyMjc1MzMsInBzIjoiaHR0cDovLzEyNy4wLjAuMTo4MDA0In0.E5kKVbtSiVMq6bsPQM-3rSQrZkMLCcPLzfYtyUWhHFE_9UbjzGjPag2cZcXkFhH2lQsTwOb8Zch-ygZymnazBA"
+        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026"
       },
       "response_status": 200,
       "response_headers": {
         "Content-Type": "application/json"
       },
       "response_body": {
-        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImU0ZTgxMTA4LWRkNDMtNDUwYy1hNmU1LTkwY2NmOTkxYmFkMSIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJaQVRWT2FQRVlfNXNod3ltQWVCMkVfNXpYcjZzTHE5YWZQenNGZk1VeWo4Iiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMzkzMywiZXhwIjoxNzc2MjI3NTMzLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIn0.gV4R5tPoUy0K92DWOaJaEL7bkh36AARIMC2YuOnzWQIHRi4eq7jRGwihsScNsWkfp12Il7R7CZ6E4Vw5MUQLAQ"
+        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+        "expires_in": 3600
       },
       "tokens": [
         {
@@ -307,32 +308,30 @@
       ],
       "signature": null,
       "annotations": [
-        "PS signs with its own identity (sig=jwks_uri with PS identifier).",
-        "AS verifies PS is in its trusted_person_servers list.",
-        "AS verifies agent_jkt in resource token matches agent token cnf.jwk thumbprint.",
-        "Auth token: iss=AS, aud=resource, agent=aauth:local@agent.example, cnf.jwk=agent key, act.sub=agent URI."
+        "PS posts the resource token to the AS (this step is internal \u2014 the agent does not see it).",
+        "PS signs with its own identity (sig=jwks_uri from its well-known metadata).",
+        "AS verifies the resource token: iss=resource, aud=AS, agent_jkt matches.",
+        "AS issues auth token: iss=AS, aud=resource, agent=agent identifier, cnf.jwk=agent key, act.sub=agent identifier.",
+        "AS returns the auth token to the PS."
       ],
       "is_response": false
     },
     {
       "step": 4,
-      "from": "as",
-      "to": "ps",
-      "label": "AS returns auth token \u2192 PS \u2192 Agent",
-      "method": "POST",
-      "url": "https://ps.example/token",
-      "request_headers": {
-        "Content-Type": "application/json"
-      },
-      "request_body": {
-        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImU0ZTgxMTA4LWRkNDMtNDUwYy1hNmU1LTkwY2NmOTkxYmFkMSIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJaQVRWT2FQRVlfNXNod3ltQWVCMkVfNXpYcjZzTHE5YWZQenNGZk1VeWo4Iiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMzkzMywiZXhwIjoxNzc2MjI3NTMzLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIn0.gV4R5tPoUy0K92DWOaJaEL7bkh36AARIMC2YuOnzWQIHRi4eq7jRGwihsScNsWkfp12Il7R7CZ6E4Vw5MUQLAQ"
-      },
+      "from": "ps",
+      "to": "agent",
+      "label": "PS returns auth token to agent",
+      "method": "\u2192",
+      "url": "https://ps.example/token (response)",
+      "request_headers": {},
+      "request_body": null,
       "response_status": 200,
       "response_headers": {
         "Content-Type": "application/json"
       },
       "response_body": {
-        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImU0ZTgxMTA4LWRkNDMtNDUwYy1hNmU1LTkwY2NmOTkxYmFkMSIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJaQVRWT2FQRVlfNXNod3ltQWVCMkVfNXpYcjZzTHE5YWZQenNGZk1VeWo4Iiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyMzkzMywiZXhwIjoxNzc2MjI3NTMzLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIn0.gV4R5tPoUy0K92DWOaJaEL7bkh36AARIMC2YuOnzWQIHRi4eq7jRGwihsScNsWkfp12Il7R7CZ6E4Vw5MUQLAQ"
+        "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+        "expires_in": 3600
       },
       "tokens": [
         {
@@ -371,9 +370,9 @@
       ],
       "signature": null,
       "annotations": [
-        "The AS sends the aa-auth+jwt back to the Person Server.",
-        "The PS returns the same auth token to the agent without altering it.",
-        "This keeps token issuance at the AS while the PS remains the federation intermediary."
+        "PS returns the AS-issued auth token to the agent.",
+        "Agent verifies: iss matches the resource token's aud (the AS), aud matches the resource, cnf.jwk matches its own key.",
+        "Agent now holds a proof-of-possession auth token bound to its signing key."
       ],
       "is_response": true
     },
@@ -553,7 +552,7 @@
         "step": 2,
         "from": "agent",
         "to": "ps",
-        "label": "POST resource token to PS",
+        "label": "POST resource token to PS \u2192 202 (PS will federate to AS)",
         "method": "POST",
         "url": "https://ps.example/token",
         "request_headers": {
@@ -563,14 +562,19 @@
           "Signature": "sig=:FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFQ:"
         },
         "request_body": {
-          "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiMTJhNjM2ZDAtYTg1Mi00MGE5LTkxMjQtMjA4N2UwZDdmMDY2IiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiIxRk53eGhWMDlaMnFneXBaN3dIS0M0bGdhX2c1ekVZdVE0bDlMQlZkc3pnIiwic2NvcGUiOiJyZWFkIHdyaXRlIiwiaWF0IjoxNzc2MjI0NTAxLCJleHAiOjE3NzYyMjUxMDF9.eLx4tCiLfz1HSXlmxSgPw1578Zbay-91vfiRog00OsBz7El98IWlSqBQG7Qi37zu-7laTJz6Q5md5plgO3_vDw"
+          "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+          "justification": "Requesting read access to protected data"
         },
         "response_status": 202,
         "response_headers": {
-          "Content-Type": "application/json"
+          "Location": "https://ps.example/pending/f7a3b9c2d1e04856",
+          "Retry-After": "0",
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json",
+          "AAuth-Requirement": "requirement=interaction; url=\"https://as.example/interact\"; code=\"A3F8-C2D1\""
         },
         "response_body": {
-          "status": "ps_forwarding_to_as"
+          "status": "pending"
         },
         "tokens": [
           {
@@ -598,8 +602,10 @@
         ],
         "signature": null,
         "annotations": [
-          "Agent hands the resource token to its Person Server.",
-          "The PS will federate to the AS on the agent's behalf in the next step."
+          "Agent POSTs the resource token to its PS. PS sees aud=AS \u2014 it must federate.",
+          "PS forwards the request to the AS (step 3). The AS requires user approval.",
+          "PS relays the AS's interaction URL in AAuth-Requirement and returns its own pending URL in Location.",
+          "The agent polls https://ps.example/pending/... \u2014 it never contacts the AS directly."
         ],
         "is_response": false
       },
@@ -607,7 +613,7 @@
         "step": 3,
         "from": "ps",
         "to": "as",
-        "label": "PS federates to AS /token",
+        "label": "PS federates to AS \u2192 AS returns 202 (interaction required)",
         "method": "POST",
         "url": "https://as.example/token",
         "request_headers": {
@@ -617,17 +623,18 @@
           "Signature": "sig=:FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFg:"
         },
         "request_body": {
-          "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwianRpIjoiMTJhNjM2ZDAtYTg1Mi00MGE5LTkxMjQtMjA4N2UwZDdmMDY2IiwiYWdlbnQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJhZ2VudF9qa3QiOiIxRk53eGhWMDlaMnFneXBaN3dIS0M0bGdhX2c1ekVZdVE0bDlMQlZkc3pnIiwic2NvcGUiOiJyZWFkIHdyaXRlIiwiaWF0IjoxNzc2MjI0NTAxLCJleHAiOjE3NzYyMjUxMDF9.eLx4tCiLfz1HSXlmxSgPw1578Zbay-91vfiRog00OsBz7El98IWlSqBQG7Qi37zu-7laTJz6Q5md5plgO3_vDw",
-          "agent_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEiLCJzdWIiOiJhYXV0aDpsb2NhbEAxMjcuMC4wLjEiLCJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwianRpIjoiYjJhZWVlMTMtYTZkZS00YjJkLWJmM2QtMzMxOTRlZDNmMmYxIiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6InJJV3lBUnIwVzB4cXNVY3F0OUdxRGVtVHBLN1J3V2xEMEpiTl9aWWJnb0EiLCJraWQiOiJhZ2VudC1rZXktMSJ9fSwiaWF0IjoxNzc2MjI0NTAxLCJleHAiOjE3NzYyMjgxMDEsInBzIjoiaHR0cDovLzEyNy4wLjAuMTo4MDA0In0.BqxQ5IyGvqEuWKsBcFi5629n1eJsZwuuD7XTDqf_gCuqLYTzwn9p7hjTfP3OTJOiNieSfZ0I4AIzb07g79x3Cg"
+          "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026"
         },
         "response_status": 202,
         "response_headers": {
-          "Content-Type": "application/json"
+          "Location": "https://as.example/pending/a3f8c2d1e94b7065",
+          "Retry-After": "0",
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json",
+          "AAuth-Requirement": "requirement=interaction; url=\"https://as.example/interact\"; code=\"A3F8-C2D1\""
         },
         "response_body": {
-          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
-          "interaction": "https://as.example/interact?code=a3f8c2d1e94b7065",
-          "expires_in": 600
+          "status": "pending"
         },
         "tokens": [
           {
@@ -683,77 +690,46 @@
         ],
         "signature": null,
         "annotations": [
-          "PS signs with its own jwks_uri identity while calling the AS token endpoint.",
-          "AS validates the trusted PS, inspects the resource token, and defers the decision.",
-          "Instead of minting an auth token immediately, the AS returns 202 + pending URL + interaction URL."
+          "PS signs with its own jwks_uri identity (this step is internal \u2014 the agent does not see it).",
+          "AS requires user consent before issuing the auth token.",
+          "AS returns 202 with its own interaction URL and pending URL.",
+          "PS stores the AS pending URL so it can poll for the auth token after the user approves."
         ],
         "is_response": false
       },
       {
         "step": 4,
-        "from": "as",
+        "from": "agent",
         "to": "ps",
-        "label": "AS returns 202 \u2192 PS \u2192 Agent",
-        "method": "POST",
-        "url": "https://ps.example/token",
+        "label": "Poll PS pending URL \u2192 202 (user has not approved yet)",
+        "method": "GET",
+        "url": "https://ps.example/pending/f7a3b9c2d1e04856",
         "request_headers": {
-          "Content-Type": "application/json"
+          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+          "Signature": "sig=:ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ:"
         },
-        "request_body": {
-          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
-          "interaction": "https://as.example/interact?code=a3f8c2d1e94b7065",
-          "expires_in": 600
-        },
+        "request_body": null,
         "response_status": 202,
         "response_headers": {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "Retry-After": "2",
+          "Cache-Control": "no-store"
         },
         "response_body": {
-          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
-          "interaction": "https://as.example/interact?code=a3f8c2d1e94b7065",
-          "expires_in": 600
+          "status": "pending"
         },
         "tokens": [],
         "signature": null,
         "annotations": [
-          "The PS propagates the deferred response back to the agent unchanged.",
-          "This is the body the UI needs to highlight: {pending, interaction, expires_in}.",
-          "pending: https://as.example/pending/a3f8c2d1e94b7065",
-          "interaction: https://as.example/interact?code=a3f8c2d1e94b7065"
+          "Agent polls its PS's pending URL \u2014 not the AS directly.",
+          "PS is waiting for the user to approve at the AS. It returns 202 with status=pending.",
+          "Agent respects Retry-After and polls again later."
         ],
         "is_response": false
       },
       {
         "step": 5,
-        "from": "agent",
-        "to": "ps",
-        "label": "Poll pending URL \u2192 202 still pending",
-        "method": "GET",
-        "url": "https://as.example/pending/a3f8c2d1e94b7065",
-        "request_headers": {
-          "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
-          "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-          "Signature": "sig=:FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw:"
-        },
-        "request_body": null,
-        "response_status": 202,
-        "response_headers": {
-          "Content-Type": "application/json"
-        },
-        "response_body": {
-          "pending": "https://as.example/pending/a3f8c2d1e94b7065",
-          "status": "waiting_for_user"
-        },
-        "tokens": [],
-        "signature": null,
-        "annotations": [
-          "The agent can poll immediately, but the request is still waiting on user consent.",
-          "This gives the second 202 in the 202 \u2192 202 \u2192 200 progression."
-        ],
-        "is_response": false
-      },
-      {
-        "step": 6,
         "from": "user",
         "to": "as",
         "label": "User opens interaction URL \u2192 grants consent",
@@ -778,12 +754,12 @@
         "is_response": false
       },
       {
-        "step": 7,
+        "step": 6,
         "from": "agent",
         "to": "ps",
-        "label": "Poll pending URL \u2192 200 + auth token",
+        "label": "Poll PS pending URL \u2192 200 + auth token",
         "method": "GET",
-        "url": "https://as.example/pending/a3f8c2d1e94b7065",
+        "url": "https://ps.example/pending/f7a3b9c2d1e04856",
         "request_headers": {
           "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
           "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
@@ -795,7 +771,8 @@
           "Content-Type": "application/json"
         },
         "response_body": {
-          "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ.eyJpc3MiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDMiLCJhdWQiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDIiLCJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsImp0aSI6ImJmMDE2ZjllLWY1NjMtNGY5OS1iMGE4LTIwZjM2YjM0NWQ4ZiIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiJySVd5QVJyMFcweHFzVWNxdDlHcURlbVRwSzdSd1dsRDBKYk5fWlliZ29BIiwia2lkIjoiYWdlbnQta2V5LTEifX0sImlhdCI6MTc3NjIyNDUwMSwiZXhwIjoxNzc2MjI4MTAxLCJhZ2VudCI6ImFhdXRoOmxvY2FsQDEyNy4wLjAuMSIsImFjdCI6eyJzdWIiOiJodHRwOi8vMTI3LjAuMC4xOjgwMDEifSwic2NvcGUiOiJyZWFkIHdyaXRlIn0.AP2xZePKyFvqtR8xFI4P0LnvuEjAFjONvEQRPLPKmDicNRjbOt9kotMUrNCTFKI6UMRlXw4CPCITdxMJFbywCw"
+          "auth_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+          "expires_in": 3600
         },
         "tokens": [
           {
@@ -834,13 +811,14 @@
         ],
         "signature": null,
         "annotations": [
-          "After approval, the next poll returns 200 with the AS-issued auth token.",
-          "The auth token still binds the agent key via cnf.jwk and records act.sub as the requesting agent."
+          "User approved at the AS. The AS issued the auth token to the PS.",
+          "The PS's pending URL now returns 200 with the AS-issued auth token.",
+          "Agent verifies: iss=AS, aud=resource, cnf.jwk=its own key, act.sub=its own identifier."
         ],
         "is_response": false
       },
       {
-        "step": 8,
+        "step": 7,
         "from": "agent",
         "to": "resource",
         "label": "Retry with auth token \u2192 200",
@@ -983,22 +961,22 @@
       "title": "Deferred Authorization Polling",
       "events": [
         {
+          "step": 2,
+          "status": 202,
+          "label": "Interaction required",
+          "detail": "PS federates to AS; AS requires user approval. PS returns 202 with its pending URL."
+        },
+        {
           "step": 4,
           "status": 202,
-          "label": "Initial deferred response",
-          "detail": "AS returns pending and interaction URLs."
+          "label": "Polling \u2014 user not yet approved",
+          "detail": "Agent polls PS pending URL. User has not yet visited the AS interaction page."
         },
         {
-          "step": 5,
-          "status": 202,
-          "label": "First poll",
-          "detail": "User has not approved yet; keep polling the pending URL."
-        },
-        {
-          "step": 7,
+          "step": 6,
           "status": 200,
           "label": "Approved",
-          "detail": "After consent, the next poll returns the auth token."
+          "detail": "User approved at AS. Agent polls PS and receives the AS-issued auth token."
         }
       ]
     }

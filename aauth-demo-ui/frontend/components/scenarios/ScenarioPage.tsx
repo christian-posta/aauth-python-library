@@ -198,6 +198,8 @@ export function ScenarioPage({ scenario }: ScenarioPageProps) {
 
               {/* Headers & Body */}
               <HeaderInspector
+                method={step.method}
+                url={step.url}
                 requestHeaders={step.request_headers}
                 responseHeaders={step.response_headers}
                 requestBody={step.request_body}

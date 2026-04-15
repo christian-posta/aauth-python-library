@@ -494,11 +494,12 @@
         "request_body": null,
         "response_status": 202,
         "response_headers": {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "Retry-After": "2",
+          "Cache-Control": "no-store"
         },
         "response_body": {
-          "pending": "https://ps.example/pending/b7f3e1a2d94c8076",
-          "status": "waiting_for_user"
+          "status": "pending"
         },
         "tokens": [],
         "signature": null,
