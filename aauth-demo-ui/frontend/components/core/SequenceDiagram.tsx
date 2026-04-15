@@ -16,18 +16,19 @@ const PARTICIPANT_COLORS: Record<string, string> = {
 const LANE_WIDTH = 140;
 const LANE_PADDING = 40;
 const HEADER_HEIGHT = 80;
-const STEP_HEIGHT = 64;
-const ARROW_Y_OFFSET = 32;
+const STEP_HEIGHT = 80;
+const ARROW_Y_OFFSET = 28;
+const RESPONSE_Y_OFFSET = 52;
 
 function getColor(type: string) {
   return PARTICIPANT_COLORS[type] ?? "#94a3b8";
 }
 
 function statusColor(status: number): string {
-  if (status >= 200 && status < 300) return "#4ade80";
-  if (status === 202) return "#60a5fa";
-  if (status === 401) return "#fbbf24";
-  if (status >= 400) return "#f87171";
+  if (status === 202) return "#60a5fa";   // blue — deferred/pending
+  if (status >= 200 && status < 300) return "#4ade80"; // green — success
+  if (status === 401) return "#fbbf24";   // amber — auth challenge
+  if (status >= 400) return "#f87171";    // red — error
   return "#94a3b8";
 }
 
@@ -117,6 +118,7 @@ export function SequenceDiagram({
         {/* Steps / arrows */}
         {steps.map((step, idx) => {
           const y = HEADER_HEIGHT + idx * STEP_HEIGHT + ARROW_Y_OFFSET;
+          const ry = HEADER_HEIGHT + idx * STEP_HEIGHT + RESPONSE_Y_OFFSET;
           const fromX = laneX(step.from);
           const toX = laneX(step.to);
           const isPast = idx < currentStep;
@@ -128,9 +130,18 @@ export function SequenceDiagram({
             : isPast
             ? statusColor(step.response_status) + "88"
             : "#475569";
+          const respColor = isCurrent
+            ? statusColor(step.response_status)
+            : statusColor(step.response_status) + "66";
 
           const dir = toX > fromX ? 1 : -1;
           const arrowEndX = toX + dir * -8;
+          // Return arrow goes opposite direction
+          const retFromX = toX + dir * -14;
+          const retEndX = fromX + dir * 14;
+
+          // Show the dashed return arrow for non-is_response steps that have happened
+          const showReturn = !isResponse && !isFuture;
 
           return (
             <g
@@ -138,14 +149,13 @@ export function SequenceDiagram({
               onClick={() => !isFuture && onStepClick(idx)}
               className={cn(isFuture ? "cursor-default" : "cursor-pointer")}
             >
-              {/* Hover area */}
+              {/* Hover area — spans request + response rows */}
               <rect
                 x={Math.min(fromX, toX) - 10}
                 y={y - 18}
                 width={Math.abs(toX - fromX) + 20}
-                height={36}
+                height={showReturn ? RESPONSE_Y_OFFSET - ARROW_Y_OFFSET + 22 : 36}
                 fill="transparent"
-                className="group"
               />
 
               {/* Step number bubble */}
@@ -170,7 +180,7 @@ export function SequenceDiagram({
                 {idx + 1}
               </text>
 
-              {/* Arrow line — animate for current step */}
+              {/* Request arrow line */}
               {isCurrent ? (
                 <motion.line
                   key={`arrow-${idx}`}
@@ -198,7 +208,7 @@ export function SequenceDiagram({
                 />
               )}
 
-              {/* Arrowhead */}
+              {/* Request arrowhead */}
               <polygon
                 points={
                   dir > 0
@@ -222,8 +232,69 @@ export function SequenceDiagram({
                 {step.label.length > 28 ? step.label.slice(0, 27) + "…" : step.label}
               </text>
 
-              {/* HTTP status badge for past/current */}
-              {!isFuture && (
+              {/* Dashed return arrow + status badge */}
+              {showReturn && (
+                <g opacity={isCurrent ? 1 : 0.55}>
+                  {/* Return line */}
+                  {isCurrent ? (
+                    <motion.line
+                      key={`ret-${idx}`}
+                      x1={retFromX}
+                      y1={ry}
+                      x2={retEndX}
+                      y2={ry}
+                      stroke={respColor}
+                      strokeWidth={1.5}
+                      strokeDasharray="5 3"
+                      initial={{ pathLength: 0, opacity: 0 }}
+                      animate={{ pathLength: 1, opacity: 1 }}
+                      transition={{ duration: 0.4, ease: "easeOut", delay: 0.2 }}
+                    />
+                  ) : (
+                    <line
+                      x1={retFromX}
+                      y1={ry}
+                      x2={retEndX}
+                      y2={ry}
+                      stroke={respColor}
+                      strokeWidth={1.5}
+                      strokeDasharray="5 3"
+                    />
+                  )}
+                  {/* Return arrowhead — points back toward fromX */}
+                  <polygon
+                    points={
+                      dir > 0
+                        ? `${retEndX},${ry} ${retEndX + 7},${ry - 3.5} ${retEndX + 7},${ry + 3.5}`
+                        : `${retEndX},${ry} ${retEndX - 7},${ry - 3.5} ${retEndX - 7},${ry + 3.5}`
+                    }
+                    fill={respColor}
+                  />
+                  {/* Status badge on the return arrow */}
+                  <rect
+                    x={(fromX + toX) / 2 - 18}
+                    y={ry - 9}
+                    width={36}
+                    height={13}
+                    rx={3}
+                    fill={statusColor(step.response_status) + "22"}
+                  />
+                  <text
+                    x={(fromX + toX) / 2}
+                    y={ry + 1}
+                    textAnchor="middle"
+                    fill={statusColor(step.response_status)}
+                    fontSize={9}
+                    fontWeight={600}
+                    fontFamily="var(--font-geist-mono)"
+                  >
+                    {step.response_status}
+                  </text>
+                </g>
+              )}
+
+              {/* Status badge for is_response steps (no return arrow) */}
+              {isResponse && !isFuture && (
                 <g>
                   <rect
                     x={(fromX + toX) / 2 - 18}
