@@ -152,7 +152,7 @@ class AccessServer:
 
         @self.app.post("/pending/{pending_id}")
         async def pending_post(pending_id: str, request: Request):
-            """POST to pending URL for clarification response per spec Section 11.4."""
+            """POST to pending URL for clarification response per spec §Clarification Chat."""
             return await self._handle_pending_post(pending_id, request)
 
         # --- Interaction endpoint (user-facing, spec Section 11.5) ---
@@ -571,8 +571,11 @@ class AccessServer:
                 content={"error": "invalid_request", "error_description": "Agent signing key not available"}
             )
 
-        # Check whether the agent supports clarification chat.
-        agent_clarification_supported = self._agent_supports_clarification(agent_id, debug)
+        # Check whether the agent supports clarification chat (fetch metadata at agent
+        # server URL — not ``agent_id``, which is the aauth: subject for jwks_uri).
+        agent_clarification_supported = (
+            self._agent_supports_clarification(agent_url, debug) if agent_url else False
+        )
 
         # Check if user consent is required → deferred response (202)
         if policy_result.get("requires_user_consent"):
@@ -845,7 +848,11 @@ class AccessServer:
             upstream_act = upstream_payload.get("act") or {"sub": upstream_payload.get("agent", "")}
 
         policy_result = self._evaluate_policy(agent_id_for_policy, resource_id, scope)
-        agent_clarification_supported = self._agent_supports_clarification(agent_id_for_policy, debug)
+        agent_clarification_supported = (
+            self._agent_supports_clarification(agent_server_url_for_policy, debug)
+            if agent_server_url_for_policy
+            else False
+        )
 
         if policy_result.get("requires_user_consent"):
             return self._create_pending_request(
@@ -1045,10 +1052,16 @@ class AccessServer:
             return agent_jwk  # agent server's key
         return None
 
-    def _agent_supports_clarification(self, agent_id: str, debug: bool = False) -> bool:
-        """Discover whether agent metadata declares clarification support."""
+    def _agent_supports_clarification(self, agent_server_base_url: str, debug: bool = False) -> bool:
+        """Discover whether agent metadata declares clarification support.
+
+        ``agent_server_base_url`` MUST be the agent's HTTP(S) issuer URL (same base used
+        for JWKS discovery), e.g. ``https://agent.example`` or ``http://127.0.0.1:8001``.
+        Do not pass an ``aauth:…`` subject identifier — well-known metadata has no
+        defined URL for those.
+        """
         try:
-            metadata_url = f"{agent_id}/.well-known/aauth-agent"
+            metadata_url = f"{agent_server_base_url.rstrip('/')}/.well-known/aauth-agent.json"
             metadata = fetch_resource_metadata(metadata_url)
             return bool(metadata.get("clarification_supported", False))
         except Exception as e:
@@ -1184,7 +1197,10 @@ class AccessServer:
         # Return interacting status if user has arrived at interaction endpoint
         poll_status = pending.get("status", "pending")
         body = build_pending_response_body(location=pending_url, clarification=clarification, status=poll_status)
-        headers = build_pending_response_headers(location=pending_url, retry_after=2)
+        # Spec §Clarification Chat (MUST): include AAuth-Requirement: requirement=clarification
+        # in the header whenever the 202 body carries a clarification question.
+        pending_require = "clarification" if clarification else None
+        headers = build_pending_response_headers(location=pending_url, retry_after=2, require=pending_require)
 
         return Response(
             content=json.dumps(body),
@@ -1194,7 +1210,7 @@ class AccessServer:
         )
 
     async def _handle_pending_post(self, pending_id: str, request: Request) -> Response:
-        """Handle POST /pending/{id} - clarification response per spec Section 11.4."""
+        """Handle POST /pending/{id} - clarification response per spec §Clarification Chat."""
         debug = _is_debug_enabled()
 
         pending = self.pending_requests.get(pending_id)

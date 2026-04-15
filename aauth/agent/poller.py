@@ -154,6 +154,16 @@ def poll_pending_url(
             body = response.json()
             require = body.get("requirement") or body.get("require")
             code = body.get("code")
+            # Spec §Clarification Chat: AAuth-Requirement: requirement=clarification MUST
+            # be present in the header; the question text is in the body "clarification" field.
+            # Check both: header for the requirement signal, body for the question text.
+            aauth_req_header = (
+                getattr(response, "headers", {}).get("aauth-requirement")
+                or getattr(response, "headers", {}).get("AAuth-Requirement")
+                or ""
+            )
+            if not require and "requirement=clarification" in aauth_req_header:
+                require = "clarification"
             clarification = body.get("clarification")
             poll_status = body.get("status", "pending")
 

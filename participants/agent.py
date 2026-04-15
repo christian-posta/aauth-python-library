@@ -57,6 +57,7 @@ class Agent:
         mm_url: Optional[str] = None,
         capabilities: Optional[list] = None,
         agent_sub: Optional[str] = None,
+        auto_interact: bool = True,
     ):
         """Initialize agent.
 
@@ -74,6 +75,12 @@ class Agent:
                 ["interaction", "clarification"].
             agent_sub: The agent's ``aauth:local@domain`` identifier used as the ``sub``
                 claim in agent tokens. If omitted, derived from ``agent_id``.
+            auto_interact: If True (default), the agent handles interaction requirements
+                automatically (either via user simulator or by printing the URL). Set
+                False when the caller controls consent timing externally — e.g. in demos
+                that wait for a clarification round-trip before triggering user consent.
+                When False, the agent skips interaction handling entirely and relies on
+                the caller to direct the user and complete consent independently.
         """
         self.agent_id = agent_id
         # agent_sub is the aauth:local@domain identifier (used as sub in agent tokens).
@@ -81,9 +88,16 @@ class Agent:
         self.agent_sub: str = agent_sub or agent_identifier_from_server_url(agent_id)
         self.port = port
         self.use_user_simulator = use_user_simulator
+        self.auto_interact = auto_interact
         self.clarification_supported = clarification_supported
         self.mm_url = mm_url.rstrip("/") if mm_url else None
-        self.capabilities: list = capabilities if capabilities is not None else ["interaction", "clarification"]
+        # Derive default AAuth-Capabilities from clarification_supported when not explicit.
+        # Spec §AAuth-Capabilities: include "clarification" only when the agent supports it,
+        # so that servers can tailor their 202 responses accordingly.
+        if capabilities is not None:
+            self.capabilities: list = capabilities
+        else:
+            self.capabilities = ["interaction"] + (["clarification"] if clarification_supported else [])
         self.approved_mission: Optional[Dict[str, Any]] = None
         self.private_key, self.public_key = generate_ed25519_keypair()
         self.kid = "key-1"
@@ -843,8 +857,10 @@ class Agent:
         if debug:
             logger.debug(f"Deferred response: pending_url={pending_url}, require={require}, code={code}")
 
-        # If interaction required, direct user to interaction endpoint
-        if require == "interaction" and code:
+        # If interaction required, direct user to interaction endpoint.
+        # Skipped when auto_interact=False — caller controls consent timing externally
+        # (e.g. demos that wait for a clarification round-trip before triggering consent).
+        if require == "interaction" and code and self.auto_interact:
             try:
                 # Prefer url from AAuth-Requirement header, fall back to metadata
                 interaction_endpoint = None

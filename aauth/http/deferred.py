@@ -108,6 +108,10 @@ def build_pending_response_headers(
         headers[HEADER_AAUTH_REQUIREMENT] = f'requirement=interaction; url="{url}"; code="{code}"'
     elif require == "approval":
         headers[HEADER_AAUTH_REQUIREMENT] = "requirement=approval"
+    elif require == "clarification":
+        # Spec §Clarification Chat: MUST include AAuth-Requirement: requirement=clarification
+        # when a 202 response carries a clarification question.
+        headers[HEADER_AAUTH_REQUIREMENT] = "requirement=clarification"
     elif require == "claims" and required_claims:
         inner = " ".join(f'"{c}"' for c in required_claims)
         headers[HEADER_AAUTH_REQUIREMENT] = f"requirement=claims; required_claims=({inner})"

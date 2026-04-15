@@ -2,11 +2,12 @@
 
 The AS poses a clarification question to the agent during user consent.
 The agent (``clarification_supported=True``) POSTs a ``clarification_response`` to the
-pending URL before consent completes, per AAuth spec Section 11.4.  The AS records
+pending URL before consent completes, per SPEC.md §Clarification Chat.  The AS records
 the answer and includes it in the consent context before issuing an auth token.
 
 TEST 2 shows that when the agent declares ``clarification_supported=False`` in its
-metadata, the AS skips clarification entirely (still issues a token after consent).
+metadata (and omits ``clarification`` from ``AAuth-Capabilities``), the AS skips
+clarification entirely (still issues a token after consent).
 """
 
 import asyncio
@@ -109,7 +110,11 @@ async def main() -> None:
     resource_id = "http://127.0.0.1:8002"
     as_id = "http://127.0.0.1:8003"
 
-    agent = Agent(agent_id, port=8001, use_user_simulator=False, clarification_supported=True)
+    # auto_interact=False: the demo controls consent timing — consent is triggered
+    # AFTER the clarification round-trip completes (see _wait_for_clarification_response
+    # below).  Without this flag the agent would print the interaction URL immediately
+    # upon receiving the first 202, causing a premature consent before clarification.
+    agent = Agent(agent_id, port=8001, clarification_supported=True, auto_interact=False)
     resource = Resource(resource_id, port=8002, auth_server=as_id)
     auth = AccessServer(
         as_id,
