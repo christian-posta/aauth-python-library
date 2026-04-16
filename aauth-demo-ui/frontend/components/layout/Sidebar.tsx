@@ -3,13 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Radio, Lock, FileText, Zap, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Radio, Lock, FileText, Zap, Layers, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
   label: string;
   href: string;
-  phase?: number;
   badge?: string;
 }
 
@@ -22,13 +21,24 @@ interface NavSection {
 
 const NAV: NavSection[] = [
   {
+    title: "Foundations",
+    icon: Layers,
+    color: "text-cyan-400",
+    items: [
+      { label: "HTTP Signatures Profile", href: "/foundations/profile" },
+      { label: "Signature-Key Schemes", href: "/foundations/schemes" },
+      { label: "Error Model", href: "/foundations/errors" },
+    ],
+  },
+  {
     title: "Message Signing",
     icon: Radio,
     color: "text-blue-400",
     items: [
-      { label: "Pseudonymous (sig=hwk)", href: "/signing/pseudonymous", phase: 1 },
-      { label: "Agent Identity (sig=jwks_uri)", href: "/signing/identity", phase: 2 },
-      { label: "Agent Tokens (sig=jwt)", href: "/signing/agent-tokens", phase: 6 },
+      { label: "Pseudonymous (sig=hwk)", href: "/signing/pseudonymous" },
+      { label: "Hardware-backed (sig=jkt-jwt)", href: "/signing/hardware-backed" },
+      { label: "Agent Identity (sig=jwks_uri)", href: "/signing/identity" },
+      { label: "Agent Tokens (sig=jwt)", href: "/signing/agent-tokens" },
       { label: "Compare Modes", href: "/signing/compare" },
     ],
   },
@@ -38,9 +48,9 @@ const NAV: NavSection[] = [
     color: "text-green-400",
     items: [
       { label: "Identity-Based", href: "/access/identity-based" },
-      { label: "Resource-Managed (2-party)", href: "/access/resource-managed", phase: 2 },
-      { label: "PS-Managed (3-party)", href: "/access/ps-managed", phase: 3 },
-      { label: "Federated (4-party)", href: "/access/federated", phase: 4 },
+      { label: "Resource-Managed (2-party)", href: "/access/resource-managed" },
+      { label: "PS-Managed (3-party)", href: "/access/ps-managed" },
+      { label: "Federated (4-party)", href: "/access/federated" },
       { label: "Compare Modes", href: "/access/compare" },
     ],
   },
@@ -49,10 +59,10 @@ const NAV: NavSection[] = [
     icon: FileText,
     color: "text-purple-400",
     items: [
-      { label: "Proposal & Approval", href: "/missions/lifecycle", phase: 5 },
-      { label: "Resource Access", href: "/missions/resource-access", phase: 10 },
-      { label: "Out-of-Bounds Access", href: "/missions/out-of-bounds", phase: 11 },
-      { label: "End-to-End Lifecycle", href: "/missions/end-to-end", phase: 12 },
+      { label: "Proposal & Approval", href: "/missions/lifecycle" },
+      { label: "Resource Access", href: "/missions/resource-access" },
+      { label: "Out-of-Bounds Access", href: "/missions/out-of-bounds" },
+      { label: "End-to-End Lifecycle", href: "/missions/end-to-end" },
       { label: "With vs Without Missions", href: "/missions/compare" },
     ],
   },
@@ -61,9 +71,9 @@ const NAV: NavSection[] = [
     icon: Zap,
     color: "text-orange-400",
     items: [
-{ label: "Call Chaining", href: "/advanced/call-chaining", phase: 7 },
-      { label: "Clarification Chat", href: "/advanced/clarification", phase: 8 },
-      { label: "Interaction Chaining", href: "/advanced/interaction-chaining", phase: 9 },
+      { label: "Call Chaining", href: "/advanced/call-chaining" },
+      { label: "Clarification Chat", href: "/advanced/clarification" },
+      { label: "Interaction Chaining", href: "/advanced/interaction-chaining" },
     ],
   },
 ];
@@ -108,11 +118,6 @@ function SidebarSection({ section, defaultOpen }: { section: NavSection; default
                 )}
               >
                 <span className="flex-1">{item.label}</span>
-                {item.phase !== undefined && (
-                  <span className="text-[10px] font-mono text-muted-foreground/60 shrink-0">
-                    p{item.phase}
-                  </span>
-                )}
               </Link>
             );
           })}

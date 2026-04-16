@@ -1,249 +1,151 @@
 import Link from "next/link";
-import { Radio, Lock, FileText, Zap, ArrowRight, Shield, GitBranch, Users } from "lucide-react";
+import { ArrowRight, Shield, Radio, Lock, FileText, BookOpen } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-const SIGNING_CARDS = [
+const FOUNDATIONS_LINKS = [
   {
-    href: "/signing/pseudonymous",
-    label: "Pseudonymous",
-    sublabel: "sig=hwk",
-    desc: "HTTP Message Signing with a symmetric key. No identity — just proof-of-possession.",
-    color: "border-blue-500/30 hover:border-blue-500/60",
-    dot: "bg-blue-500",
-    phase: 1,
+    href: "/foundations/profile",
+    label: "HTTP Signatures Profile",
+    desc: "What AAuth pins from RFC 9421",
   },
   {
-    href: "/signing/identity",
-    label: "Agent Identity",
-    sublabel: "sig=jwks_uri",
-    desc: "Cryptographic identity via JWKS URI. Resource discovers the agent's public key.",
-    color: "border-blue-500/30 hover:border-blue-500/60",
-    dot: "bg-blue-400",
-    phase: 2,
+    href: "/foundations/schemes",
+    label: "Signature-Key Schemes",
+    desc: "The four schemes, side-by-side",
   },
   {
-    href: "/signing/agent-tokens",
-    label: "Agent Tokens",
-    sublabel: "sig=jwt",
-    desc: "An agent server issues an aa-agent+jwt binding a delegate's key. The delegate signs requests using that token as its identity.",
-    color: "border-blue-500/30 hover:border-blue-500/60",
-    dot: "bg-blue-200",
-    phase: 6,
-  },
-  {
-    href: "/signing/compare",
-    label: "Compare Modes",
-    sublabel: "side-by-side",
-    desc: "See all signing modes compared — headers, trust level, what the resource learns.",
-    color: "border-zinc-700 hover:border-zinc-500",
-    dot: "bg-zinc-500",
+    href: "/foundations/errors",
+    label: "Error Model",
+    desc: "Signature-Error codes",
   },
 ];
 
-const ACCESS_CARDS = [
+const LAYERS = [
   {
-    href: "/access/identity-based",
-    label: "Identity-Based",
-    sublabel: "no auth token",
-    desc: "Agent signs the request; resource grants access based on cryptographic identity alone. No token exchange.",
-    color: "border-green-500/30 hover:border-green-500/60",
-    dot: "bg-green-500",
-  },
-  {
-    href: "/access/resource-managed",
-    label: "Resource-Managed",
-    sublabel: "2-party",
-    desc: "Resource handles auth itself — internal policy or OIDC/OAuth on its side. Issues an opaque AAuth-Access token. No PS or AS. Toggle to see OIDC interaction variant.",
-    color: "border-green-500/30 hover:border-green-500/60",
-    dot: "bg-green-400",
-    phase: 2,
-  },
-  {
-    href: "/access/ps-managed",
-    label: "PS-Managed",
-    sublabel: "3-party",
-    desc: "Resource issues a resource token (aud=PS). The PS issues the auth token directly — no AS. Toggle to see user-approval variant.",
-    color: "border-green-500/30 hover:border-green-500/60",
-    dot: "bg-green-300",
-    phase: 3,
-  },
-  {
-    href: "/access/federated",
-    label: "Federated",
-    sublabel: "4-party",
-    desc: "Resource issues a resource token (aud=AS). The PS federates to the AS, which issues the auth token. Toggle to see user-approval variant.",
-    color: "border-green-500/30 hover:border-green-500/60",
-    dot: "bg-emerald-300",
-    phase: 4,
-  },
-];
-
-const FEATURE_ROWS = [
-  {
-    icon: FileText,
-    color: "text-purple-400",
-    title: "Missions",
-    desc: "Agent proposes a mission (markdown description + tools). PS approves, computes s256 hash. Mission context flows through the entire token chain.",
+    title: "Identity",
+    Icon: Radio,
+    accent: "border-blue-500/35 hover:border-blue-500/55",
+    iconWrap: "bg-blue-500/15 text-blue-400",
+    body: "How an agent cryptographically proves who it is on every request — from pseudonymous keys (no account) to agent tokens that bind a signing key to an identifier. Built on HTTP Message Signatures and the Signature-Key header.",
     links: [
-      { label: "Proposal & Approval", href: "/missions/lifecycle" },
-      { label: "End-to-End", href: "/missions/end-to-end" },
+      { href: "/signing/compare", label: "Compare signing modes" },
+      { href: "/foundations/schemes", label: "Signature-Key schemes" },
     ],
   },
   {
-    icon: GitBranch,
-    color: "text-orange-400",
-    title: "Call Chaining",
-    desc: "Resource 1 acts as agent to call Resource 2. Nested act claims trace the full delegation chain. PS federates across AS1 and AS2.",
-    links: [{ label: "Call Chaining", href: "/advanced/call-chaining" }],
+    title: "Resource access",
+    Icon: Lock,
+    accent: "border-green-500/35 hover:border-green-500/55",
+    iconWrap: "bg-green-500/15 text-green-400",
+    body: "How a protected API decides what the agent may do — from identity-only access through two-party flows, three-party flows with a Person Server, and four-party federation with an Access Server.",
+    links: [{ href: "/access/compare", label: "Compare access modes" }],
   },
   {
-    icon: Users,
-    color: "text-orange-300",
-    title: "Clarification & Interaction",
-    desc: "AS can pose clarification questions during consent. Downstream interactions bubble back through the chain to the original agent.",
+    title: "Mission",
+    Icon: FileText,
+    accent: "border-purple-500/35 hover:border-purple-500/55",
+    iconWrap: "bg-purple-500/15 text-purple-400",
+    body: "Optional governance: the agent proposes a mission; the Person Server approves, scopes permissions, and threads mission context through tokens. Also covers delegation across resources and advanced interaction patterns.",
     links: [
-      { label: "Clarification Chat", href: "/advanced/clarification" },
-      { label: "Interaction Chaining", href: "/advanced/interaction-chaining" },
+      { href: "/missions/compare", label: "Missions vs no mission" },
+      { href: "/missions/lifecycle", label: "Proposal & approval" },
+      { href: "/advanced/call-chaining", label: "Call chaining" },
     ],
   },
 ];
 
-function ScenarioCard({
-  href,
-  label,
-  sublabel,
-  desc,
-  color,
-  dot,
-  phase,
-}: (typeof SIGNING_CARDS)[0]) {
+function LayerCard({
+  title,
+  Icon,
+  accent,
+  iconWrap,
+  body,
+  links,
+}: (typeof LAYERS)[number]) {
   return (
-    <Link
-      href={href}
-      className={`group relative flex flex-col gap-3 rounded-xl border bg-card p-5 transition-all duration-200 ${color}`}
+    <div
+      className={cn(
+        "rounded-xl border bg-card p-6 flex flex-col gap-4 transition-colors",
+        accent
+      )}
     >
-      <div className="flex items-center gap-2">
-        <div className={`h-2 w-2 rounded-full ${dot}`} />
-        <span className="font-semibold text-sm">{label}</span>
-        <span className="text-xs text-muted-foreground font-mono">{sublabel}</span>
-        {phase !== undefined && (
-          <span className="ml-auto text-[10px] font-mono text-muted-foreground/50">
-            phase {phase}
-          </span>
-        )}
+      <div className="flex items-start gap-3">
+        <div
+          className={cn(
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+            iconWrap
+          )}
+        >
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="space-y-2 min-w-0">
+          <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">{body}</p>
+        </div>
       </div>
-      <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
-      <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground group-hover:text-foreground transition-colors mt-auto">
-        Explore <ArrowRight className="h-3 w-3" />
+      <div className="flex flex-wrap gap-2 pt-1">
+        {links.map((l) => (
+          <Link
+            key={l.href}
+            href={l.href}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+          >
+            {l.label}
+            <ArrowRight className="h-3 w-3 opacity-70" />
+          </Link>
+        ))}
       </div>
-    </Link>
+    </div>
   );
 }
 
 export default function HomePage() {
   return (
-    <div className="mx-auto max-w-5xl px-6 py-12 space-y-16">
+    <div className="mx-auto max-w-5xl px-6 py-12 space-y-14">
       {/* Hero */}
       <div className="space-y-4">
         <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
           <Shield className="h-3.5 w-3.5" />
           <span>AAuth Protocol — Autonomous Authorization</span>
         </div>
-        <h1 className="text-4xl font-bold tracking-tight">
-          Protocol Explorer
-        </h1>
+        <h1 className="text-4xl font-bold tracking-tight">Protocol Explorer</h1>
         <p className="max-w-2xl text-lg text-muted-foreground leading-relaxed">
-          An interactive visualizer for the AAuth protocol. Explore signing modes, resource access
-          patterns, missions, delegation, and federation — with real JWT tokens, HTTP signatures,
-          headers, and payloads rendered at every step.
+          An interactive walkthrough of the AAuth protocol. Pick a scenario, step through the
+          requests, and see the real headers and tokens at each hop.
         </p>
-        <div className="flex flex-wrap gap-2 pt-2">
-          {["HTTP Message Signatures (RFC 9421)", "aa-agent+jwt", "aa-resource+jwt", "aa-auth+jwt", "AAuth-Mission"].map(
-            (tag) => (
-              <span
-                key={tag}
-                className="rounded-full border border-border bg-muted px-3 py-1 text-xs font-mono text-muted-foreground"
-              >
-                {tag}
-              </span>
-            )
-          )}
-        </div>
       </div>
 
-      {/* Message Signing */}
-      <section className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Radio className="h-4 w-4 text-blue-400" />
-          <h2 className="text-lg font-semibold">Message Signing</h2>
-          <span className="text-sm text-muted-foreground">
-            How agents prove identity on requests
-          </span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          {SIGNING_CARDS.map((c) => (
-            <ScenarioCard key={c.href} {...c} />
-          ))}
-        </div>
-      </section>
-
-      {/* Resource Access */}
-      <section className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Lock className="h-4 w-4 text-green-400" />
-          <h2 className="text-lg font-semibold">Resource Access Modes</h2>
-          <span className="text-sm text-muted-foreground">
-            From 2-party identity to full 4-party federation
-          </span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          {ACCESS_CARDS.map((c) => (
-            <ScenarioCard key={c.href + c.label} {...c} />
-          ))}
-        </div>
-      </section>
-
-      {/* Advanced Features */}
-      <section className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Zap className="h-4 w-4 text-orange-400" />
-          <h2 className="text-lg font-semibold">Advanced Patterns</h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {FEATURE_ROWS.map(({ icon: Icon, color, title, desc, links }) => (
-            <div
-              key={title}
-              className="rounded-xl border border-border bg-card p-5 space-y-3"
-            >
-              <div className="flex items-center gap-2">
-                <Icon className={`h-4 w-4 ${color}`} />
-                <span className="font-semibold text-sm">{title}</span>
-              </div>
-              <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
-              <div className="flex flex-wrap gap-2">
-                {links.map((l) => (
-                  <Link
-                    key={l.href}
-                    href={l.href}
-                    className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {l.label} <ArrowRight className="h-3 w-3" />
-                  </Link>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Architecture overview */}
+      {/* Participants */}
       <section className="rounded-xl border border-border bg-card p-6 space-y-4">
-        <h2 className="font-semibold">Protocol Architecture</h2>
+        <div className="space-y-1">
+          <h2 className="font-semibold">The four participants</h2>
+          <p className="text-xs text-muted-foreground">
+            Every scenario involves some subset of these roles. Use the sidebar to drill into each
+            area.
+          </p>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           {[
-            { label: "Agent", color: "bg-participant-agent", desc: "Makes signed requests, holds keys, proposes missions" },
-            { label: "Resource", color: "bg-participant-resource", desc: "Protected API; issues resource tokens, verifies auth" },
-            { label: "Person Server", color: "bg-participant-ps", desc: "Represents the user; manages missions, federates to AS" },
-            { label: "Access Server", color: "bg-participant-as", desc: "Issues auth tokens; enforces resource access policy" },
+            {
+              label: "Agent",
+              color: "bg-participant-agent",
+              desc: "Makes signed requests, holds keys, proposes missions",
+            },
+            {
+              label: "Resource",
+              color: "bg-participant-resource",
+              desc: "Protected API; issues resource tokens, verifies auth",
+            },
+            {
+              label: "Person Server",
+              color: "bg-participant-ps",
+              desc: "Represents the user; manages missions, federates to AS",
+            },
+            {
+              label: "Access Server",
+              color: "bg-participant-as",
+              desc: "Issues auth tokens; enforces resource access policy",
+            },
           ].map(({ label, color, desc }) => (
             <div key={label} className="space-y-2">
               <div className={`${color} rounded-md px-3 py-1.5 text-xs font-semibold w-fit`}>
@@ -251,6 +153,51 @@ export default function HomePage() {
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">{desc}</p>
             </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Three layers */}
+      <section className="space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold">Three layers</h2>
+          <p className="text-sm text-muted-foreground max-w-2xl">
+            AAuth stacks identity proof, authorization against resources, and optional mission
+            governance. Each layer links to comparison or entry pages; the sidebar lists every
+            scenario.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 gap-4">
+          {LAYERS.map((layer) => (
+            <LayerCard key={layer.title} {...layer} />
+          ))}
+        </div>
+      </section>
+
+      {/* Spec reference */}
+      <section className="rounded-xl border border-dashed border-border/70 bg-muted/10 p-5 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Spec reference
+          </p>
+          <span className="text-xs text-muted-foreground">
+            How AAuth profiles RFC 9421 and the Signature-Key draft
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {FOUNDATIONS_LINKS.map((l) => (
+            <Link
+              key={l.href}
+              href={l.href}
+              className="group flex items-center justify-between gap-2 rounded-md border border-border/50 bg-background/40 px-3 py-2 hover:border-cyan-500/40 hover:bg-background/80 transition-colors"
+            >
+              <div className="min-w-0">
+                <p className="text-xs font-medium truncate">{l.label}</p>
+                <p className="text-[11px] text-muted-foreground truncate">{l.desc}</p>
+              </div>
+              <ArrowRight className="h-3 w-3 text-muted-foreground group-hover:text-foreground shrink-0" />
+            </Link>
           ))}
         </div>
       </section>
