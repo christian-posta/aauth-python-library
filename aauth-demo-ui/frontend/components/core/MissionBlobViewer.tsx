@@ -21,7 +21,7 @@ export function MissionBlobViewer({ mission }: MissionBlobViewerProps) {
         <div className="space-y-3">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Mission Markdown
+              Description (Markdown)
             </p>
             <div className="mt-2 rounded-lg border border-border bg-muted/10 p-3">
               <pre className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted-foreground">
@@ -30,9 +30,28 @@ export function MissionBlobViewer({ mission }: MissionBlobViewerProps) {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 text-[10px] font-mono text-muted-foreground">
-            <span className="rounded bg-muted px-2 py-1">approver={mission.approver}</span>
-            <span className="rounded bg-muted px-2 py-1">s256={mission.s256.slice(0, 20)}…</span>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Structured Fields
+            </p>
+            <div className="mt-2 grid grid-cols-1 gap-1 text-[10px] font-mono text-muted-foreground">
+              <div className="flex items-baseline gap-2 rounded bg-muted/30 px-2 py-1">
+                <span className="shrink-0 text-muted-foreground/70">approver</span>
+                <span className="break-all">{mission.approver}</span>
+              </div>
+              <div className="flex items-baseline gap-2 rounded bg-muted/30 px-2 py-1">
+                <span className="shrink-0 text-muted-foreground/70">agent</span>
+                <span className="break-all">{mission.agent}</span>
+              </div>
+              <div className="flex items-baseline gap-2 rounded bg-muted/30 px-2 py-1">
+                <span className="shrink-0 text-muted-foreground/70">approved_at</span>
+                <span className="break-all">{mission.approved_at}</span>
+              </div>
+              <div className="flex items-baseline gap-2 rounded bg-muted/30 px-2 py-1">
+                <span className="shrink-0 text-muted-foreground/70">s256</span>
+                <span className="break-all">{mission.s256}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -42,7 +61,7 @@ export function MissionBlobViewer({ mission }: MissionBlobViewerProps) {
               Approved Tools
             </p>
             <div className="mt-2 space-y-2">
-              {mission.tools.map((tool) => (
+              {mission.approved_tools.map((tool) => (
                 <div key={tool.name} className="rounded-lg border border-border bg-muted/10 p-3">
                   <div className="flex items-center gap-2">
                     <Wrench className="h-3.5 w-3.5 text-orange-300" />
@@ -59,7 +78,7 @@ export function MissionBlobViewer({ mission }: MissionBlobViewerProps) {
           {mission.capabilities && mission.capabilities.length > 0 && (
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Capabilities
+                PS Capabilities
               </p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {mission.capabilities.map((capability) => (

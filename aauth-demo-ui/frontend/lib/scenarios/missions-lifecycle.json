@@ -1,8 +1,8 @@
 {
   "id": "missions-lifecycle",
   "title": "Mission Proposal & Approval",
-  "description": "The agent proposes a mission to the Person Server: a Markdown description of what it intends to accomplish, plus a list of tools it will use. Because the PS acts on behalf of a human, approval requires user interaction \u2014 the PS returns a 202 with an interaction URL so the user can review and approve the mission. Once approved, the PS returns the mission blob and an AAuth-Mission header containing the approver URL and s256 (SHA-256 fingerprint of the blob).",
-  "spec_section": "\u00a7 Missions",
+  "description": "The agent proposes a mission to the Person Server: a Markdown description of what it intends to accomplish, plus a list of tools it will use. Because the PS acts on behalf of a human, approval requires user interaction \u2014 the PS returns 202 with an interaction URL so the user can review and approve the mission. Once approved, the PS returns the mission blob (with approver, agent, approved_at, description, approved_tools, and capabilities) and an AAuth-Mission header containing the approver URL and s256 (SHA-256 fingerprint of the blob bytes).",
+  "spec_section": "\u00a7 Mission",
   "category": "missions",
   "demo_phase": 5,
   "participants": [
@@ -26,7 +26,10 @@
     "title": "Approved Mission Blob",
     "description": "Mission proposal approved by the Person Server.",
     "markdown": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
-    "tools": [
+    "approver": "https://ps.example",
+    "agent": "aauth:local@agent.example",
+    "approved_at": "2026-04-14T17:14:54Z",
+    "approved_tools": [
       {
         "name": "FeedbackReader",
         "description": "Read customer feedback records"
@@ -36,12 +39,10 @@
         "description": "Write the summary report to the shared drive"
       }
     ],
-    "approver": "https://ps.example",
     "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
     "capabilities": [
-      "clarification",
       "interaction",
-      "tool-approval"
+      "clarification"
     ]
   },
   "steps": [
@@ -64,6 +65,9 @@
         "person_server": "https://ps.example",
         "token_endpoint": "https://ps.example/token",
         "mission_endpoint": "https://ps.example/mission",
+        "interaction_endpoint": "https://ps.example/interaction",
+        "audit_endpoint": "https://ps.example/audit",
+        "permission_endpoint": "https://ps.example/permission",
         "jwks_uri": "https://ps.example/jwks.json"
       },
       "tokens": [],
@@ -83,7 +87,6 @@
       "url": "https://ps.example/mission",
       "request_headers": {
         "Content-Type": "application/json",
-        "AAuth-Capabilities": "clarification, interaction",
         "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
         "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
         "Signature": "sig=:KCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo:"
@@ -155,9 +158,10 @@
       },
       "annotations": [
         "Agent POSTs the mission proposal signed with its agent token (sig=jwt).",
-        "PS cannot approve without the user \u2014 it returns 202 Accepted.",
-        "Location header gives the pending URL the agent will poll.",
-        "AAuth-Requirement carries the interaction URL and one-time code for the user."
+        "Proposal body contains description (Markdown) + proposed tools list (\u00a71197).",
+        "PS cannot approve without the user \u2014 it returns 202 Accepted (\u00a71224).",
+        "AAuth-Requirement carries the interaction URL + one-time code for user review.",
+        "AAuth-Capabilities is NOT sent on PS endpoints per \u00a71731 \u2014 the PS learns capabilities from the mission approval flow."
       ],
       "is_response": false
     },
@@ -213,7 +217,8 @@
         "User opens the interaction URL (from PS notification, email, or app).",
         "PS displays the mission description and full tool list for review.",
         "User reads what the agent intends to do and which tools it will use.",
-        "User clicks Approve \u2014 PS marks the mission as approved."
+        "User clicks Approve \u2014 PS marks the mission as approved.",
+        "Per \u00a71224 the PS or user MAY refine the description/tools here before approval \u2014 the approved blob can differ from the proposal."
       ],
       "is_response": false
     },
@@ -233,12 +238,14 @@
       "response_status": 200,
       "response_headers": {
         "Content-Type": "application/json",
-        "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0\"",
-        "AAuth-Capabilities": "clarification, interaction, tool-approval"
+        "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0\""
       },
       "response_body": {
+        "approver": "https://ps.example",
+        "agent": "aauth:local@agent.example",
+        "approved_at": "2026-04-14T17:14:54Z",
         "description": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
-        "tools": [
+        "approved_tools": [
           {
             "name": "FeedbackReader",
             "description": "Read customer feedback records"
@@ -247,16 +254,22 @@
             "name": "ReportWriter",
             "description": "Write the summary report to the shared drive"
           }
+        ],
+        "capabilities": [
+          "interaction",
+          "clarification"
         ]
       },
       "tokens": [],
       "signature": null,
       "annotations": [
         "User has approved \u2014 the next poll returns 200.",
-        "Response body is the approved mission blob (description + tools).",
-        "AAuth-Mission header carries: approver URL + s256 (SHA-256 of the blob).",
+        "Response body is the approved mission blob with REQUIRED fields: approver, agent, approved_at, description (\u00a71261).",
+        "approved_tools and capabilities are OPTIONAL fields (\u00a71268).",
+        "AAuth-Mission header carries: approver URL + s256 (base64url SHA-256 of exact response body bytes).",
         "Agent verifies: SHA-256(response_body_bytes) == s256 in AAuth-Mission header.",
-        "Agent caches the approver URL and s256 \u2014 these are presented in every future resource request."
+        "Agent stores the blob bytes exactly as received \u2014 no re-serialization (\u00a71273).",
+        "Agent unions mission capabilities with its own to build AAuth-Capabilities on resource requests (\u00a71729)."
       ],
       "is_response": false
     }
@@ -286,7 +299,7 @@
         "step": 5,
         "status": 200,
         "label": "Mission approved",
-        "detail": "PS returns mission blob + AAuth-Mission header with s256 fingerprint"
+        "detail": "PS returns mission blob (approver, agent, approved_at, description, approved_tools, capabilities) + AAuth-Mission header with s256"
       }
     ]
   }

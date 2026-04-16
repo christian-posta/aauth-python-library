@@ -1,0 +1,212 @@
+{
+  "id": "missions-completion",
+  "title": "Mission Completion",
+  "description": "When the agent believes the mission is done, it POSTs a completion interaction to the PS's interaction_endpoint with a Markdown summary. The PS presents the summary to the user. The user either ACCEPTS \u2014 the PS terminates the mission and returns 200 OK \u2014 or responds with follow-up questions via clarification, keeping the mission active. See \u00a71285 (Mission Completion) and \u00a71098 (Interaction Endpoint).",
+  "spec_section": "\u00a7 Mission Completion / \u00a7 Interaction Endpoint",
+  "category": "missions",
+  "demo_phase": 13,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "ps",
+      "label": "Person Server",
+      "type": "person-server"
+    },
+    {
+      "id": "user",
+      "label": "User",
+      "type": "user"
+    }
+  ],
+  "mission_blob": {
+    "title": "Mission being completed",
+    "description": "Agent is reporting completion of this approved mission.",
+    "markdown": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
+    "approver": "https://ps.example",
+    "agent": "aauth:local@agent.example",
+    "approved_at": "2026-04-14T17:14:54Z",
+    "approved_tools": [
+      {
+        "name": "FeedbackReader",
+        "description": "Read customer feedback records"
+      },
+      {
+        "name": "ReportWriter",
+        "description": "Write the summary report to the shared drive"
+      }
+    ],
+    "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+    "capabilities": [
+      "interaction",
+      "clarification"
+    ]
+  },
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST /interaction {type=completion, summary, mission}",
+      "method": "POST",
+      "url": "https://ps.example/interaction",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:MDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAxMDAx:"
+      },
+      "request_body": {
+        "type": "completion",
+        "summary": "# Q2 Feedback Analysis Complete\n\nRead 1,247 feedback records across April\u2013June and produced `q2-feedback-summary.pdf` on the shared drive.\n\n**Headline numbers:** avg rating 4.2 \u2b50 \u00b7 68% positive \u00b7 22% neutral \u00b7 10% negative.\n\n**Top three themes:** (1) onboarding flow friction, (2) billing page clarity, (3) requests for dark mode.",
+        "mission": {
+          "approver": "https://ps.example",
+          "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0"
+        }
+      },
+      "response_status": 202,
+      "response_headers": {
+        "Location": "https://ps.example/pending/c5d9a3b7",
+        "Retry-After": "0",
+        "Cache-Control": "no-store"
+      },
+      "response_body": {
+        "status": "pending"
+      },
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494,
+            "ps": "https://ps.example"
+          },
+          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": POST\n\"@authority\": ps.example\n\"@path\": /interaction\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent signs the request with its agent token via Signature-Key: sig=jwt.",
+        "type=\"completion\" and summary is a Markdown string (\u00a71113).",
+        "mission binds the completion to the mission by approver + s256 (\u00a71114).",
+        "AAuth-Capabilities is NOT sent on PS endpoints (\u00a71731).",
+        "PS returns 202 + Location because user acceptance requires human interaction (\u00a71179)."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "user",
+      "to": "ps",
+      "label": "User reviews completion summary",
+      "method": "GET",
+      "url": "https://ps.example/activity/c5d9a3b7",
+      "request_headers": {
+        "Host": "ps.example"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "text/html"
+      },
+      "response_body": "<div class=\"completion-page\"><h1>Mission Completion Report</h1><h2>Analyze Q2 Customer Feedback</h2><p>Agent <strong>aauth:local@agent.example</strong> reports this mission is complete:</p><blockquote><h3>Q2 Feedback Analysis Complete</h3><p>Read 1,247 feedback records across April\u2013June and produced <code>q2-feedback-summary.pdf</code> on the shared drive.</p><p><strong>Headline numbers:</strong> avg rating 4.2 \u2b50 \u00b7 68% positive \u00b7 22% neutral \u00b7 10% negative.</p><p><strong>Top three themes:</strong> onboarding flow friction, billing page clarity, dark mode requests.</p></blockquote><div class=\"actions\"><button class=\"accept\">Accept \u2014 Terminate Mission</button><button class=\"question\">Ask Follow-up via Clarification</button></div></div>",
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "PS notifies the user (push notification, email, or in-app) that the agent proposes completion.",
+        "User reviews the Markdown summary at the PS's UI.",
+        "User clicks Accept \u2014 PS will terminate the mission and return 200 to the agent.",
+        "Alternatively, the user MAY respond with follow-up questions via clarification (\u00a71179), keeping the mission active."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 3,
+      "from": "agent",
+      "to": "ps",
+      "label": "Poll /pending/c5d9a3b7 \u2192 200 (mission terminated)",
+      "method": "GET",
+      "url": "https://ps.example/pending/c5d9a3b7",
+      "request_headers": {
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1:"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "status": "accepted",
+        "mission_status": "terminated"
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "User accepted \u2014 PS returns 200 OK on the next poll (\u00a71179).",
+        "PS terminates the mission \u2014 it transitions to the terminated state (\u00a72967, no suspended state).",
+        "After termination, subsequent PS requests bound to this mission return mission_terminated (\u00a71298).",
+        "Existing auth tokens tied to the mission remain valid only until they expire \u2014 the PS will NOT issue new auth tokens under this mission s256.",
+        "The PS retains the mission log (\u00a71277) for audit even after termination."
+      ],
+      "is_response": false
+    }
+  ],
+  "deferred_timeline": {
+    "title": "Completion Timeline",
+    "events": [
+      {
+        "step": 1,
+        "status": 202,
+        "label": "Completion proposed",
+        "detail": "Agent submits summary via interaction_endpoint"
+      },
+      {
+        "step": 2,
+        "status": 200,
+        "label": "User accepts",
+        "detail": "User reviews summary and accepts completion"
+      },
+      {
+        "step": 3,
+        "status": 200,
+        "label": "Mission terminated",
+        "detail": "PS terminates the mission; mission log retained for audit"
+      }
+    ]
+  }
+}

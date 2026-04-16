@@ -1,8 +1,8 @@
 {
   "id": "missions-out-of-bounds",
-  "title": "Out-of-Bounds Access",
-  "description": "The agent attempts to access a resource that falls outside the approved mission scope. The resource server detects the mismatch and returns 403 Forbidden, prompting the agent to request an updated mission from the Person Server. The user must review and approve the expanded scope before the agent can proceed.",
-  "spec_section": "\u00a7 Missions",
+  "title": "Out-of-Bounds Access (Mission Governance at the PS)",
+  "description": "Missions are immutable (\u00a71279) and the resource never evaluates mission content \u2014 only the PS has the mission description, tool list, and log (\u00a71193). Mission-level enforcement happens at the PS's token endpoint (\u00a7781, \u00a71283, \u00a71748). When an agent requests a scope that is inside its resource's policy but outside the approved mission, the resource still issues a resource token; the PS is the party that detects the mismatch, and per \u00a7797 responds with `202 + requirement=interaction` asking the user for consent. If the user declines, the agent must propose a new mission with a new s256.",
+  "spec_section": "\u00a7 PS Token Endpoint / \u00a7 Mission Log",
   "category": "missions",
   "demo_phase": 11,
   "participants": [
@@ -22,31 +22,32 @@
       "type": "person-server"
     },
     {
-      "id": "as",
-      "label": "Access Server",
-      "type": "access-server"
-    },
-    {
       "id": "user",
       "label": "User",
       "type": "user"
     }
   ],
   "mission_blob": {
-    "title": "Original Mission",
-    "description": "The original approved mission with limited scope.",
-    "markdown": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report.",
-    "tools": [
+    "title": "New Mission (M2) issued after user declined the out-of-scope consent",
+    "description": "Because the agent's broader request fell outside the original mission's scope and the user preferred a new mission over extending the old one, the agent proposes a fresh mission with a distinct s256.",
+    "markdown": "# Analyze Q2 Customer Feedback (Analytics Extension)\n\nRead customer feedback records and detailed analytics data to produce a comprehensive report.",
+    "approver": "https://ps.example",
+    "agent": "aauth:local@agent.example",
+    "approved_at": "2026-04-14T17:18:22Z",
+    "approved_tools": [
       {
         "name": "FeedbackReader",
         "description": "Read customer feedback records"
+      },
+      {
+        "name": "AnalyticsReader",
+        "description": "Read detailed analytics data"
       }
     ],
-    "approver": "https://ps.example",
-    "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+    "s256": "X7fE9mPqJ2aKvN3tWbY5cRdLhU8sG1oZ4iA6nM0jQwT",
     "capabilities": [
-      "clarification",
-      "interaction"
+      "interaction",
+      "clarification"
     ]
   },
   "steps": [
@@ -54,67 +55,136 @@
       "step": 1,
       "from": "agent",
       "to": "resource",
-      "label": "GET /data + original mission \u2192 403 out of bounds",
-      "method": "GET",
-      "url": "https://api.example/data/detailed-analytics",
+      "label": "POST /authorize (scope=analytics:read) + M1 \u2192 200 resource token",
+      "method": "POST",
+      "url": "https://api.example/authorize",
       "request_headers": {
+        "Content-Type": "application/json",
         "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0\"",
-        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "AAuth-Capabilities": "interaction, clarification",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"aauth-mission\");created=1700000000;alg=\"ed25519\"",
         "Signature": "sig=:AQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQID:"
       },
-      "request_body": null,
-      "response_status": 403,
+      "request_body": {
+        "scope": "analytics:read"
+      },
+      "response_status": 200,
       "response_headers": {
         "Content-Type": "application/json"
       },
       "response_body": {
-        "error": "forbidden",
-        "error_description": "The requested resource is outside the approved mission scope. The current mission only authorizes reading feedback records, not detailed analytics."
+        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026"
       },
       "tokens": [
         {
-          "name": "Auth Token",
-          "typ": "aa-auth+jwt",
-          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
+          "name": "Resource Token (carries M1 mission + broader scope)",
+          "typ": "aa-resource+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
           "header": {
             "alg": "EdDSA",
-            "kid": "as-key-1",
-            "typ": "aa-auth+jwt"
+            "kid": "resource-key-1",
+            "typ": "aa-resource+jwt"
           },
           "payload": {
-            "iss": "https://as.example",
-            "aud": "https://api.example",
-            "dwk": "aauth-access.json",
-            "jti": "f51cf9d7-6bdf-4997-88be-1f2c27714ca5",
-            "cnf": {
-              "jwk": {
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
-                "kid": "agent-key-1"
-              }
-            },
-            "iat": 1776222894,
-            "exp": 1776226494,
+            "iss": "https://api.example",
+            "aud": "https://as.example",
+            "dwk": "aauth-resource.json",
+            "jti": "6cf12ea2-4a19-4b0d-9d91-1e7d4e0b3c15",
             "agent": "aauth:local@agent.example",
-            "act": {
-              "sub": "aauth:local@agent.example"
-            },
-            "scope": "read",
+            "agent_jkt": "5j5WMuITu8-cV1RdClUeNgnSg3aLJpCYiFvzcwDgYhI",
+            "scope": "analytics:read",
+            "iat": 1776222894,
+            "exp": 1776223494,
             "mission": {
               "approver": "https://ps.example",
               "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0"
             }
           },
-          "signature_b64": "AQ4PrIqINAsoFJLtN7D27685PzlCKlw7NRDS5gZEvj_p6LrteTwqbGPGH-UkiT1r-vMyG1dkyS6zbbAGnST2Dw"
+          "signature_b64": "fN4sPcP23KTjyHuvJ9S2_vR3V_ucaaxmkkn-GF74xJOLWlPdXoUVS_0gVD1Ju30MlJVd4-xWU0P_ZaxsUjeVBg"
         }
       ],
       "signature": {
         "scheme": "jwt",
-        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data/detailed-analytics\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_base": "\"@method\": POST\n\"@authority\": api.example\n\"@path\": /authorize\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"aauth-mission\": approver=\"https://ps.example\"; s256=\"R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"aauth-mission\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"aauth-mission\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key",
+          "aauth-mission"
+        ]
+      },
+      "annotations": [
+        "Agent asks the resource for a resource token with scope=\"analytics:read\", still referencing its original mission M1 (s256=R9kNpXeErMQ1Jvk_\u2026).",
+        "The RESOURCE does not have the mission description or tool list \u2014 only the PS has those (\u00a71193).",
+        "The resource evaluates against ITS OWN scope policy, decides analytics:read is a valid scope for analytics endpoints, and issues the resource token (\u00a7652).",
+        "The mission object {approver, s256} is stamped into the resource token as OPAQUE metadata \u2014 the resource does not judge whether the scope aligns with the mission's intent. That is the PS's job."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST /token \u2192 PS evaluates mission \u2192 202 requirement=interaction",
+      "method": "POST",
+      "url": "https://ps.example/token",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:AgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgME:"
+      },
+      "request_body": {
+        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+        "justification": "Need detailed analytics to complement the feedback summary."
+      },
+      "response_status": 202,
+      "response_headers": {
+        "Location": "https://ps.example/pending/o4b1g2a7",
+        "Retry-After": "0",
+        "Cache-Control": "no-store",
+        "AAuth-Requirement": "requirement=interaction; url=\"https://ps.example/interact/o4b1g2a7\"; code=\"O4B1-G2A7\""
+      },
+      "response_body": {
+        "status": "pending"
+      },
+      "tokens": [
+        {
+          "name": "Resource Token (submitted to PS)",
+          "typ": "aa-resource+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "resource-key-1",
+            "typ": "aa-resource+jwt"
+          },
+          "payload": {
+            "iss": "https://api.example",
+            "aud": "https://as.example",
+            "dwk": "aauth-resource.json",
+            "jti": "6cf12ea2-4a19-4b0d-9d91-1e7d4e0b3c15",
+            "agent": "aauth:local@agent.example",
+            "agent_jkt": "5j5WMuITu8-cV1RdClUeNgnSg3aLJpCYiFvzcwDgYhI",
+            "scope": "analytics:read",
+            "iat": 1776222894,
+            "exp": 1776223494,
+            "mission": {
+              "approver": "https://ps.example",
+              "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0"
+            }
+          },
+          "signature_b64": "fN4sPcP23KTjyHuvJ9S2_vR3V_ucaaxmkkn-GF74xJOLWlPdXoUVS_0gVD1Ju30MlJVd4-xWU0P_ZaxsUjeVBg"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": POST\n\"@authority\": ps.example\n\"@path\": /token\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
         "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
         "covered_components": [
           "@method",
           "@authority",
@@ -123,30 +193,85 @@
         ]
       },
       "annotations": [
-        "Agent has an approved mission and valid auth token.",
-        "Agent attempts to access detailed analytics \u2014 a resource outside mission scope.",
-        "Resource examines the mission claim and its own policy rules.",
-        "The mission description only mentions 'Read customer feedback records', not analytics.",
-        "Resource returns 403 Forbidden \u2014 the agent must expand the mission scope."
+        "This is where mission governance actually happens (\u00a7781, \u00a71283, \u00a71748).",
+        "The PS has the full mission blob (description + approved_tools) AND the mission log. It compares the request against what the user approved.",
+        "The scope analytics:read and the path /data/detailed-analytics are not covered by mission M1's approved tools (FeedbackReader, ReportWriter).",
+        "Per \u00a7797, requests NOT within existing mission scope require user consent \u2014 so the PS returns 202 with requirement=interaction (\u00a7843, \u00a7849).",
+        "The PS has NOT federated to the AS. No auth token is issued while the mission-scope consent is pending."
       ],
       "is_response": false
     },
     {
-      "step": 2,
+      "step": 3,
+      "from": "user",
+      "to": "ps",
+      "label": "User reviews out-of-scope request \u2192 declines",
+      "method": "GET",
+      "url": "https://ps.example/interact/o4b1g2a7?code=O4B1-G2A7",
+      "request_headers": {
+        "Host": "ps.example"
+      },
+      "request_body": null,
+      "response_status": 200,
+      "response_headers": {
+        "Content-Type": "text/html"
+      },
+      "response_body": "<div class=\"consent-page\"><h1>Agent requests scope outside the current mission</h1><p>The agent <strong>aauth:local@agent.example</strong> is operating under the mission <em>Analyze Q2 Customer Feedback</em> (approved with tools: FeedbackReader, ReportWriter).</p><p>It is now asking for:</p><ul><li><strong>scope:</strong> <code>analytics:read</code></li><li><strong>resource:</strong> <code>/data/detailed-analytics</code></li><li><strong>justification:</strong> \u201cNeed detailed analytics to complement the feedback summary.\u201d</li></ul><p>This is outside the scope the user originally approved. You can:</p><div class=\"actions\"><button class=\"approve\">Approve as extension (recorded in mission log)</button><button class=\"clarify\">Ask the agent a clarification question</button><button class=\"deny\">Deny \u2014 agent should propose a new mission</button></div>",
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "User sees a consent prompt that makes the mission-scope mismatch explicit.",
+        "User has three valid responses per the spec: approve (adds to mission log \u2014 missions accumulate context per \u00a71281), ask for clarification (\u00a71281, \u00a7881), or deny.",
+        "For this demo the user chooses Deny \u2014 they prefer a clean new mission over stretching the existing one, consistent with the immutability framing in \u00a71279."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 4,
       "from": "agent",
       "to": "ps",
-      "label": "POST /mission with expanded scope \u2192 202 + interaction",
+      "label": "Poll /pending/o4b1g2a7 \u2192 403 access_denied",
+      "method": "GET",
+      "url": "https://ps.example/pending/o4b1g2a7",
+      "request_headers": {
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:AwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQF:"
+      },
+      "request_body": null,
+      "response_status": 403,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "error": "access_denied",
+        "error_description": "User declined the out-of-mission-scope consent. Request a new mission that covers the broader scope."
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "Agent learns that the PS's mission-scope consent check failed \u2014 the user declined.",
+        "The spec does not define a dedicated 'out-of-mission-scope' error code; the PS uses the standard access_denied pattern familiar from OAuth.",
+        "The original mission M1 is still ACTIVE (not terminated) \u2014 the agent can still operate within M1's original scope. It simply cannot broaden scope under M1.",
+        "To proceed with the analytics work, the agent must propose a NEW mission (\u00a71279, missions are immutable)."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 5,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST /mission (new M2 proposal, broader scope) \u2192 202 pending",
       "method": "POST",
       "url": "https://ps.example/mission",
       "request_headers": {
         "Content-Type": "application/json",
-        "AAuth-Capabilities": "clarification, interaction",
         "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
         "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
         "Signature": "sig=:KCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo:"
       },
       "request_body": {
-        "description": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and detailed analytics data to produce a comprehensive report.",
+        "description": "# Analyze Q2 Customer Feedback (Analytics Extension)\n\nRead customer feedback records and detailed analytics data to produce a comprehensive report.",
         "tools": [
           {
             "name": "FeedbackReader",
@@ -168,36 +293,7 @@
       "response_body": {
         "status": "pending"
       },
-      "tokens": [
-        {
-          "name": "Agent Token",
-          "typ": "aa-agent+jwt",
-          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
-          "header": {
-            "alg": "EdDSA",
-            "kid": "agent-key-1",
-            "typ": "aa-agent+jwt"
-          },
-          "payload": {
-            "iss": "https://agent.example",
-            "sub": "aauth:local@agent.example",
-            "dwk": "aauth-agent.json",
-            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
-            "cnf": {
-              "jwk": {
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
-                "kid": "agent-key-1"
-              }
-            },
-            "iat": 1776222894,
-            "exp": 1776226494,
-            "ps": "https://ps.example"
-          },
-          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
-        }
-      ],
+      "tokens": [],
       "signature": {
         "scheme": "jwt",
         "signature_base": "\"@method\": POST\n\"@authority\": ps.example\n\"@path\": /mission\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
@@ -211,18 +307,18 @@
         ]
       },
       "annotations": [
-        "Agent requests a new mission with expanded scope: analytics data access.",
-        "Tool list now includes AnalyticsReader in addition to FeedbackReader.",
-        "PS returns 202 \u2014 user must review the expanded scope before approval.",
-        "Location header provides the pending URL for polling."
+        "Agent proposes a fresh mission covering the broader scope (analytics).",
+        "This is a NEW mission \u2014 not a mutation of M1. The approved M2 will have its own s256.",
+        "AAuth-Capabilities is NOT sent on PS endpoints (\u00a71731).",
+        "PS returns 202 because it needs the user to review and approve the new mission (\u00a71224)."
       ],
       "is_response": false
     },
     {
-      "step": 3,
+      "step": 6,
       "from": "user",
       "to": "ps",
-      "label": "User reviews expanded mission \u2192 approves",
+      "label": "User reviews new mission \u2192 approves M2",
       "method": "GET",
       "url": "https://ps.example/interact/m9b3c2a1?code=M9B3-C2A1",
       "request_headers": {
@@ -233,22 +329,21 @@
       "response_headers": {
         "Content-Type": "text/html"
       },
-      "response_body": "<div class=\"consent-page\"><h1>Review Expanded Mission Scope</h1><h2>Analyze Q2 Customer Feedback</h2><p>The agent <strong>aauth:local@agent.example</strong> is requesting approval for an expanded mission scope:</p><blockquote>Read customer feedback records <strong>and detailed analytics data</strong> to produce a comprehensive report.</blockquote><h3>New tools being added:</h3><ul><li><strong>FeedbackReader</strong> \u2014 Read customer feedback records (already approved)</li><li><strong>AnalyticsReader</strong> \u2014 Read detailed analytics data <span class=\"badge new\">NEW</span></li></ul><div class=\"actions\"><button class=\"approve\">Approve Expanded Scope</button><button class=\"deny\">Deny</button></div></div>",
+      "response_body": "<div class=\"consent-page\"><h1>Review New Mission</h1><h2>Analyze Q2 Customer Feedback (Analytics Extension)</h2><p>The agent <strong>aauth:local@agent.example</strong> is requesting approval for a <em>new</em> mission covering the broader scope. The original mission M1 (feedback only) is unchanged and still active for its own scope.</p><h3>Tools:</h3><ul><li><strong>FeedbackReader</strong> \u2014 Read customer feedback records</li><li><strong>AnalyticsReader</strong> \u2014 Read detailed analytics data</li></ul><div class=\"actions\"><button class=\"approve\">Approve New Mission</button><button class=\"deny\">Deny</button></div></div>",
       "tokens": [],
       "signature": null,
       "annotations": [
-        "User opens the interaction URL to review the expanded mission.",
-        "PS highlights the new scope: analytics data access.",
-        "PS shows the new tool (AnalyticsReader) being added.",
-        "User approves the expanded scope \u2014 mission is updated."
+        "User reviews and approves the superseding mission M2.",
+        "PS records the approval, computes s256 over the new blob bytes.",
+        "M1 and M2 now coexist \u2014 the agent can operate under either, depending on the task."
       ],
       "is_response": false
     },
     {
-      "step": 4,
+      "step": 7,
       "from": "agent",
       "to": "ps",
-      "label": "Poll /pending/m9b3c2a1 \u2192 200 + new mission blob",
+      "label": "Poll /pending/m9b3c2a1 \u2192 200 + new mission blob (M2)",
       "method": "GET",
       "url": "https://ps.example/pending/m9b3c2a1",
       "request_headers": {
@@ -260,12 +355,14 @@
       "response_status": 200,
       "response_headers": {
         "Content-Type": "application/json",
-        "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"X7fE9mPqJ2aKvN3tWbY5cRdLhU8sG1oZ4iA6nM0jQwT\"",
-        "AAuth-Capabilities": "clarification, interaction"
+        "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"X7fE9mPqJ2aKvN3tWbY5cRdLhU8sG1oZ4iA6nM0jQwT\""
       },
       "response_body": {
-        "description": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and detailed analytics data to produce a comprehensive report.",
-        "tools": [
+        "approver": "https://ps.example",
+        "agent": "aauth:local@agent.example",
+        "approved_at": "2026-04-14T17:18:22Z",
+        "description": "# Analyze Q2 Customer Feedback (Analytics Extension)\n\nRead customer feedback records and detailed analytics data to produce a comprehensive report.",
+        "approved_tools": [
           {
             "name": "FeedbackReader",
             "description": "Read customer feedback records"
@@ -274,243 +371,67 @@
             "name": "AnalyticsReader",
             "description": "Read detailed analytics data"
           }
+        ],
+        "capabilities": [
+          "interaction",
+          "clarification"
         ]
       },
       "tokens": [],
       "signature": null,
       "annotations": [
-        "User has approved \u2014 next poll returns 200 with updated mission blob.",
-        "AAuth-Mission header now has a NEW s256 hash (X7fE9m...) reflecting the expanded scope.",
-        "Agent verifies: SHA-256(response_body_bytes) == new s256.",
-        "Agent caches the new approver + s256 \u2014 this replaces the old mission reference."
-      ],
-      "is_response": false
-    },
-    {
-      "step": 5,
-      "from": "agent",
-      "to": "resource",
-      "label": "POST /authorize + new mission \u2192 resource token",
-      "method": "POST",
-      "url": "https://api.example/authorize",
-      "request_headers": {
-        "Content-Type": "application/json",
-        "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"X7fE9mPqJ2aKvN3tWbY5cRdLhU8sG1oZ4iA6nM0jQwT\"",
-        "AAuth-Capabilities": "clarification, interaction",
-        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "Signature": "sig=:AQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQID:"
-      },
-      "request_body": {
-        "scope": "read"
-      },
-      "response_status": 200,
-      "response_headers": {
-        "Content-Type": "application/json"
-      },
-      "response_body": {
-        "resource_token": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026"
-      },
-      "tokens": [
-        {
-          "name": "Resource Token",
-          "typ": "aa-resource+jwt",
-          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlc291cmNlLWtleS0xIiwidHlwIjoiYWEtcmVzb3VyY2Urand0In0\u2026",
-          "header": {
-            "alg": "EdDSA",
-            "kid": "resource-key-1",
-            "typ": "aa-resource+jwt"
-          },
-          "payload": {
-            "iss": "https://api.example",
-            "aud": "https://ps.example",
-            "dwk": "aauth-resource.json",
-            "jti": "b7d93ac2-8f14-49e5-92a8-4e7d1c6bf2e9",
-            "agent": "aauth:local@agent.example",
-            "agent_jkt": "5j5WMuITu8-cV1RdClUeNgnSg3aLJpCYiFvzcwDgYhI",
-            "scope": "read",
-            "iat": 1776223000,
-            "exp": 1776223600,
-            "mission": {
-              "approver": "https://ps.example",
-              "s256": "X7fE9mPqJ2aKvN3tWbY5cRdLhU8sG1oZ4iA6nM0jQwT"
-            }
-          },
-          "signature_b64": "mZn8rV3wQpYxT9uC6sF2jL4aK1hN7eB5gD0vX8oI3yE2tP9qR6wM5lG4cH7fJ1sA3kU9nY8bV6rT2xW0pE4zCg"
-        },
-        {
-          "name": "Agent Token",
-          "typ": "aa-agent+jwt",
-          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
-          "header": {
-            "alg": "EdDSA",
-            "kid": "agent-key-1",
-            "typ": "aa-agent+jwt"
-          },
-          "payload": {
-            "iss": "https://agent.example",
-            "sub": "aauth:local@agent.example",
-            "dwk": "aauth-agent.json",
-            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
-            "cnf": {
-              "jwk": {
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
-                "kid": "agent-key-1"
-              }
-            },
-            "iat": 1776222894,
-            "exp": 1776226494,
-            "ps": "https://ps.example"
-          },
-          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
-        }
-      ],
-      "signature": {
-        "scheme": "jwt",
-        "signature_base": "\"@method\": POST\n\"@authority\": api.example\n\"@path\": /authorize\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
-        "covered_components": [
-          "@method",
-          "@authority",
-          "@path",
-          "signature-key"
-        ]
-      },
-      "annotations": [
-        "Agent requests resource token, presenting the NEW mission s256 (X7fE9m...).",
-        "Resource verifies the updated mission and issues a new resource token.",
-        "Resource token now includes mission.s256 = X7fE9m... (expanded scope).",
-        "Agent can now proceed through token exchange and access the analytics data."
-      ],
-      "is_response": false
-    },
-    {
-      "step": 6,
-      "from": "agent",
-      "to": "resource",
-      "label": "GET /data/detailed-analytics + new auth token \u2192 200",
-      "method": "GET",
-      "url": "https://api.example/data/detailed-analytics",
-      "request_headers": {
-        "AAuth-Mission": "approver=\"https://ps.example\"; s256=\"X7fE9mPqJ2aKvN3tWbY5cRdLhU8sG1oZ4iA6nM0jQwT\"",
-        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "Signature": "sig=:BAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUGBAUG:"
-      },
-      "request_body": null,
-      "response_status": 200,
-      "response_headers": {
-        "Content-Type": "application/json"
-      },
-      "response_body": {
-        "message": "Access granted with expanded mission scope!",
-        "agent": "aauth:local@agent.example",
-        "mission_verified": true,
-        "s256_match": true,
-        "analytics_data": {
-          "total_feedback": 1247,
-          "avg_rating": 4.2,
-          "sentiment": {
-            "positive": 68,
-            "neutral": 22,
-            "negative": 10
-          }
-        }
-      },
-      "tokens": [
-        {
-          "name": "Auth Token",
-          "typ": "aa-auth+jwt",
-          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026",
-          "header": {
-            "alg": "EdDSA",
-            "kid": "as-key-1",
-            "typ": "aa-auth+jwt"
-          },
-          "payload": {
-            "iss": "https://as.example",
-            "aud": "https://api.example",
-            "dwk": "aauth-access.json",
-            "jti": "c9f2b7a1-3e85-42d6-91f8-7a4e6d2c1b9f",
-            "cnf": {
-              "jwk": {
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
-                "kid": "agent-key-1"
-              }
-            },
-            "iat": 1776223000,
-            "exp": 1776226600,
-            "agent": "aauth:local@agent.example",
-            "act": {
-              "sub": "aauth:local@agent.example"
-            },
-            "scope": "read",
-            "mission": {
-              "approver": "https://ps.example",
-              "s256": "X7fE9mPqJ2aKvN3tWbY5cRdLhU8sG1oZ4iA6nM0jQwT"
-            }
-          },
-          "signature_b64": "pL8qW2vT5nY9cF3xR7mE1jG4sH6aK9bU0dN8fV2oI7yT3eM5rP6wQ1zX4gC2jL9nA5kD7hB8vY6fU3tS1rE4wC"
-        }
-      ],
-      "signature": {
-        "scheme": "jwt",
-        "signature_base": "\"@method\": GET\n\"@authority\": api.example\n\"@path\": /data/detailed-analytics\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
-        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFzLWtleS0xIiwidHlwIjoiYWEtYXV0aCtqd3QifQ\u2026\"",
-        "covered_components": [
-          "@method",
-          "@authority",
-          "@path",
-          "signature-key"
-        ]
-      },
-      "annotations": [
-        "Agent presents auth token with the NEW mission s256 (X7fE9m...).",
-        "Resource verifies: auth token mission.s256 == AAuth-Mission s256 \u2014 both match.",
-        "The expanded mission now covers analytics data access.",
-        "Access granted. Agent receives detailed analytics data for the comprehensive report."
+        "New mission M2 is approved. s256 = X7fE9m\u2026 \u2014 a fresh, distinct hash.",
+        "approved_at is new; the timestamp ensures s256 uniqueness (\u00a71265).",
+        "Agent stores the new blob bytes exactly as received and verifies SHA-256(body) == s256 (\u00a71273).",
+        "From here, the agent repeats the authorization flow (POST /authorize + M2 \u2192 resource_token \u2192 POST /token at PS \u2192 auth_token \u2192 GET /data/detailed-analytics) \u2014 now in scope of M2. See the Resource Access demo for the remaining hops."
       ],
       "is_response": false
     }
   ],
   "deferred_timeline": {
-    "title": "Mission Update Timeline",
+    "title": "Out-of-Bounds \u2192 Supersession Timeline",
     "events": [
       {
         "step": 1,
-        "status": 403,
-        "label": "Access denied",
-        "detail": "Resource outside mission scope"
+        "status": 200,
+        "label": "Resource issues resource token",
+        "detail": "Resource uses its OWN scope policy. Mission is stamped as opaque {approver, s256} metadata."
       },
       {
         "step": 2,
         "status": 202,
-        "label": "Mission update requested",
-        "detail": "Agent requests expanded scope, PS queues for user review"
+        "label": "PS asks user consent",
+        "detail": "PS evaluates against M1's mission scope and log; out-of-scope \u2014 requirement=interaction"
       },
       {
         "step": 3,
         "status": 200,
-        "label": "User approves expansion",
-        "detail": "User reviews and approves new tools and scope"
+        "label": "User declines scope extension",
+        "detail": "User prefers a new mission over stretching M1"
       },
       {
         "step": 4,
-        "status": 200,
-        "label": "New mission approved",
-        "detail": "PS returns updated mission blob with new s256"
+        "status": 403,
+        "label": "access_denied returned to agent",
+        "detail": "M1 remains active for its own scope; agent must propose a new mission for broader work"
+      },
+      {
+        "step": 5,
+        "status": 202,
+        "label": "New mission M2 proposed",
+        "detail": "Proposal enters the approval flow; user review pending"
       },
       {
         "step": 6,
         "status": 200,
-        "label": "Access granted",
-        "detail": "Agent accesses analytics with updated mission context"
+        "label": "User approves M2",
+        "detail": "Approved with a distinct s256, covering the analytics scope"
+      },
+      {
+        "step": 7,
+        "status": 200,
+        "label": "Agent holds M2",
+        "detail": "Agent can now re-run the authorization flow and obtain an auth token for analytics"
       }
     ]
   }

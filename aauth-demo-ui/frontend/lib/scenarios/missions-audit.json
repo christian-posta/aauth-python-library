@@ -1,0 +1,253 @@
+{
+  "id": "missions-audit",
+  "title": "Audit Endpoint",
+  "description": "The audit endpoint enables agents to log actions they performed \u2014 providing the PS with a record for governance and monitoring that feeds the mission log. The agent POSTs a signed audit entry after performing an action, the PS responds 201 Created, and the audit is fire-and-forget (the agent SHOULD NOT block on the response). The audit endpoint REQUIRES a mission \u2014 there is no audit outside a mission context (\u00a71046).",
+  "spec_section": "\u00a7 Audit Endpoint / \u00a7 Mission Log",
+  "category": "missions",
+  "demo_phase": 14,
+  "participants": [
+    {
+      "id": "agent",
+      "label": "Agent",
+      "type": "agent"
+    },
+    {
+      "id": "ps",
+      "label": "Person Server",
+      "type": "person-server"
+    }
+  ],
+  "mission_blob": {
+    "title": "Mission being audited",
+    "description": "Agent is logging per-action audit records against this approved mission.",
+    "markdown": "# Analyze Q2 Customer Feedback\n\nRead customer feedback records and produce a summary report with sentiment analysis and key themes.",
+    "approver": "https://ps.example",
+    "agent": "aauth:local@agent.example",
+    "approved_at": "2026-04-14T17:14:54Z",
+    "approved_tools": [
+      {
+        "name": "FeedbackReader",
+        "description": "Read customer feedback records"
+      },
+      {
+        "name": "ReportWriter",
+        "description": "Write the summary report to the shared drive"
+      }
+    ],
+    "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0",
+    "capabilities": [
+      "interaction",
+      "clarification"
+    ]
+  },
+  "steps": [
+    {
+      "step": 1,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST /audit (FeedbackReader.read) \u2192 201 Created",
+      "method": "POST",
+      "url": "https://ps.example/audit",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:AQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQIDAQID:"
+      },
+      "request_body": {
+        "mission": {
+          "approver": "https://ps.example",
+          "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0"
+        },
+        "action": "FeedbackReader.read",
+        "description": "Read Q2 customer feedback records from the feedback service.",
+        "parameters": {
+          "date_range": "2026-04-01..2026-06-30",
+          "product": "all"
+        },
+        "result": {
+          "status": "completed",
+          "records_read": 1247
+        }
+      },
+      "response_status": 201,
+      "response_headers": {
+        "Location": "https://ps.example/audit/a4e8b2c1"
+      },
+      "response_body": null,
+      "tokens": [
+        {
+          "name": "Agent Token",
+          "typ": "aa-agent+jwt",
+          "raw": "eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026",
+          "header": {
+            "alg": "EdDSA",
+            "kid": "agent-key-1",
+            "typ": "aa-agent+jwt"
+          },
+          "payload": {
+            "iss": "https://agent.example",
+            "sub": "aauth:local@agent.example",
+            "dwk": "aauth-agent.json",
+            "jti": "a6ae301d-1dc7-4b75-8f8b-5612197664a7",
+            "cnf": {
+              "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "T_1-DXNIxIv0tFEqrD9q4LHu4VcHJgsiDPN__R1_Y2U",
+                "kid": "agent-key-1"
+              }
+            },
+            "iat": 1776222894,
+            "exp": 1776226494,
+            "ps": "https://ps.example"
+          },
+          "signature_b64": "8byvGd-PR3uOLeS_HYOpbW7OD_8whUuDRnadQOL83-3jp5V_zwPUkKvBZ-WmB26EaWGey4bVktpWtpykEOy_Bw"
+        }
+      ],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": POST\n\"@authority\": ps.example\n\"@path\": /audit\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Agent signs the request with its agent token (Signature-Key: sig=jwt, \u00a71050).",
+        "Request body REQUIRES mission + action (\u00a71054\u20131055).",
+        "description, parameters, result are OPTIONAL but recommended for useful audit (\u00a71056\u20131058).",
+        "AAuth-Capabilities is NOT sent on PS endpoints (\u00a71731).",
+        "PS returns 201 Created \u2014 audit is fire-and-forget (\u00a71094). Agent SHOULD NOT block."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 2,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST /audit (ReportWriter.write) \u2192 201 Created",
+      "method": "POST",
+      "url": "https://ps.example/audit",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:AgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgMEAgME:"
+      },
+      "request_body": {
+        "mission": {
+          "approver": "https://ps.example",
+          "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0"
+        },
+        "action": "ReportWriter.write",
+        "description": "Wrote `q2-feedback-summary.pdf` to the shared drive.",
+        "parameters": {
+          "path": "/drive/reports/q2-feedback-summary.pdf",
+          "bytes": 284912
+        },
+        "result": {
+          "status": "completed",
+          "checksum": "sha256:5jHTQ\u2026"
+        }
+      },
+      "response_status": 201,
+      "response_headers": {
+        "Location": "https://ps.example/audit/a4e8b2c2"
+      },
+      "response_body": null,
+      "tokens": [],
+      "signature": {
+        "scheme": "jwt",
+        "signature_base": "\"@method\": POST\n\"@authority\": ps.example\n\"@path\": /audit\n\"signature-key\": sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"\n\"@signature-params\": sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "signature_key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "covered_components": [
+          "@method",
+          "@authority",
+          "@path",
+          "signature-key"
+        ]
+      },
+      "annotations": [
+        "Second audit record: the agent logs the ReportWriter action against the same mission.",
+        "Each audit entry stands alone \u2014 the PS records them in order as part of the mission log (\u00a71277).",
+        "PS MAY use audit records to detect anomalous behavior, alert the user, or revoke the mission (\u00a71094)."
+      ],
+      "is_response": false
+    },
+    {
+      "step": 3,
+      "from": "agent",
+      "to": "ps",
+      "label": "POST /audit AFTER mission termination \u2192 403 mission_terminated",
+      "method": "POST",
+      "url": "https://ps.example/audit",
+      "request_headers": {
+        "Content-Type": "application/json",
+        "Signature-Key": "sig=jwt;jwt=\"eyJhbGciOiJFZERTQSIsImtpZCI6ImFnZW50LWtleS0xIiwidHlwIjoiYWEtYWdlbnQrand0In0\u2026\"",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1700000000;alg=\"ed25519\"",
+        "Signature": "sig=:AwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQFAwQF:"
+      },
+      "request_body": {
+        "mission": {
+          "approver": "https://ps.example",
+          "s256": "R9kNpXeErMQ1Jvk_vxYUp3YEdggmvUhksWtjXtcmnh0"
+        },
+        "action": "FeedbackReader.read",
+        "description": "Late audit sent after the user already terminated the mission.",
+        "parameters": {
+          "date_range": "2026-07-01..2026-07-31"
+        },
+        "result": {
+          "status": "completed",
+          "records_read": 42
+        }
+      },
+      "response_status": 403,
+      "response_headers": {
+        "Content-Type": "application/json"
+      },
+      "response_body": {
+        "error": "mission_terminated",
+        "error_description": "The mission is no longer active. Propose a new mission to continue."
+      },
+      "tokens": [],
+      "signature": null,
+      "annotations": [
+        "The user previously completed/terminated this mission (see Mission Completion demo).",
+        "Any PS request tied to the terminated mission's s256 now returns mission_terminated (\u00a71096, \u00a71298).",
+        "The agent must propose a new mission (see Out-of-Bounds demo) to continue doing governed work.",
+        "The PS still retains the mission log for audit even after termination (\u00a72967)."
+      ],
+      "is_response": false
+    }
+  ],
+  "deferred_timeline": {
+    "title": "Audit Flow",
+    "events": [
+      {
+        "step": 1,
+        "status": 201,
+        "label": "Read audited",
+        "detail": "Agent logs FeedbackReader action against the mission"
+      },
+      {
+        "step": 2,
+        "status": 201,
+        "label": "Write audited",
+        "detail": "Agent logs ReportWriter action \u2014 PS appends to the mission log"
+      },
+      {
+        "step": 3,
+        "status": 403,
+        "label": "Post-termination attempt",
+        "detail": "After the user accepted completion, late audits return mission_terminated"
+      }
+    ]
+  }
+}

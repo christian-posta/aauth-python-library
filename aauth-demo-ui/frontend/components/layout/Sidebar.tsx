@@ -62,6 +62,8 @@ const NAV: NavSection[] = [
       { label: "Proposal & Approval", href: "/missions/lifecycle" },
       { label: "Resource Access", href: "/missions/resource-access" },
       { label: "Out-of-Bounds Access", href: "/missions/out-of-bounds" },
+      { label: "Completion", href: "/missions/completion" },
+      { label: "Audit Endpoint", href: "/missions/audit" },
       { label: "End-to-End Lifecycle", href: "/missions/end-to-end" },
       { label: "With vs Without Missions", href: "/missions/compare" },
     ],

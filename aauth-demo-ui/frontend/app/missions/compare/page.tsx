@@ -37,9 +37,20 @@ const WITH = {
     request: {
       "Signature-Key": 'sig=jwt;jwt="eyJhbGc...agent-token..."',
       "AAuth-Mission": 'approver="https://ps.example"; s256="sha256ofmission…"',
-      "AAuth-Capabilities": "clarification, interaction, tool-approval",
+      "AAuth-Capabilities": "interaction, clarification",
       "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key" "aauth-mission")',
       Signature: "sig=:base64url…:",
+    },
+    missionBlob: {
+      approver: "https://ps.example",
+      agent: "aauth:local@agent.example",
+      approved_at: "2026-04-14T17:14:54Z",
+      description: "# Task …",
+      approved_tools: [
+        { name: "FeedbackReader", description: "Read customer feedback records" },
+        { name: "ReportWriter", description: "Write the summary report" },
+      ],
+      capabilities: ["interaction", "clarification"],
     },
     resourceToken: {
       iss: "https://api.example",
@@ -145,6 +156,12 @@ export default function MissionsComparePage() {
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Request Headers</p>
                 <HeaderBlock data={mode.headers.request as Record<string, unknown>} />
               </div>
+              {"missionBlob" in mode.headers && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Mission Blob (from PS /mission approval)</p>
+                  <HeaderBlock data={(mode.headers as { missionBlob: Record<string, unknown> }).missionBlob} />
+                </div>
+              )}
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Resource Token (aa-resource+jwt payload)</p>
                 <HeaderBlock data={mode.headers.resourceToken as Record<string, unknown>} />
@@ -165,9 +182,12 @@ export default function MissionsComparePage() {
           {[
             "Agent fetches PS well-known metadata to find mission_endpoint.",
             'Agent POSTs mission proposal: {"description": "# Task...", "tools": [...]}.',
-            'PS approves → returns AAuth-Mission: approver="..."; s256="sha256..." header.',
-            "Agent verifies SHA-256(response_body_bytes) == s256 from header.",
-            "Agent stores approver URL + s256 — includes in AAuth-Mission on all subsequent requests.",
+            "PS cannot approve without the user — returns 202 + AAuth-Requirement with interaction URL.",
+            "User opens the interaction URL, reviews the description and tools, and approves.",
+            "Agent polls the pending URL; PS returns 200 with the approved mission blob (approver, agent, approved_at, description, approved_tools, capabilities).",
+            'AAuth-Mission: approver="..."; s256="sha256..." header is set on the 200 response.',
+            "Agent verifies SHA-256(response_body_bytes) == s256 from the header and stores the bytes as received.",
+            "Agent includes AAuth-Mission on all subsequent requests; when the mission terminates, the PS returns mission_terminated for any mission-bound request.",
           ].map((step, i) => (
             <li key={i} className="flex items-start gap-3">
               <span className="shrink-0 text-[10px] font-mono text-muted-foreground/50 mt-1">{i + 1}.</span>
@@ -181,6 +201,12 @@ export default function MissionsComparePage() {
           </Link>
           <Link href="/missions/end-to-end" className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
             End-to-End Lifecycle <ArrowRight className="h-3 w-3" />
+          </Link>
+          <Link href="/missions/completion" className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+            Mission Completion <ArrowRight className="h-3 w-3" />
+          </Link>
+          <Link href="/missions/audit" className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+            Audit Endpoint <ArrowRight className="h-3 w-3" />
           </Link>
         </div>
       </section>

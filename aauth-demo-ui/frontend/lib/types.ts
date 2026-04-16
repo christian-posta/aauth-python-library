@@ -94,8 +94,13 @@ export interface MissionBlobData {
   title: string;
   description: string;
   markdown: string;
-  tools: MissionTool[];
+  /** Required per SPEC.md §1261 — approved tool list returned in the mission blob */
+  approved_tools: MissionTool[];
   approver: string;
+  /** Required per SPEC.md §1261 — agent identifier on the approved blob */
+  agent: string;
+  /** Required per SPEC.md §1261 — ISO 8601 timestamp; ensures s256 uniqueness */
+  approved_at: string;
   s256: string;
   capabilities?: string[];
 }
