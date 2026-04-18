@@ -3,7 +3,7 @@
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 from ..signing.signer import sign_request
-from ..headers.signature_key import build_signature_key_header
+from ..signing.signature_key import build_signature_key_header
 from ..errors import SignatureError
 
 

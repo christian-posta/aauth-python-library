@@ -82,9 +82,9 @@ from .tokens.auth_token import create_auth_token, parse_token_claims, verify_tok
 from .tokens.resource_token import create_resource_token
 
 # Header handling
-from .headers.signature_key import build_signature_key_header, parse_signature_key
-from .headers.signature_input import build_signature_input_header, parse_signature_input
-from .headers.signature import build_signature_header, parse_signature
+from .signing.signature_key import build_signature_key_header, parse_signature_key
+from .signing.signature_input import build_signature_input_header, parse_signature_input
+from .signing.signature import build_signature_header, parse_signature
 from .headers.agent_auth import parse_agent_auth_header, build_agent_auth_challenge
 from .headers.aauth_header import (
     parse_aauth_header,

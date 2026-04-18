@@ -1,4 +1,4 @@
-"""Signature-Key header parsing and building for AAuth.
+"""Signature-Key header parsing and building.
 
 Supports schemes per draft-hardt-httpbis-signature-key:
 - hwk: Hardware/inline public key (pseudonymous)

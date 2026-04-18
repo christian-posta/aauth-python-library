@@ -22,7 +22,7 @@ from starlette.responses import HTMLResponse
 from aauth.debug import _is_debug_enabled, _is_http_debug_enabled
 from aauth.errors import ERROR_INTERACTION_REQUIRED, ERROR_MISSION_TERMINATED
 from aauth.headers.aauth_header import parse_aauth_capabilities_header
-from aauth.headers.signature_key import parse_signature_key
+from aauth.signing.signature_key import parse_signature_key
 from aauth.http.deferred import (
     build_pending_response_body,
     build_pending_response_headers,
@@ -679,7 +679,7 @@ class PersonServer:
 
         # Accept revocation from the token's resource (aud) only
         try:
-            from aauth.headers.signature_key import parse_signature_key
+            from aauth.signing.signature_key import parse_signature_key
             pk = parse_signature_key(sig_key)
             caller_id = pk["params"].get("id") or pk["params"].get("uri")
         except Exception as e:

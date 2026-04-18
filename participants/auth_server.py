@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aauth.signing.verifier import verify_signature
-from aauth.headers.signature_key import parse_signature_key
+from aauth.signing.signature_key import parse_signature_key
 from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.keys.jwk import public_key_to_jwk, generate_jwks, jwk_to_public_key, calculate_jwk_thumbprint
 from aauth.metadata.auth_server import generate_auth_metadata, fetch_metadata as fetch_resource_metadata
@@ -1974,8 +1974,8 @@ class AccessServer:
             print(f"DEBUG AUTH:     Resource JWK kid: {resource_jwk_for_cnf.get('kid') if resource_jwk_for_cnf else 'N/A'}", file=sys.stderr, flush=True)
         try:
             from aauth.signing.signature_base import build_signature_base
-            from aauth.headers.signature_input import parse_signature_input
-            from aauth.headers.signature import parse_signature
+            from aauth.signing.signature_input import parse_signature_input
+            from aauth.signing.signature import parse_signature
             from urllib.parse import urlparse
             
             # Parse signature input to get covered components
@@ -2251,7 +2251,7 @@ button{{flex:1;padding:12px;border:none;border-radius:4px;font-size:16px;font-we
             return JSONResponse(status_code=401, content={"error": "invalid_signature", "error_description": "Missing signature headers"})
 
         try:
-            from aauth.headers.signature_key import parse_signature_key
+            from aauth.signing.signature_key import parse_signature_key
             pk = parse_signature_key(sig_key)
             caller_id = pk["params"].get("id") or pk["params"].get("uri")
         except Exception as e:

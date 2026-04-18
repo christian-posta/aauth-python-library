@@ -5,10 +5,10 @@ import time
 from typing import Dict, Any, Optional, Callable
 from urllib.parse import urlparse
 import jwt
-from ..headers.signature_key import parse_signature_key
-from ..headers.signature_input import parse_signature_input
-from ..headers.signature import parse_signature
-from ..signing.signature_base import build_signature_base
+from .signature_key import parse_signature_key
+from .signature_input import parse_signature_input
+from .signature import parse_signature
+from .signature_base import build_signature_base
 from ..keys.jwk import jwk_to_public_key
 from ..tokens.agent_token import verify_agent_token
 from ..errors import SignatureError

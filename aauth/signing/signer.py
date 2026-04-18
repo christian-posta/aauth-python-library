@@ -3,10 +3,10 @@
 from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
 import time
-from ..headers.signature_key import build_signature_key_header
-from ..headers.signature_input import build_signature_input_header
-from ..headers.signature import build_signature_header
-from ..signing.signature_base import build_signature_base, calculate_content_digest, build_signature_params
+from .signature_key import build_signature_key_header
+from .signature_input import build_signature_input_header
+from .signature import build_signature_header
+from .signature_base import build_signature_base, calculate_content_digest, build_signature_params
 from ..errors import SignatureError
 
 
@@ -76,7 +76,7 @@ def sign_request(
         include_aauth_mission = any(k.lower() == "aauth-mission" for k in headers)
 
         # Determine covered components
-        from ..signing.signature_base import _determine_covered_components
+        from .signature_base import _determine_covered_components
         covered_components = _determine_covered_components(
             query_string,
             body,

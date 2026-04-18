@@ -9,7 +9,7 @@ from aauth.metadata.agent import generate_agent_metadata
 from aauth.metadata.auth_server import fetch_metadata
 from aauth.signing.signer import sign_request
 from aauth.signing.verifier import verify_signature
-from aauth.headers.signature_key import build_signature_key_header
+from aauth.signing.signature_key import build_signature_key_header
 from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.keys.jwk import public_key_to_jwk, generate_jwks, jwk_to_public_key
 from aauth.errors import SignatureError

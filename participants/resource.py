@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aauth.signing.verifier import verify_signature
 from aauth.signing.signer import sign_request
-from aauth.headers.signature_key import parse_signature_key
-from aauth.headers.signature_input import parse_signature_input
+from aauth.signing.signature_key import parse_signature_key
+from aauth.signing.signature_input import parse_signature_input
 from aauth.keys.jwk import jwk_to_public_key, public_key_to_jwk, generate_jwks, calculate_jwk_thumbprint
 from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.metadata.resource import generate_resource_metadata
@@ -1030,7 +1030,7 @@ class Resource:
             return JSONResponse(status_code=401, content={"error": "invalid_signature", "error_description": "Missing signature headers"})
 
         try:
-            from aauth.headers.signature_key import parse_signature_key
+            from aauth.signing.signature_key import parse_signature_key
             pk = parse_signature_key(sig_key)
             caller_id = pk["params"].get("id") or pk["params"].get("uri")
         except Exception as e:

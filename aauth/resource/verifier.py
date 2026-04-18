@@ -2,8 +2,8 @@
 
 from typing import Dict, Any, Optional, List, Callable
 from ..signing.verifier import verify_signature
-from ..headers.signature_key import parse_signature_key
-from ..headers.signature_input import parse_signature_input
+from ..signing.signature_key import parse_signature_key
+from ..signing.signature_input import parse_signature_input
 from ..errors import SignatureError
 
 
