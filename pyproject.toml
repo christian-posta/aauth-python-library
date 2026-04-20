@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE"}
 dependencies = [
+    "aauth-signing>=0.1.0",
     "cryptography>=41.0.0",
     "PyJWT>=2.8.0",
     "httpx>=0.25.0",
@@ -40,6 +41,9 @@ dev = [
     "python-dateutil>=2.8.0",
     "python-multipart>=0.0.6",
 ]
+
+[tool.uv.sources]
+aauth-signing = { path = "aauth-signing", editable = true }
 
 [tool.setuptools.packages.find]
 include = ["aauth*"]

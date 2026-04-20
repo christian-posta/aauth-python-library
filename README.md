@@ -6,6 +6,8 @@ A Python implementation of the AAuth protocol for learning and understanding the
 
 This project includes a reusable `aauth` Python library that can be installed and used in other projects.
 
+The HTTP message signing stack also ships as a separate package, **`aauth-signing`** (import name `aauth_signing`), in the [`aauth-signing/`](aauth-signing/) directory. Installing `aauth` pulls it in automatically; with **uv**, the workspace resolves the local path dependency from [`pyproject.toml`](pyproject.toml).
+
 ### Installing in the Current Project
 
 If you're working within this project:

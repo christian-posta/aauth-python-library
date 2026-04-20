@@ -1,11 +1,18 @@
 """Custom exceptions and error codes for AAuth."""
 
+from aauth_signing.errors import (
+    AAuthError,
+    SignatureError,
+    TokenError,
+    ERROR_INVALID_SIGNATURE,
+)
+
 
 # --- Signature-Error Header Codes (401 responses, per draft-hardt-httpbis-signature-key) ---
 
 ERROR_INVALID_REQUEST = "invalid_request"
 ERROR_INVALID_INPUT = "invalid_input"
-ERROR_INVALID_SIGNATURE = "invalid_signature"
+# ERROR_INVALID_SIGNATURE imported from aauth_signing.errors
 ERROR_UNSUPPORTED_ALGORITHM = "unsupported_algorithm"
 ERROR_INVALID_KEY = "invalid_key"
 ERROR_UNKNOWN_KEY = "unknown_key"
@@ -63,30 +70,6 @@ def build_error_response(error: str, description: str = None, **extras) -> dict:
         response["error_description"] = description
     response.update(extras)
     return response
-
-
-class AAuthError(Exception):
-    """Base exception for all AAuth errors."""
-    pass
-
-
-class SignatureError(AAuthError):
-    """HTTP signature validation or creation error."""
-
-    def __init__(self, message: str, error_code: str = None, details: dict = None):
-        super().__init__(message)
-        self.error_code = error_code or ERROR_INVALID_SIGNATURE
-        self.details = details or {}
-
-
-class TokenError(AAuthError):
-    """Token validation or creation error."""
-
-    def __init__(self, message: str, token_type: str = None, error_code: str = None, details: dict = None):
-        super().__init__(message)
-        self.token_type = token_type
-        self.error_code = error_code
-        self.details = details or {}
 
 
 class ChallengeError(AAuthError):
