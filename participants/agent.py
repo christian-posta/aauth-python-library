@@ -217,6 +217,7 @@ class Agent:
         if sig_scheme in ("jwks", "jwks_uri"):
             kwargs["id"] = self.agent_id
             kwargs["kid"] = self.kid
+            kwargs["dwk"] = "aauth-agent.json"
         elif sig_scheme == "jwt":
             if not jwt:
                 raise ValueError("sig=jwt requires 'jwt' parameter")

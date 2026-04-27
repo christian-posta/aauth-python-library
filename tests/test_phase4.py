@@ -66,7 +66,7 @@ def test_auth_server_metadata_includes_token_and_interaction_endpoints(auth_serv
     r = client.get("/.well-known/aauth-access.json")
     assert r.status_code == 200
     data = r.json()
-    assert data["access_server"] == auth_server.auth_id
+    assert data["issuer"] == auth_server.auth_id
     assert "token_endpoint" in data
     assert "interaction_endpoint" in data
     assert str(data["interaction_endpoint"]).rstrip("/").endswith("interact")

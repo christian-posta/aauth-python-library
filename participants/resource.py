@@ -529,11 +529,11 @@ class Resource:
             if _is_debug_enabled():
                 print(f"DEBUG RESOURCE: sig=jwks - agent_id={agent_id}, kid={kid}", file=sys.stderr, flush=True)
 
-            # Create jwks_fetcher callback
-            def jwks_fetcher(agent_id_param: str, kid_param: Optional[str] = None):
+            # Create jwks_fetcher callback — called as (id, dwk, kid) by the library verifier
+            def jwks_fetcher(agent_id_param: str, dwk_param: str = "aauth-agent.json", kid_param: Optional[str] = None):
                 if not kid_param:
                     kid_param = params.get("kid")  # Use kid from params if not provided
-                return self._fetch_jwks_for_agent(agent_id_param, kid_param)
+                return self._fetch_jwks_for_agent(agent_id_param, kid_param, dwk=dwk_param)
             
             # Verify signature
             is_valid = verify_signature(
@@ -920,11 +920,11 @@ class Resource:
             return False, None
         
         # Create JWKS fetcher for auth server
-        def auth_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+        def auth_jwks_fetcher(issuer_url: str, dwk_param: str = "aauth-access.json", kid_param: Optional[str] = None):
             """Fetch auth server JWKS."""
             try:
                 # Fetch auth server metadata
-                metadata_url = f"{issuer_url}/.well-known/aauth-access"
+                metadata_url = f"{issuer_url}/.well-known/{dwk_param}"
                 metadata = fetch_metadata(metadata_url)
                 jwks_uri = metadata.get("jwks_uri")
                 if not jwks_uri:
@@ -961,9 +961,9 @@ class Resource:
             print(f"DEBUG RESOURCE:   Verifying HTTPSig signature using key from cnf.jwk", file=sys.stderr, flush=True)
         
         # Create jwks_fetcher for HTTPSig verification (for sig=jwt scheme)
-        def jwt_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+        def jwt_jwks_fetcher(issuer_url: str, dwk_param: str = "aauth-agent.json", kid_param: Optional[str] = None):
             """JWKS fetcher for sig=jwt verification (returns auth server JWKS)."""
-            return auth_jwks_fetcher(issuer_url, kid_param)
+            return auth_jwks_fetcher(issuer_url, dwk_param, kid_param)
         
         is_valid = verify_signature(
             method=method,
@@ -1051,7 +1051,7 @@ class Resource:
             )
 
         # Verify the signature
-        def revoker_jwks_fetcher(issuer_url: str, kid_param=None):
+        def revoker_jwks_fetcher(issuer_url: str, dwk_param: str = "aauth-agent.json", kid_param=None):
             try:
                 for path in ("/.well-known/aauth-access.json", "/.well-known/aauth-access",
                              "/.well-known/aauth-person.json", "/.well-known/aauth-person"):
@@ -1116,12 +1116,12 @@ class Resource:
             print(f"DEBUG RESOURCE:   Token (first 100 chars): {jwt_token[:100]}...", file=sys.stderr, flush=True)
         
         # Create JWKS fetcher for agent server
-        def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+        def agent_jwks_fetcher(issuer_url: str, dwk_param: str = "aauth-agent.json", kid_param: Optional[str] = None):
             """Fetch agent server JWKS."""
             try:
                 # For testing: map example.com URLs to localhost if server is running locally
                 # This handles cases where token has example.com URL but server is on localhost
-                metadata_url = f"{issuer_url}/.well-known/aauth-agent"
+                metadata_url = f"{issuer_url}/.well-known/{dwk_param}"
                 
                 # Try to fetch metadata, but if it fails and issuer_url contains example.com,
                 # try mapping to localhost (common in test scenarios)
@@ -1134,7 +1134,7 @@ class Resource:
                         for port in [8001, 8000, 8080]:
                             try:
                                 local_url = f"http://127.0.0.1:{port}"
-                                local_metadata_url = f"{local_url}/.well-known/aauth-agent"
+                                local_metadata_url = f"{local_url}/.well-known/{dwk_param}"
                                 metadata = fetch_metadata(local_metadata_url)
                                 # If successful, update jwks_uri to use local URL
                                 jwks_uri = metadata.get("jwks_uri")
@@ -1247,21 +1247,22 @@ class Resource:
         
         return True, claims
     
-    def _fetch_jwks_for_agent(self, agent_id: str, kid: str) -> Optional[Dict[str, Any]]:
+    def _fetch_jwks_for_agent(self, agent_id: str, kid: str, dwk: str = "aauth-agent.json") -> Optional[Dict[str, Any]]:
         """Fetch JWKS for an agent via metadata discovery.
 
-        Per SPEC_UPDATED.md, agents publish metadata at the fixed path
-        /.well-known/aauth-agent.json which contains jwks_uri.
+        Per draft-hardt-httpbis-signature-key, the verifier fetches
+        ``{id}/.well-known/{dwk}`` to discover ``jwks_uri``.
 
         Args:
             agent_id: Agent identifier (HTTPS URL)
             kid: Key identifier
+            dwk: Well-known metadata document name (from Signature-Key dwk param)
 
         Returns:
             JWKS document (dict with "keys" array) if found, None otherwise
 
         Discovery procedure:
-        1. Fetch metadata from {agent_id}/.well-known/aauth-agent.json
+        1. Fetch metadata from {agent_id}/.well-known/{dwk}
         2. Extract jwks_uri from metadata
         3. Fetch JWKS from jwks_uri
         4. Verify key with matching kid exists
@@ -1269,11 +1270,11 @@ class Resource:
         import sys
 
         if _is_debug_enabled():
-            print(f"DEBUG RESOURCE: Fetching JWKS for agent_id={agent_id}, kid={kid}", file=sys.stderr, flush=True)
+            print(f"DEBUG RESOURCE: Fetching JWKS for agent_id={agent_id}, kid={kid}, dwk={dwk}", file=sys.stderr, flush=True)
 
         try:
-            # Step 1: Fetch agent metadata from fixed well-known path
-            metadata_url = f"{agent_id}/.well-known/aauth-agent.json"
+            # Step 1: Fetch agent metadata from well-known path using dwk
+            metadata_url = f"{agent_id}/.well-known/{dwk}"
             if _is_debug_enabled():
                 print(f"DEBUG RESOURCE: Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
 
@@ -1432,10 +1433,10 @@ class Resource:
                     content={"error": "invalid_request", "error_description": "Could not extract agent identifier"},
                 )
 
-            def jwks_fetcher(agent_id_param: str, kid_param: Optional[str] = None):
+            def jwks_fetcher(agent_id_param: str, dwk_param: str = "aauth-agent.json", kid_param: Optional[str] = None):
                 if not kid_param:
                     kid_param = key_params.get("kid")
-                return self._fetch_jwks_for_agent(agent_id_param, kid_param)
+                return self._fetch_jwks_for_agent(agent_id_param, kid_param, dwk=dwk_param)
 
             is_valid = verify_signature(
                 method=request.method,
@@ -1643,10 +1644,10 @@ class Resource:
 
         target_uri = str(request.url)
 
-        def jwks_fetcher(agent_id_param: str, kid_param: Optional[str] = None):
+        def jwks_fetcher(agent_id_param: str, dwk_param: str = "aauth-agent.json", kid_param: Optional[str] = None):
             if not kid_param:
                 kid_param = key_params.get("kid")
-            return self._fetch_jwks_for_agent(agent_id_param, kid_param)
+            return self._fetch_jwks_for_agent(agent_id_param, kid_param, dwk=dwk_param)
 
         is_valid = verify_signature(
             method=request.method,
@@ -1893,9 +1894,10 @@ class Resource:
             private_key=self.private_key,
             sig_scheme="jwks_uri",
             id=self.resource_id,
+            dwk="aauth-resource.json",
             kid=self.kid,
         )
-        
+
         initial_headers = {**headers, **sig_headers}
         
         if debug:
@@ -2218,6 +2220,7 @@ class Resource:
             private_key=self.private_key,
             sig_scheme="jwks_uri",
             id=self.resource_id,
+            dwk="aauth-resource.json",
             kid=self.kid,
         )
         async with httpx.AsyncClient() as client:
@@ -2386,6 +2389,7 @@ class Resource:
             private_key=self.private_key,
             sig_scheme="jwks_uri",
             id=self.resource_id,
+            dwk="aauth-resource.json",
             kid=self.kid,
         )
         async with httpx.AsyncClient() as client:

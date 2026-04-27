@@ -9,7 +9,7 @@ from aauth.metadata.agent import generate_agent_metadata
 from aauth.metadata.auth_server import fetch_metadata
 from aauth.signing.signer import sign_request
 from aauth.signing.verifier import verify_signature
-from aauth.signing.signature_key import build_signature_key_header
+from aauth.signing.signature_key import build_signature_key_header, parse_signature_key
 from aauth.keys.keypair import generate_ed25519_keypair
 from aauth.keys.jwk import public_key_to_jwk, generate_jwks, jwk_to_public_key
 from aauth.errors import SignatureError
@@ -114,30 +114,38 @@ class TestSignatureGeneration:
     """Tests for sig=jwks signature generation."""
     
     def test_build_signature_key_header_jwks(self):
-        """Test Signature-Key header generation for sig=jwks."""
+        """Test Signature-Key header generation for sig=jwks_uri."""
         private_key, _ = generate_ed25519_keypair()
         agent_id = "https://agent.example.com"
         kid = "key-1"
-        
+        dwk = "aauth-agent.json"
+
         header = build_signature_key_header(
             "jwks_uri",
             private_key,
             label="sig",
             id=agent_id,
+            dwk=dwk,
             kid=kid
         )
-        
-        assert header.startswith("sig=(")
-        assert 'scheme=jwks_uri' in header
+
+        assert header.startswith("sig=jwks_uri;")
         assert f'id="{agent_id}"' in header
+        assert f'dwk="{dwk}"' in header
         assert f'kid="{kid}"' in header
-    
+        roundtrip = parse_signature_key(header)
+        assert roundtrip["scheme"] == "jwks_uri"
+        assert roundtrip["params"]["id"] == agent_id
+        assert roundtrip["params"]["dwk"] == dwk
+        assert roundtrip["params"]["kid"] == kid
+
     def test_sign_request_jwks(self):
-        """Test signing request with sig=jwks."""
+        """Test signing request with sig=jwks_uri."""
         private_key, _ = generate_ed25519_keypair()
         agent_id = "https://agent.example.com"
         kid = "key-1"
-        
+        dwk = "aauth-agent.json"
+
         headers = sign_request(
             method="GET",
             target_uri="https://resource.example.com/data-jwks",
@@ -146,17 +154,19 @@ class TestSignatureGeneration:
             private_key=private_key,
             sig_scheme="jwks_uri",
             id=agent_id,
+            dwk=dwk,
             kid=kid
         )
-        
+
         assert "Signature-Input" in headers
         assert "Signature" in headers
         assert "Signature-Key" in headers
-        
-        # Verify Signature-Key format
+
+        # Verify Signature-Key format (RFC 8941 Item: scheme token + parameters)
         sig_key = headers["Signature-Key"]
-        assert 'scheme=jwks_uri' in sig_key
+        assert sig_key.startswith("sig=jwks_uri;")
         assert f'id="{agent_id}"' in sig_key
+        assert f'dwk="{dwk}"' in sig_key
         assert f'kid="{kid}"' in sig_key
     
     def test_sign_request_with_query_includes_leading_question_mark(self):
@@ -266,11 +276,12 @@ class TestSignatureVerification:
             private_key=private_key,
             sig_scheme="jwks_uri",
             id=agent_id,
+            dwk="aauth-agent.json",
             kid=kid
         )
-        
-        # Create jwks_fetcher that returns JWKS document
-        def jwks_fetcher(agent_id_param, kid_param=None):
+
+        # Create jwks_fetcher that returns JWKS document (id, dwk, kid)
+        def jwks_fetcher(agent_id_param, dwk_param=None, kid_param=None):
             if agent_id_param == agent_id:
                 jwk = public_key_to_jwk(public_key, kid=kid)
                 return {"keys": [jwk]}
@@ -305,9 +316,10 @@ class TestSignatureVerification:
             private_key=private_key,
             sig_scheme="jwks_uri",
             id=agent_id,
+            dwk="aauth-agent.json",
             kid=kid
         )
-        
+
         # Try to verify without jwks_fetcher
         with pytest.raises((ValueError, SignatureError), match="jwks_fetcher"):
             verify_signature(

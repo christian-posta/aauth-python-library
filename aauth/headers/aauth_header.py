@@ -36,9 +36,10 @@ HEADER_AAUTH_ACCESS = "AAuth-Access"
 HEADER_AAUTH_CAPABILITIES = "AAuth-Capabilities"
 HEADER_SIGNATURE_ERROR = "Signature-Error"
 
-# Accept-Signature sigkey types (draft-hardt-httpbis-signature-key)
-SIGKEY_JKT = "jkt"   # Pseudonym: inline public key / JWK thumbprint (sig=hwk)
-SIGKEY_URI = "uri"   # Identity: JWKS endpoint discovery (sig=jwks_uri)
+# Accept-Signature sigkey types (draft-hardt-httpbis-signature-key §4.1)
+SIGKEY_JKT = "jkt"    # Pseudonym: inline public key / JWK thumbprint (hwk, jkt-jwt)
+SIGKEY_URI = "uri"    # Identity: URI-identified key (jwks_uri, jwt, x509 with URI SAN)
+SIGKEY_X509 = "x509"  # PKI: X.509 certificate chain (x509)
 
 # Default covered components for Accept-Signature
 _DEFAULT_COMPONENTS = ["@method", "@authority", "@path"]
@@ -233,6 +234,7 @@ def build_claims_requirement() -> str:
 def build_accept_signature(
     sigkey: str = SIGKEY_URI,
     components: Optional[List[str]] = None,
+    algs: Optional[List[str]] = None,
 ) -> str:
     """Build ``Accept-Signature`` header value per draft-hardt-httpbis-signature-key.
 
@@ -240,32 +242,52 @@ def build_accept_signature(
     Replaces the old ``Signature-Requirement: requirement=pseudonym/identity`` format.
 
     Args:
-        sigkey: Key discovery type — ``"jkt"`` for pseudonym (hwk/inline key) or
-                ``"uri"`` for identity (jwks_uri/JWKS endpoint).
+        sigkey: Key discovery type — ``"jkt"`` for pseudonym, ``"uri"`` for
+                identity, ``"x509"`` for PKI certificate.
         components: Covered component identifiers. Defaults to
                     ``["@method", "@authority", "@path"]``.
+        algs: Optional list of acceptable signing algorithms (RFC 9421 identifiers).
 
     Returns:
         ``Accept-Signature`` header value, e.g.
         ``sig=("@method" "@authority" "@path");sigkey=uri``
+        or with algs:
+        ``sig=("@method" "@authority" "@path");alg="ecdsa-p256-sha256";sigkey=uri``
     """
     comps = components or _DEFAULT_COMPONENTS
     inner = " ".join(f'"{c}"' for c in comps)
-    return f'sig=({inner});sigkey={sigkey}'
+    params = f"sigkey={sigkey}"
+    if algs and len(algs) == 1:
+        # Single algorithm uses alg parameter
+        params = f'alg="{algs[0]}";{params}'
+    return f'sig=({inner});{params}'
 
 
 def parse_accept_signature(header_value: str) -> Dict[str, Any]:
     """Parse ``Accept-Signature`` header value.
 
     Returns a dict with:
-    - ``sigkey``: ``"jkt"`` or ``"uri"`` (or whatever sigkey value is present)
+    - ``sigkey``: ``"jkt"``, ``"uri"``, ``"x509"``, or whatever sigkey value is present
     - ``components``: list of covered component strings
+    - ``alg``: optional single algorithm string
+    - ``requirement``: mapped requirement level for compatibility with challenge handler
     """
-    result: Dict[str, Any] = {"sigkey": None, "components": []}
+    result: Dict[str, Any] = {"sigkey": None, "components": [], "alg": None, "requirement": None}
     # Extract sigkey parameter
     sk_match = re.search(r'sigkey=([^\s;,]+)', header_value)
     if sk_match:
         result["sigkey"] = sk_match.group(1)
+        # Map sigkey to requirement level for challenge handler compatibility
+        if result["sigkey"] == SIGKEY_JKT:
+            result["requirement"] = REQUIRE_PSEUDONYM
+        elif result["sigkey"] == SIGKEY_URI:
+            result["requirement"] = REQUIRE_IDENTITY
+        elif result["sigkey"] == SIGKEY_X509:
+            result["requirement"] = REQUIRE_IDENTITY  # x509 is identity-level
+    # Extract alg parameter
+    alg_match = re.search(r'alg="([^"]+)"', header_value)
+    if alg_match:
+        result["alg"] = alg_match.group(1)
     # Extract inner list of components from sig=(...)
     comp_match = re.search(r'sig=\(([^)]*)\)', header_value)
     if comp_match:
@@ -467,10 +489,29 @@ def build_interaction_challenge(code: str, url: Optional[str] = None) -> str:
 
 
 def parse_aauth_header(header_value: str) -> Dict[str, Any]:
-    """Parse Signature-Requirement header (backward-compatible name).
+    """Parse AAuth challenge header (handles all formats).
 
-    Accepts old 'require=', 'requirement=' formats.
+    Accepts:
+    - Accept-Signature format: ``sig=("@method" ...);sigkey=jkt``
+    - AAuth-Requirement format: ``requirement=auth-token; resource-token="..."``
+    - Legacy Signature-Requirement: ``requirement=pseudonym``
+    - Legacy require= format: ``require=identity``
     """
+    # Detect Accept-Signature format (contains "sig=" or "sigkey=")
+    if "sigkey=" in header_value or re.match(r'\s*sig\d*=\(', header_value):
+        parsed = parse_accept_signature(header_value)
+        return {
+            "requirement": parsed["requirement"],
+            "require": parsed["requirement"],
+            "resource_token": None,
+            "auth_server": None,
+            "url": None,
+            "code": None,
+            "sigkey": parsed["sigkey"],
+            "components": parsed["components"],
+            "alg": parsed.get("alg"),
+        }
+
     if "requirement=" in header_value:
         parsed = parse_signature_requirement(header_value)
         parsed["require"] = parsed["requirement"]
@@ -507,7 +548,7 @@ def parse_aauth_header(header_value: str) -> Dict[str, Any]:
 
         return result
     else:
-        raise ChallengeError("Header must include 'requirement' or 'require' parameter")
+        raise ChallengeError("Header must include 'requirement', 'require', or 'sigkey' parameter")
 
 
 def build_agent_auth_challenge(

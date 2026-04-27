@@ -88,6 +88,7 @@ class TestAuthTokenClaims:
             scope="read write",
             private_key=private_key,
             kid="auth-key-1",
+            act={"sub": "https://intermediate-agent.example"},
             sub="user-123",
         )
 
@@ -111,6 +112,7 @@ class TestAuthTokenClaims:
             scope="read",
             private_key=private_key,
             kid="auth-key-1",
+            act={"sub": "https://agent.example"},
             sub="user-123"
         )
 
@@ -250,15 +252,16 @@ async def test_token_exchange_returns_required_claims(
             private_key=resource1.private_key,
             sig_scheme="jwks_uri",
             id=resource1.resource_id,
+            dwk="aauth-resource.json",
             kid=resource1.kid,
         )
-        
+
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
-        
+
         agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
-        
+
         assert resource_token_match, f"Should have resource_token in challenge, got: {agent_auth_header}"
         resource_token = resource_token_match.group(1)
         
@@ -349,15 +352,16 @@ async def test_untrusted_auth_server_rejected(
             private_key=resource1.private_key,
             sig_scheme="jwks_uri",
             id=resource1.resource_id,
+            dwk="aauth-resource.json",
             kid=resource1.kid,
         )
-        
+
         async with httpx.AsyncClient() as client:
             initial_response = await client.get(resource2_data_url, headers=sig_headers)
-        
+
         agent_auth_header = initial_response.headers.get("AAuth-Requirement", "") or initial_response.headers.get("Signature-Requirement", "") or initial_response.headers.get("AAuth", "") or initial_response.headers.get("Agent-Auth", "")
         resource_token_match = re.search(r'resource[-_]token="([^"]+)"', agent_auth_header)
-        
+
         assert resource_token_match, f"Should have resource_token in challenge"
         resource_token = resource_token_match.group(1)
         

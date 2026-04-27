@@ -16,11 +16,11 @@ def create_auth_token(
     cnf_jwk: Dict[str, Any],
     private_key: Ed25519PrivateKey,
     kid: str,
+    act: Dict[str, Any],
     scope: Optional[str] = None,
     sub: Optional[str] = None,
     exp: Optional[int] = None,
     mission: Optional[Dict[str, Any]] = None,
-    act: Optional[Dict[str, Any]] = None,
     dwk: str = "aauth-access.json",
 ) -> str:
     """Create an auth token (aa-auth+jwt) per AAuth spec Section 9.1.
@@ -28,16 +28,17 @@ def create_auth_token(
     Args:
         iss: Auth server identifier (HTTPS URL)
         aud: Resource identifier, or agent identifier for self-access
-        agent: Agent identifier (aauth:local@domain)
-        cnf_jwk: Agent's public signing key (JWK format)
+        agent: Agent identifier (aauth:local@domain) — REQUIRED
+        cnf_jwk: Agent's public signing key (JWK format) — REQUIRED
         private_key: Auth server's Ed25519 private key for signing
         kid: Key ID for signing key
+        act: Actor claim per RFC 8693 §4.1 — REQUIRED.
+             In direct auth: ``{"sub": agent_id}``.
+             In call chaining: nested ``{"sub": intermediary_id, "act": upstream_act}``.
         scope: Authorized scopes (at least one of scope or sub MUST be present)
         sub: User identifier (at least one of scope or sub MUST be present)
         exp: Expiration timestamp. Defaults to 1 hour from now.
         mission: Optional mission object when issued in mission context.
-        act: Actor claim per RFC 8693 §4.1. In direct auth: ``{"sub": agent_id}``.
-             In call chaining: nested ``{"sub": intermediary_id, "act": upstream_act}``.
         dwk: Well-known metadata document name for key discovery. Defaults to
              ``aauth-access.json`` (AS-issued); use ``aauth-person.json`` for PS-issued tokens.
 
@@ -45,8 +46,13 @@ def create_auth_token(
         Signed JWT string (aa-auth+jwt)
 
     Raises:
-        TokenError: If neither sub nor scope is provided
+        TokenError: If required claims are missing
     """
+    if not agent:
+        raise TokenError(
+            "'agent' claim is required in auth token",
+            token_type="aa-auth+jwt"
+        )
     if not sub and not scope:
         raise TokenError(
             "At least one of 'sub' or 'scope' must be present in auth token",
@@ -68,20 +74,12 @@ def create_auth_token(
         "aud": aud,
         "dwk": dwk,
         "jti": str(uuid.uuid4()),
+        "agent": agent,
         "cnf": {"jwk": cnf_jwk},
+        "act": act,
         "iat": now,
         "exp": exp,
     }
-
-    # agent is REQUIRED per spec Section 9.1
-    if agent:
-        payload["agent"] = agent
-
-    # act is REQUIRED per spec — identifies the entity that requested the token.
-    # In direct authorization: {"sub": agent_id}.
-    # In call chaining: {"sub": intermediary_id, "act": upstream_act}.
-    if act is not None:
-        payload["act"] = act
 
     if sub:
         payload["sub"] = sub
@@ -120,9 +118,22 @@ def verify_token(
     jwks_fetcher: Callable[[str], Optional[Dict[str, Any]]],
     expected_typ: Optional[str] = None,
     expected_iss: Optional[str] = None,
-    expected_aud: Optional[str] = None
+    expected_aud: Optional[str] = None,
+    expected_agent: Optional[str] = None,
+    request_signing_jwk: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Verify a JWT token signature and claims.
+
+    Per SPEC §Auth Token Verification, this checks:
+    1. typ
+    2. dwk + JWKS discovery + JWT signature
+    3. exp, iat
+    4. iss (valid HTTPS URL)
+    5. aud (matches resource)
+    6. agent (matches request signing context)
+    7. cnf.jwk (matches request signing key)
+    8. act (present, act.sub matches agent)
+    9. sub or scope present
 
     Args:
         token: JWT token string
@@ -130,6 +141,8 @@ def verify_token(
         expected_typ: Expected typ claim
         expected_iss: Expected issuer
         expected_aud: Expected audience
+        expected_agent: Expected agent identifier (from request signing context)
+        request_signing_jwk: JWK of the key used to sign the HTTP request
 
     Returns:
         Dictionary with verified claims
@@ -143,6 +156,7 @@ def verify_token(
     except Exception as e:
         raise TokenError(f"Failed to parse token: {e}", token_type=expected_typ or "jwt")
 
+    # Step 1: Check typ
     if expected_typ:
         typ = header.get("typ")
         if typ != expected_typ:
@@ -151,7 +165,7 @@ def verify_token(
                 token_type=expected_typ
             )
 
-    # Check exp
+    # Step 3: Check exp
     exp = payload.get("exp")
     if exp:
         now = int(time.time())
@@ -165,7 +179,7 @@ def verify_token(
         if iat > now + 60:  # Allow 60 second clock skew
             raise TokenError("Token iat is in the future", token_type=expected_typ or "jwt")
 
-    # Check iss
+    # Step 4: Check iss
     iss = payload.get("iss")
     if expected_iss and iss != expected_iss:
         raise TokenError(
@@ -173,7 +187,7 @@ def verify_token(
             token_type=expected_typ or "jwt"
         )
 
-    # Check aud
+    # Step 5: Check aud
     aud = payload.get("aud")
     if expected_aud:
         if isinstance(aud, list):
@@ -190,7 +204,50 @@ def verify_token(
     if "jti" not in payload:
         raise TokenError("Token missing required 'jti' claim", token_type=expected_typ or "jwt")
 
-    # Get signing key from JWKS
+    # Step 6: Verify agent matches request signing context
+    if expected_agent:
+        agent = payload.get("agent")
+        if agent != expected_agent:
+            raise TokenError(
+                f"Invalid agent: expected {expected_agent}, got {agent}",
+                token_type=expected_typ or "jwt"
+            )
+
+    # Step 7: Verify cnf.jwk matches the key used to sign the HTTP request
+    if request_signing_jwk:
+        cnf = payload.get("cnf")
+        if not cnf or not cnf.get("jwk"):
+            raise TokenError("Token missing 'cnf.jwk' claim", token_type=expected_typ or "jwt")
+        # Compare key material (kty, crv, x for OKP; kty, crv, x, y for EC)
+        token_jwk = cnf["jwk"]
+        for field in ("kty", "crv", "x", "y", "n", "e"):
+            if request_signing_jwk.get(field) != token_jwk.get(field):
+                if field in request_signing_jwk or field in token_jwk:
+                    raise TokenError(
+                        f"cnf.jwk does not match request signing key (field: {field})",
+                        token_type=expected_typ or "jwt"
+                    )
+
+    # Step 8: Verify act claim (REQUIRED for auth tokens)
+    if expected_typ == "aa-auth+jwt":
+        act = payload.get("act")
+        if not act:
+            raise TokenError("Auth token missing required 'act' claim", token_type="aa-auth+jwt")
+        if expected_agent and act.get("sub") != expected_agent:
+            raise TokenError(
+                f"act.sub does not match agent: expected {expected_agent}, got {act.get('sub')}",
+                token_type="aa-auth+jwt"
+            )
+
+    # Step 9: Verify at least one of sub or scope (for auth tokens)
+    if expected_typ == "aa-auth+jwt":
+        if not payload.get("sub") and not payload.get("scope"):
+            raise TokenError(
+                "Auth token must contain at least one of 'sub' or 'scope'",
+                token_type="aa-auth+jwt"
+            )
+
+    # Step 2: Discover issuer JWKS via dwk and verify JWT signature
     kid_header = header.get("kid")
     if not kid_header:
         raise TokenError("Token header missing 'kid'", token_type=expected_typ or "jwt")

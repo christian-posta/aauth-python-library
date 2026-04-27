@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aauth"
-version = "0.3.0"
+version = "0.3.2"
 description = "AAuth protocol implementation for Python"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE"}
 dependencies = [
-    "aauth-signing>=0.1.0",
+    "aauth-signing>=0.1.2",
     "cryptography>=41.0.0",
     "PyJWT>=2.8.0",
     "httpx>=0.25.0",
@@ -46,7 +46,9 @@ dev = [
 aauth-signing = { path = "aauth-signing", editable = true }
 
 [tool.setuptools.packages.find]
+# "aauth*" matches subpackages (aauth.agent, …). Exclude sibling project dirs at repo root.
 include = ["aauth*"]
+exclude = ["aauth-signing*", "aauth-demo-ui*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]

@@ -356,17 +356,17 @@ class AccessServer:
                     print(f"DEBUG AUTH:   Validating agent token (aa-agent+jwt)", file=sys.stderr, flush=True)
                 
                 # Create JWKS fetcher for agent server
-                def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+                def agent_jwks_fetcher(id_param: str, dwk_param: str = "aauth-agent.json", kid_param: Optional[str] = None):
                     """Fetch agent server JWKS."""
                     try:
                         from aauth.metadata.auth_server import fetch_metadata
                         import httpx
-                        metadata_url = f"{issuer_url}/.well-known/aauth-agent"
+                        metadata_url = f"{id_param}/.well-known/{dwk_param}"
                         metadata = fetch_metadata(metadata_url)
                         jwks_uri = metadata.get("jwks_uri")
                         if not jwks_uri:
                             return None
-                        
+
                         jwks_response = httpx.get(jwks_uri, timeout=10.0)
                         jwks_response.raise_for_status()
                         return jwks_response.json()
@@ -436,18 +436,18 @@ class AccessServer:
         # Verify signature
         # For agent tokens, we've already validated the JWT, but we still need to verify HTTPSig
         # using the delegate's key from cnf.jwk
-        def jwks_fetcher(agent_id_param: str, kid_param: str = None):
+        def jwks_fetcher(agent_id_param: str, dwk_param: str = "aauth-agent.json", kid_param: str = None):
             """Fetch JWKS for agent via metadata discovery.
 
-            Fetches agent metadata from {id}/.well-known/aauth-agent.json,
+            Fetches agent metadata from {id}/.well-known/{dwk},
             extracts jwks_uri, then fetches the JWKS document.
             """
             if debug:
-                print(f"DEBUG AUTH:   Fetching JWKS for agent: {agent_id_param}, kid={kid_param}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Fetching JWKS for agent: {agent_id_param}, dwk={dwk_param}, kid={kid_param}", file=sys.stderr, flush=True)
             try:
                 import httpx
                 from aauth.metadata.auth_server import fetch_metadata
-                metadata_url = f"{agent_id_param}/.well-known/aauth-agent.json"
+                metadata_url = f"{agent_id_param}/.well-known/{dwk_param}"
                 if debug:
                     print(f"DEBUG AUTH:   Fetching metadata from {metadata_url}", file=sys.stderr, flush=True)
                 metadata = fetch_metadata(metadata_url)
@@ -528,7 +528,7 @@ class AccessServer:
 
         # Determine resource_id and scope based on mode
         if agent_is_resource:
-            resource_id = agent_id
+            resource_id = agent_url or agent_id
             if not scope:
                 scope = ""
             if debug:
@@ -587,6 +587,7 @@ class AccessServer:
                 purpose=purpose,
                 agent_is_resource=agent_is_resource,
                 clarification_supported=agent_clarification_supported,
+                act_claim={"sub": agent_id},
             )
 
         # Direct grant (autonomous authorization) → 200
@@ -635,18 +636,18 @@ class AccessServer:
         signature_header = headers_dict.get("signature", "")
         signature_key_header = headers_dict.get("signature-key", "")
 
-        def ps_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+        def ps_jwks_fetcher(id_param: str, dwk_param: str = "aauth-person.json", kid_param: Optional[str] = None):
             try:
                 import httpx
-                for path in ("/.well-known/aauth-person.json", "/.well-known/aauth-person"):
-                    r = httpx.get(f"{issuer_url.rstrip('/')}{path}", timeout=10.0)
-                    if r.status_code == 200:
-                        ju = r.json().get("jwks_uri")
-                        if not ju:
-                            return None
-                        jr = httpx.get(ju, timeout=10.0)
-                        jr.raise_for_status()
-                        return jr.json()
+                metadata_url = f"{id_param.rstrip('/')}/.well-known/{dwk_param}"
+                r = httpx.get(metadata_url, timeout=10.0)
+                if r.status_code == 200:
+                    ju = r.json().get("jwks_uri")
+                    if not ju:
+                        return None
+                    jr = httpx.get(ju, timeout=10.0)
+                    jr.raise_for_status()
+                    return jr.json()
             except Exception:
                 return None
             return None
@@ -684,11 +685,11 @@ class AccessServer:
         agent_id_for_policy = None
 
         if agent_token_str:
-            def agent_jwks_fetcher(issuer_url: str, kid_param: Optional[str] = None):
+            def agent_jwks_fetcher(id_param: str, dwk_param: str = "aauth-agent.json", kid_param: Optional[str] = None):
                 try:
                     import httpx
                     from aauth.metadata.auth_server import fetch_metadata
-                    metadata_url = f"{issuer_url}/.well-known/aauth-agent.json"
+                    metadata_url = f"{id_param}/.well-known/{dwk_param}"
                     metadata = fetch_metadata(metadata_url)
                     jwks_uri = metadata.get("jwks_uri")
                     if not jwks_uri:
@@ -847,6 +848,13 @@ class AccessServer:
             # Prefer explicit act; fall back to agent claim as a sub-only act object.
             upstream_act = upstream_payload.get("act") or {"sub": upstream_payload.get("agent", "")}
 
+        # Build act claim per spec.
+        # Direct: act.sub = intermediary's aauth: identifier.
+        # Call chaining: act.sub = intermediary's aauth: id, act.act = upstream act.
+        act_claim: Dict[str, Any] = {"sub": agent_id_for_policy}
+        if upstream_act:
+            act_claim["act"] = upstream_act
+
         policy_result = self._evaluate_policy(agent_id_for_policy, resource_id, scope)
         agent_clarification_supported = (
             self._agent_supports_clarification(agent_server_url_for_policy, debug)
@@ -863,6 +871,7 @@ class AccessServer:
                 purpose=purpose,
                 agent_is_resource=False,
                 clarification_supported=agent_clarification_supported,
+                act_claim=act_claim,
             )
 
         if not policy_result.get("allowed"):
@@ -870,13 +879,6 @@ class AccessServer:
                 status_code=403,
                 content={"error": "denied", "error_description": policy_result.get("reason", "Access denied")},
             )
-
-        # Build act claim per spec.
-        # Direct: act.sub = intermediary's aauth: identifier.
-        # Call chaining: act.sub = intermediary's aauth: id, act.act = upstream act.
-        act_claim: Dict[str, Any] = {"sub": agent_id_for_policy}
-        if upstream_act:
-            act_claim["act"] = upstream_act
 
         auth_token = self._issue_auth_token(
             agent=agent_id_for_policy,
@@ -936,12 +938,12 @@ class AccessServer:
             print(f"DEBUG AUTH:   Token (first 100 chars): {token[:100]}...", file=sys.stderr, flush=True)
         
         # JWKS fetcher for resource
-        def resource_jwks_fetcher(resource_id: str):
+        def resource_jwks_fetcher(id_param: str, dwk_param: str = "aauth-resource.json", kid_param: Optional[str] = None):
             """Fetch JWKS for resource."""
             if debug:
-                print(f"DEBUG AUTH:   Fetching resource metadata from: {resource_id}", file=sys.stderr, flush=True)
+                print(f"DEBUG AUTH:   Fetching resource metadata from: {id_param}", file=sys.stderr, flush=True)
             try:
-                metadata_url = f"{resource_id}/.well-known/aauth-resource"
+                metadata_url = f"{id_param}/.well-known/{dwk_param}"
                 metadata = fetch_resource_metadata(metadata_url)
                 jwks_uri = metadata.get("jwks_uri")
                 if debug:
@@ -1800,11 +1802,11 @@ class AccessServer:
             from aauth.tokens.auth_token import verify_token
             
             # Create JWKS fetcher for resource
-            def resource_jwks_fetcher(issuer_url: str, kid_param: str = None):
+            def resource_jwks_fetcher(id_param: str, dwk_param: str = "aauth-resource.json", kid_param: str = None):
                 try:
                     from aauth.metadata.auth_server import fetch_metadata
                     import httpx
-                    metadata_url = f"{issuer_url}/.well-known/aauth-resource"
+                    metadata_url = f"{id_param}/.well-known/{dwk_param}"
                     metadata = fetch_metadata(metadata_url)
                     jwks_uri = metadata.get("jwks_uri")
                     if not jwks_uri:
@@ -1866,11 +1868,11 @@ class AccessServer:
                 from aauth.tokens.agent_token import TokenError, verify_agent_token
                 import httpx as _httpx
 
-                def _agent_jwks_fetcher(issuer_url: str, kid_param=None):
+                def _agent_jwks_fetcher(id_param: str, dwk_param: str = "aauth-agent.json", kid_param=None):
                     try:
                         from aauth.metadata.auth_server import fetch_metadata
 
-                        mu = f"{issuer_url.rstrip('/')}/.well-known/aauth-agent.json"
+                        mu = f"{id_param.rstrip('/')}/.well-known/{dwk_param}"
                         meta = fetch_metadata(mu)
                         ju = meta.get("jwks_uri")
                         if not ju:
@@ -2264,16 +2266,15 @@ button{{flex:1;padding:12px;border:none;border-radius:4px;font-size:16px;font-we
         if not caller_trusted:
             return JSONResponse(status_code=403, content={"error": "forbidden", "error_description": "Not authorized to revoke"})
 
-        def jwks_fetcher(issuer_url, kid_param=None):
+        def jwks_fetcher(id_param, dwk_param="aauth-person.json", kid_param=None):
             try:
-                for path in ("/.well-known/aauth-person.json", "/.well-known/aauth-access.json",
-                             "/.well-known/aauth-person", "/.well-known/aauth-access"):
-                    r = _httpx.get(f"{issuer_url.rstrip('/')}{path}", timeout=10.0)
-                    if r.status_code == 200:
-                        jwks_uri = r.json().get("jwks_uri")
-                        if jwks_uri:
-                            j = _httpx.get(jwks_uri, timeout=10.0)
-                            return j.json() if j.status_code == 200 else None
+                metadata_url = f"{id_param.rstrip('/')}/.well-known/{dwk_param}"
+                r = _httpx.get(metadata_url, timeout=10.0)
+                if r.status_code == 200:
+                    jwks_uri = r.json().get("jwks_uri")
+                    if jwks_uri:
+                        j = _httpx.get(jwks_uri, timeout=10.0)
+                        return j.json() if j.status_code == 200 else None
             except Exception:
                 return None
 

@@ -15,20 +15,23 @@ class AgentRequestSigner:
         private_key,
         agent_id: Optional[str] = None,
         agent_token: Optional[str] = None,
-        kid: str = "key-1"
+        kid: str = "key-1",
+        dwk: str = "aauth-agent.json",
     ):
         """Initialize agent request signer.
-        
+
         Args:
             private_key: Agent's private signing key
-            agent_id: Agent identifier (HTTPS URL) - required for jwks scheme
+            agent_id: Agent identifier (HTTPS URL) - required for jwks_uri scheme
             agent_token: Agent token (JWT) - required for jwt scheme
-            kid: Key ID for jwks scheme
+            kid: Key ID for jwks_uri scheme
+            dwk: Well-known metadata document name for jwks_uri scheme
         """
         self.private_key = private_key
         self.agent_id = agent_id
         self.agent_token = agent_token
         self.kid = kid
+        self.dwk = dwk
     
     def sign_request(
         self,
@@ -59,6 +62,7 @@ class AgentRequestSigner:
             if not self.agent_id:
                 raise SignatureError("agent_id required for jwks_uri scheme")
             kwargs["id"] = self.agent_id
+            kwargs["dwk"] = self.dwk
             kwargs["kid"] = self.kid
         
         elif sig_scheme == "jwt":

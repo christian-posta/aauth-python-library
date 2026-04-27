@@ -79,7 +79,7 @@ from .signing.algorithms import (
 # Token handling
 from .tokens.agent_token import create_agent_token, verify_agent_token
 from .tokens.auth_token import create_auth_token, parse_token_claims, verify_token
-from .tokens.resource_token import create_resource_token
+from .tokens.resource_token import create_resource_token, verify_resource_token
 
 # Header handling
 from .signing.signature_key import build_signature_key_header, parse_signature_key
@@ -110,8 +110,18 @@ from .headers.aauth_header import (
     build_signature_error,
     parse_aauth_error,
     parse_signature_error,
+    build_accept_signature,
+    parse_accept_signature,
+    build_aauth_capabilities_header,
+    parse_aauth_capabilities_header,
+    build_aauth_access_header,
+    parse_authorization_aauth_header,
+    HEADER_ACCEPT_SIGNATURE,
     HEADER_SIGNATURE_REQUIREMENT,
+    HEADER_SIGNATURE_ERROR,
     HEADER_AAUTH_REQUIREMENT,
+    HEADER_AAUTH_ACCESS,
+    HEADER_AAUTH_CAPABILITIES,
     REQUIRE_PSEUDONYM,
     REQUIRE_IDENTITY,
     REQUIRE_AUTH_TOKEN,
@@ -119,6 +129,9 @@ from .headers.aauth_header import (
     REQUIRE_APPROVAL,
     REQUIRE_CLARIFICATION,
     REQUIRE_CLAIMS,
+    SIGKEY_JKT,
+    SIGKEY_URI,
+    SIGKEY_X509,
 )
 
 # Metadata
@@ -134,6 +147,7 @@ from .metadata.mission_manager import (
 # Agent role
 from .agent.signer import AgentRequestSigner
 from .agent.challenge_handler import ChallengeHandler
+from .agent.token_exchange import exchange_resource_token, extract_resource_token
 
 # Resource role
 from .resource.verifier import RequestVerifier
@@ -265,6 +279,8 @@ __all__ = [
     # Agent role
     "AgentRequestSigner",
     "ChallengeHandler",
+    "exchange_resource_token",
+    "extract_resource_token",
 
     # Resource role
     "RequestVerifier",

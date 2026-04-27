@@ -61,12 +61,13 @@ class TestTokenGeneration:
             cnf_jwk=agent_jwk,
             scope="data.read",
             private_key=private_key,
-            kid="auth-key-1"
+            kid="auth-key-1",
+            act={"sub": "https://agent.example"}
         )
-        
+
         assert token is not None
         assert len(token.split('.')) == 3  # JWT has 3 parts
-        
+
         # Parse token to verify claims
         claims = parse_token_claims(token)
         assert claims["header"]["typ"] == "aa-auth+jwt"
@@ -77,6 +78,7 @@ class TestTokenGeneration:
         assert "jwk" in claims["payload"]["cnf"]
         assert claims["payload"]["scope"] == "data.read"
         assert "exp" in claims["payload"]
+        assert claims["payload"]["act"] == {"sub": "https://agent.example"}
     
     def test_create_auth_token_with_sub(self):
         """Test auth token creation with user identifier."""
@@ -91,6 +93,7 @@ class TestTokenGeneration:
             scope="data.read",
             private_key=private_key,
             kid="auth-key-1",
+            act={"sub": "https://agent.example"},
             sub="user-12345"
         )
         
@@ -186,7 +189,8 @@ class TestTokenVerification:
             cnf_jwk=agent_jwk,
             scope="data.read",
             private_key=auth_private,
-            kid="auth-key-1"
+            kid="auth-key-1",
+            act={"sub": "https://agent.example"}
         )
         
         # JWKS fetcher for auth server
