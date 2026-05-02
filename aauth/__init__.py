@@ -148,6 +148,7 @@ from .metadata.mission_manager import (
 from .agent.signer import AgentRequestSigner
 from .agent.challenge_handler import ChallengeHandler
 from .agent.token_exchange import exchange_resource_token, extract_resource_token
+from .agent.poller import poll_pending_url, async_poll_pending_url, PollingResult
 
 # Resource role
 from .resource.verifier import RequestVerifier
@@ -281,6 +282,9 @@ __all__ = [
     "ChallengeHandler",
     "exchange_resource_token",
     "extract_resource_token",
+    "poll_pending_url",
+    "async_poll_pending_url",
+    "PollingResult",
 
     # Resource role
     "RequestVerifier",

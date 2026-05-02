@@ -3,11 +3,12 @@
 import json
 import httpx
 import jwt as _jwt
-from typing import Optional, Mapping
+from typing import Awaitable, Callable, Dict, Optional, Mapping
 
 from ..errors import TokenError, MetadataError
 from ..signing.signer import sign_request
 from ..metadata.mission_manager import fetch_ps_metadata_async
+from .poller import async_poll_pending_url
 
 
 def extract_resource_token(headers: Mapping[str, str]) -> Optional[str]:
@@ -41,6 +42,9 @@ async def exchange_resource_token(
     *,
     ps_discovery_timeout: float = 10.0,
     exchange_timeout: float = 30.0,
+    on_interaction: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    on_clarification: Optional[Callable[[str, str], Awaitable[Optional[str]]]] = None,
+    max_polls: int = 60,
 ) -> str:
     """Exchange a resource_token for an auth_token via the PS (SPEC §4.1.3).
 
@@ -49,21 +53,31 @@ async def exchange_resource_token(
       2. Discover PS token_endpoint via /.well-known/aauth-person.json
          (falls back to {aud}/token if metadata fetch fails).
       3. POST {resource_token} to PS, signed with aa-agent+jwt.
-      4. Return auth_token (aa-auth+jwt) from PS response.
+      4a. 200 → return auth_token directly.
+      4b. 202 → poll the Location URL until a terminal response, honouring
+          any interaction or clarification callbacks, then return auth_token.
 
     Args:
         resource_token: The resource token JWT from the 401 AAuth challenge.
         private_key: Agent's Ed25519 private key for request signing.
         agent_jwt: Agent token (aa-agent+jwt) for Signature-Key header.
         ps_discovery_timeout: Timeout in seconds for PS metadata fetch.
-        exchange_timeout: Timeout in seconds for PS token endpoint POST.
+        exchange_timeout: Timeout in seconds for individual HTTP requests.
+        on_interaction: Async callback invoked when the PS requires human
+            interaction. Called with ``(pending_url, code)`` on the first
+            poll that returns ``requirement=interaction``. The app should
+            surface the URL and code to the user (e.g. via SSE).
+        on_clarification: Async callback invoked when the PS asks a
+            clarification question. Called with ``(pending_url, question)``
+            and should return the user's answer string, or None to skip.
+        max_polls: Maximum polling attempts before giving up (default 60).
 
     Returns:
         auth_token string (aa-auth+jwt) returned by the PS.
 
     Raises:
-        TokenError: resource_token is malformed, PS returns non-200,
-                    or response missing auth_token.
+        TokenError: resource_token is malformed, PS returns a non-recoverable
+                    error, or polling is exhausted/denied.
         MetadataError: PS metadata fetch encounters a hard error
                        (non-timeout, non-404 failures).
     """
@@ -122,26 +136,84 @@ async def exchange_resource_token(
             token_type="aa-auth+jwt",
         )
 
-    if resp.status_code != 200:
-        raise TokenError(
-            f"PS token_endpoint returned HTTP {resp.status_code}: {resp.text[:500]}",
-            token_type="aa-auth+jwt",
+    # Step 4a: Immediate success
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except Exception as exc:
+            raise TokenError(
+                f"PS response is not valid JSON: {exc}",
+                token_type="aa-auth+jwt",
+            )
+        auth_token = data.get("auth_token")
+        if not auth_token:
+            raise TokenError(
+                f"PS response missing 'auth_token'; response keys: {list(data.keys())}",
+                token_type="aa-auth+jwt",
+            )
+        return auth_token
+
+    # Step 4b: Deferred — PS needs human interaction or approval before issuing token
+    if resp.status_code == 202:
+        location = resp.headers.get("location") or resp.headers.get("Location")
+        if not location:
+            raise TokenError(
+                "PS returned 202 but no Location header — cannot poll",
+                token_type="aa-auth+jwt",
+            )
+
+        # Build async signing closures so the poller can make authenticated requests
+        async def _signed_get(url: str):
+            sig_hdrs = sign_request(
+                method="GET",
+                target_uri=url,
+                headers={},
+                body=None,
+                private_key=private_key,
+                sig_scheme="jwt",
+                jwt=agent_jwt,
+            )
+            async with httpx.AsyncClient(timeout=httpx.Timeout(exchange_timeout)) as c:
+                return await c.get(url, headers=sig_hdrs)
+
+        async def _signed_post(url: str, body_dict: Dict):
+            post_body = json.dumps(body_dict, separators=(",", ":")).encode()
+            post_headers = {"Content-Type": "application/json"}
+            sig_hdrs = sign_request(
+                method="POST",
+                target_uri=url,
+                headers=post_headers,
+                body=None,
+                private_key=private_key,
+                sig_scheme="jwt",
+                jwt=agent_jwt,
+            )
+            post_headers.update(sig_hdrs)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(exchange_timeout)) as c:
+                return await c.post(url, headers=post_headers, content=post_body)
+
+        result = await async_poll_pending_url(
+            pending_url=location,
+            sign_and_send_get=_signed_get,
+            max_polls=max_polls,
+            on_interaction=on_interaction,
+            on_clarification=on_clarification,
+            sign_and_send_post=_signed_post if on_clarification else None,
         )
 
-    # Step 4: Extract and return auth_token
-    try:
-        data = resp.json()
-    except Exception as exc:
-        raise TokenError(
-            f"PS response is not valid JSON: {exc}",
-            token_type="aa-auth+jwt",
-        )
+        if not result.success:
+            raise TokenError(
+                f"PS deferred exchange failed: {result.error} — {result.error_description}",
+                token_type="aa-auth+jwt",
+            )
+        if not result.auth_token:
+            raise TokenError(
+                "PS polling succeeded but response missing 'auth_token'",
+                token_type="aa-auth+jwt",
+            )
+        return result.auth_token
 
-    auth_token = data.get("auth_token")
-    if not auth_token:
-        raise TokenError(
-            f"PS response missing 'auth_token'; response keys: {list(data.keys())}",
-            token_type="aa-auth+jwt",
-        )
-
-    return auth_token
+    raise TokenError(
+        f"PS token_endpoint returned HTTP {resp.status_code}: {resp.text[:500]}",
+        token_type="aa-auth+jwt",
+    )

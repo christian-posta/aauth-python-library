@@ -3,14 +3,38 @@
 Per spec Section 10.6, the agent polls the pending URL with GET
 until a terminal response is received.
 
-This module provides a synchronous polling implementation for demos.
+This module provides both a synchronous polling implementation (for demos
+and scripts) and an async implementation suitable for use inside async
+frameworks and the exchange_resource_token() function.
 """
 
+import asyncio
 import time
 import logging
-from typing import Dict, Any, Optional, Callable
+from typing import Awaitable, Dict, Any, Optional, Callable
 
 logger = logging.getLogger("aauth.agent.poller")
+
+
+def _extract_interaction_url(aauth_req_header: str, code: str, pending_url: str) -> str:
+    """Extract the user-facing interaction URL from AAuth-Requirement header.
+
+    The header carries ``url="<interaction_endpoint>"`` per spec §6.2.
+    The code is appended as a query parameter so the user arrives pre-filled.
+    Falls back to ``pending_url`` when the header carries no url field.
+    """
+    if not aauth_req_header:
+        return pending_url
+    try:
+        from ..headers.aauth_header import parse_aauth_header
+        parsed = parse_aauth_header(aauth_req_header)
+        endpoint = parsed.get("url")
+        if endpoint:
+            sep = "&" if "?" in endpoint else "?"
+            return f"{endpoint}{sep}code={code}"
+    except Exception:
+        pass
+    return pending_url
 
 
 class PollingResult:
@@ -169,7 +193,8 @@ def poll_pending_url(
 
             # Handle interaction requirement (first time only)
             if require == "interaction" and code and on_interaction and attempt == 0:
-                on_interaction(pending_url, code)
+                interaction_url = _extract_interaction_url(aauth_req_header, code, pending_url)
+                on_interaction(interaction_url, code)
 
             # When status=interacting, user has arrived — stop prompting
             if poll_status == "interacting":
@@ -209,6 +234,201 @@ def poll_pending_url(
                 except (ValueError, TypeError):
                     pass
             time.sleep(retry_after)
+            continue
+
+        # Unknown status — treat as fatal
+        logger.warning(f"Unexpected status code {status} during polling")
+        body = {}
+        try:
+            body = response.json()
+        except Exception:
+            pass
+        return PollingResult(
+            success=False,
+            status_code=status,
+            response_body=body,
+            error="unexpected_status",
+            error_description=f"Unexpected HTTP status {status}",
+        )
+
+    # Exhausted polls
+    return PollingResult(
+        success=False,
+        error="max_polls_exceeded",
+        error_description=f"Exceeded maximum {max_polls} poll attempts",
+    )
+
+
+async def async_poll_pending_url(
+    pending_url: str,
+    sign_and_send_get: Callable[[str], Awaitable[Any]],
+    max_polls: int = 60,
+    default_wait: int = 2,
+    on_interaction: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    on_clarification: Optional[Callable[[str, str], Awaitable[Optional[str]]]] = None,
+    sign_and_send_post: Optional[Callable[[str, Dict], Awaitable[Any]]] = None,
+) -> PollingResult:
+    """Async version of poll_pending_url — same state machine, awaitable throughout.
+
+    Implements the agent state machine from spec Section 10.6.
+
+    Args:
+        pending_url: The Location URL from the 202 response.
+        sign_and_send_get: Async callable that sends a signed GET to a URL and
+            returns a response with .status_code, .json(), and .headers.
+        max_polls: Maximum number of poll attempts.
+        default_wait: Default seconds between polls.
+        on_interaction: Async callback when require=interaction is received.
+            Called with (pending_url, code). Agent should direct user there.
+        on_clarification: Async callback when clarification question is received.
+            Called with (pending_url, question). Should return answer string or None.
+        sign_and_send_post: Async callable for POST requests (needed for
+            clarification responses). Called with (url, json_body).
+
+    Returns:
+        PollingResult with the outcome.
+    """
+    for attempt in range(max_polls):
+        logger.debug(f"Poll attempt {attempt + 1}/{max_polls}: GET {pending_url}")
+
+        try:
+            response = await sign_and_send_get(pending_url)
+        except Exception as e:
+            logger.error(f"Poll request failed: {e}")
+            return PollingResult(
+                success=False,
+                error="network_error",
+                error_description=str(e),
+            )
+
+        status = response.status_code
+
+        # Terminal: 200 OK — success
+        if status == 200:
+            body = response.json()
+            return PollingResult(
+                success=True,
+                auth_token=body.get("auth_token"),
+                response_body=body,
+                status_code=200,
+            )
+
+        # Terminal: 403 Denied/Abandoned
+        if status == 403:
+            body = response.json()
+            return PollingResult(
+                success=False,
+                status_code=403,
+                response_body=body,
+                error=body.get("error", "denied"),
+                error_description=body.get("error_description"),
+            )
+
+        # Terminal: 408 Expired
+        if status == 408:
+            body = response.json()
+            return PollingResult(
+                success=False,
+                status_code=408,
+                response_body=body,
+                error=body.get("error", "expired"),
+                error_description=body.get("error_description"),
+            )
+
+        # Terminal: 410 Gone
+        if status == 410:
+            body = response.json()
+            return PollingResult(
+                success=False,
+                status_code=410,
+                response_body=body,
+                error=body.get("error", "invalid_code"),
+                error_description=body.get("error_description"),
+            )
+
+        # Terminal: 500 Server Error
+        if status == 500:
+            body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            return PollingResult(
+                success=False,
+                status_code=500,
+                response_body=body,
+                error=body.get("error", "server_error"),
+                error_description=body.get("error_description"),
+            )
+
+        # Transient: 429 Too Many Requests (slow_down)
+        if status == 429:
+            default_wait += 5  # Per spec: increase interval by 5 seconds
+            retry_after = default_wait
+            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
+            if retry_header:
+                try:
+                    retry_after = max(int(retry_header), default_wait)
+                except (ValueError, TypeError):
+                    pass
+            logger.debug(f"Received 429 slow_down, increasing poll interval to {retry_after}s")
+            await asyncio.sleep(retry_after)
+            continue
+
+        # Transient: 202 Pending or Interacting — continue polling
+        if status == 202:
+            body = response.json()
+            require = body.get("requirement") or body.get("require")
+            code = body.get("code")
+            aauth_req_header = (
+                getattr(response, "headers", {}).get("aauth-requirement")
+                or getattr(response, "headers", {}).get("AAuth-Requirement")
+                or ""
+            )
+            if not require and "requirement=clarification" in aauth_req_header:
+                require = "clarification"
+            clarification = body.get("clarification")
+            poll_status = body.get("status", "pending")
+
+            # Handle interaction requirement (first time only)
+            if require == "interaction" and code and on_interaction and attempt == 0:
+                interaction_url = _extract_interaction_url(aauth_req_header, code, pending_url)
+                await on_interaction(interaction_url, code)
+
+            # When status=interacting, user has arrived — stop prompting
+            if poll_status == "interacting":
+                logger.debug("User has arrived at interaction endpoint (status=interacting)")
+
+            # Handle clarification question
+            if clarification and on_clarification and sign_and_send_post:
+                answer = await on_clarification(pending_url, clarification)
+                if answer:
+                    try:
+                        await sign_and_send_post(pending_url, {
+                            "clarification_response": answer
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to send clarification response: {e}")
+
+            # Respect Retry-After
+            retry_after = default_wait
+            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
+            if retry_header:
+                try:
+                    retry_after = max(int(retry_header), 0)
+                except (ValueError, TypeError):
+                    pass
+
+            if retry_after > 0:
+                await asyncio.sleep(retry_after)
+            continue
+
+        # Transient: 503 Temporarily unavailable
+        if status == 503:
+            retry_after = default_wait * 2
+            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
+            if retry_header:
+                try:
+                    retry_after = max(int(retry_header), 1)
+                except (ValueError, TypeError):
+                    pass
+            await asyncio.sleep(retry_after)
             continue
 
         # Unknown status — treat as fatal

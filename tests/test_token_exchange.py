@@ -105,6 +105,226 @@ class TestExchangeResourceToken:
         asyncio.run(run_test())
 
 
+class TestExchangeResourceTokenDeferred:
+    """Tests for deferred (202) flows in exchange_resource_token."""
+
+    @pytest.fixture
+    def keys(self):
+        agent_priv, agent_pub = generate_ed25519_keypair()
+        agent_jwk = public_key_to_jwk(agent_pub)
+        agent_jkt = calculate_jwk_thumbprint(agent_jwk)
+        ps_priv, _ = generate_ed25519_keypair()
+        return agent_priv, agent_jwk, agent_jkt, ps_priv
+
+    def _make_resource_token(self, ps_base, agent_jkt, ps_priv):
+        return create_resource_token(
+            iss=ps_base,
+            aud=ps_base,
+            agent="https://agent.example",
+            agent_jkt=agent_jkt,
+            scope="data.read",
+            private_key=ps_priv,
+            kid="ps-key-1",
+        )
+
+    def _make_agent_jwt(self, agent_priv, agent_jwk):
+        return create_agent_token(
+            iss="https://agent.example",
+            sub="https://agent.example",
+            cnf_jwk=agent_jwk,
+            private_key=agent_priv,
+            kid="agent-key-1",
+        )
+
+    def test_202_no_location_raises(self, keys):
+        """202 without Location header raises TokenError."""
+        from starlette.applications import Starlette
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        import threading
+        import uvicorn
+
+        agent_priv, agent_jwk, agent_jkt, ps_priv = keys
+        PS_PORT = 8770
+
+        async def token_ep(request):
+            return JSONResponse({"status": "pending"}, status_code=202)
+
+        app = Starlette(routes=[
+            Route("/.well-known/aauth-person.json", lambda r: JSONResponse({"token_endpoint": f"http://127.0.0.1:{PS_PORT}/token"})),
+            Route("/token", token_ep, methods=["POST"]),
+        ])
+        threading.Thread(target=lambda: uvicorn.run(app, host="127.0.0.1", port=PS_PORT, log_level="critical"), daemon=True).start()
+        time.sleep(0.4)
+
+        resource_token = self._make_resource_token(f"http://127.0.0.1:{PS_PORT}", agent_jkt, ps_priv)
+        agent_jwt = self._make_agent_jwt(agent_priv, agent_jwk)
+
+        async def run():
+            with pytest.raises(TokenError, match="no Location header"):
+                await exchange_resource_token(resource_token=resource_token, private_key=agent_priv, agent_jwt=agent_jwt)
+
+        asyncio.run(run())
+
+    @pytest.mark.integration
+    def test_202_poll_until_200(self, keys):
+        """202 with Location → polls → 200 returns auth_token."""
+        from starlette.applications import Starlette
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        import threading
+        import uvicorn
+
+        agent_priv, agent_jwk, agent_jkt, ps_priv = keys
+        PS_PORT = 8771
+        POLL_PORT = 8772
+        call_count = {"n": 0}
+        AUTH_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6ImFhLWF1dGhyandifQ.e30.sig"
+
+        async def token_ep(request):
+            return JSONResponse(
+                {"status": "pending"},
+                status_code=202,
+                headers={"Location": f"http://127.0.0.1:{POLL_PORT}/pending/abc"},
+            )
+
+        async def poll_ep(request):
+            call_count["n"] += 1
+            if call_count["n"] < 2:
+                return JSONResponse({"status": "pending"}, status_code=202, headers={"Retry-After": "0"})
+            return JSONResponse({"auth_token": AUTH_TOKEN}, status_code=200)
+
+        ps_app = Starlette(routes=[
+            Route("/.well-known/aauth-person.json", lambda r: JSONResponse({"token_endpoint": f"http://127.0.0.1:{PS_PORT}/token"})),
+            Route("/token", token_ep, methods=["POST"]),
+        ])
+        poll_app = Starlette(routes=[
+            Route("/pending/abc", poll_ep, methods=["GET"]),
+        ])
+        for app, port in [(ps_app, PS_PORT), (poll_app, POLL_PORT)]:
+            threading.Thread(target=lambda a=app, p=port: uvicorn.run(a, host="127.0.0.1", port=p, log_level="critical"), daemon=True).start()
+        time.sleep(0.5)
+
+        resource_token = self._make_resource_token(f"http://127.0.0.1:{PS_PORT}", agent_jkt, ps_priv)
+        agent_jwt = self._make_agent_jwt(agent_priv, agent_jwk)
+
+        async def run():
+            return await exchange_resource_token(
+                resource_token=resource_token, private_key=agent_priv, agent_jwt=agent_jwt,
+            )
+
+        result = asyncio.run(run())
+        assert result == AUTH_TOKEN
+        assert call_count["n"] == 2
+
+    @pytest.mark.integration
+    def test_202_interaction_callback_fired(self, keys):
+        """on_interaction callback is called with pending_url and code."""
+        from starlette.applications import Starlette
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        import threading
+        import uvicorn
+
+        agent_priv, agent_jwk, agent_jkt, ps_priv = keys
+        PS_PORT = 8773
+        POLL_PORT = 8774
+        interaction_events = []
+        AUTH_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6ImFhLWF1dGhyandifQ.e30.sig2"
+
+        async def token_ep(request):
+            return JSONResponse(
+                {"status": "pending"},
+                status_code=202,
+                headers={"Location": f"http://127.0.0.1:{POLL_PORT}/pending/xyz"},
+            )
+
+        call_count = {"n": 0}
+
+        async def poll_ep(request):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return JSONResponse(
+                    {"status": "pending", "requirement": "interaction", "code": "XY12AB"},
+                    status_code=202,
+                    headers={"Retry-After": "0"},
+                )
+            return JSONResponse({"auth_token": AUTH_TOKEN}, status_code=200)
+
+        ps_app = Starlette(routes=[
+            Route("/.well-known/aauth-person.json", lambda r: JSONResponse({"token_endpoint": f"http://127.0.0.1:{PS_PORT}/token"})),
+            Route("/token", token_ep, methods=["POST"]),
+        ])
+        poll_app = Starlette(routes=[
+            Route("/pending/xyz", poll_ep, methods=["GET"]),
+        ])
+        for app, port in [(ps_app, PS_PORT), (poll_app, POLL_PORT)]:
+            threading.Thread(target=lambda a=app, p=port: uvicorn.run(a, host="127.0.0.1", port=p, log_level="critical"), daemon=True).start()
+        time.sleep(0.5)
+
+        resource_token = self._make_resource_token(f"http://127.0.0.1:{PS_PORT}", agent_jkt, ps_priv)
+        agent_jwt = self._make_agent_jwt(agent_priv, agent_jwk)
+
+        async def on_interaction(pending_url, code):
+            interaction_events.append((pending_url, code))
+
+        async def run():
+            return await exchange_resource_token(
+                resource_token=resource_token, private_key=agent_priv, agent_jwt=agent_jwt,
+                on_interaction=on_interaction,
+            )
+
+        result = asyncio.run(run())
+        assert result == AUTH_TOKEN
+        assert len(interaction_events) == 1
+        assert interaction_events[0][1] == "XY12AB"
+
+    @pytest.mark.integration
+    def test_202_denial_raises_token_error(self, keys):
+        """Polling that ends in 403 raises TokenError."""
+        from starlette.applications import Starlette
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        import threading
+        import uvicorn
+
+        agent_priv, agent_jwk, agent_jkt, ps_priv = keys
+        PS_PORT = 8775
+        POLL_PORT = 8776
+
+        async def token_ep(request):
+            return JSONResponse(
+                {"status": "pending"},
+                status_code=202,
+                headers={"Location": f"http://127.0.0.1:{POLL_PORT}/pending/denied"},
+            )
+
+        async def poll_ep(request):
+            return JSONResponse({"error": "denied", "error_description": "User rejected"}, status_code=403)
+
+        ps_app = Starlette(routes=[
+            Route("/.well-known/aauth-person.json", lambda r: JSONResponse({"token_endpoint": f"http://127.0.0.1:{PS_PORT}/token"})),
+            Route("/token", token_ep, methods=["POST"]),
+        ])
+        poll_app = Starlette(routes=[
+            Route("/pending/denied", poll_ep, methods=["GET"]),
+        ])
+        for app, port in [(ps_app, PS_PORT), (poll_app, POLL_PORT)]:
+            threading.Thread(target=lambda a=app, p=port: uvicorn.run(a, host="127.0.0.1", port=p, log_level="critical"), daemon=True).start()
+        time.sleep(0.5)
+
+        resource_token = self._make_resource_token(f"http://127.0.0.1:{PS_PORT}", agent_jkt, ps_priv)
+        agent_jwt = self._make_agent_jwt(agent_priv, agent_jwk)
+
+        async def run():
+            with pytest.raises(TokenError, match="deferred exchange failed"):
+                await exchange_resource_token(
+                    resource_token=resource_token, private_key=agent_priv, agent_jwt=agent_jwt,
+                )
+
+        asyncio.run(run())
+
+
 @pytest.mark.integration
 class TestTokenExchangeIntegration:
     """Integration tests using a real PS-like endpoint."""
