@@ -1,6 +1,6 @@
 """AAuth - Agent Authentication Protocol implementation for Python."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.4"
 
 # Errors and error codes
 from .errors import (
