@@ -4,13 +4,28 @@ Python implementation of the [AAuth protocol](https://github.com/dickhardt/AAuth
 
 See the [full AAuth demo walkthrough](https://blog.christianposta.com/aauth-full-demo/) for a live exploration of the protocol flows.
 
-## Installation
+## Packages
+
+This repo contains two installable packages with distinct responsibilities:
+
+| Package | pip install | import as | Responsibility |
+|---|---|---|---|
+| `aauth` | `pip install aauth` | `import aauth` | Full AAuth protocol: tokens, headers, metadata, agent/resource roles |
+| `aauth-signing` | `pip install aauth-signing` | `from aauth_signing import ...` | HTTP Message Signatures (RFC 9421) + Signature-Key header — standalone, no AAuth dependency |
+
+**`aauth-signing`** is the low-level signing layer. It can be used independently if you only need RFC 9421 HTTP Message Signatures with the `Signature-Key` header extension (`hwk`, `jwks_uri`, `jwt`, `jkt-jwt` schemes). It has no dependency on the rest of AAuth.
+
+**`aauth`** is the full protocol implementation. It depends on `aauth-signing` (pulled in automatically) and re-exports its signing functions, so you never need to import both — just `import aauth` and everything is available.
+
+### Installation
 
 ```bash
+# Install everything (recommended)
 pip install aauth
-```
 
-The HTTP message signing stack ships as a separate package, **`aauth-signing`**, and is pulled in automatically.
+# Install only the signing layer (no tokens, headers, or agent/resource APIs)
+pip install aauth-signing
+```
 
 For development:
 
@@ -87,6 +102,10 @@ is_valid = aauth.verify_signature(
     jwks_fetcher=my_jwks_fetcher  # required for jwks_uri/jwt schemes
 )
 ```
+
+**What the signature covers by default:** `@method`, `@authority`, `@path`, `signature-key` (plus `@query` when a query string is present). This is enough to bind the signature to the specific endpoint and prevent replay across methods or hosts.
+
+**Body signing is opt-in and usually not needed.** Resources can require `content-digest` and/or `content-type` coverage via `additional_signature_components`, but this adds significant complexity — bodies must be fully buffered before signing/verifying, content-encoding negotiation interferes, and most agent-to-resource interactions are already protected by TLS. Covering the request line and key identity is sufficient for the vast majority of use cases.
 
 ### Token Creation
 
@@ -176,15 +195,26 @@ if result["valid"]:
 ## Package Structure
 
 ```
-aauth/
-├── signing/      # HTTP Message Signing (RFC 9421)
-├── keys/         # Key management and JWK operations
-├── tokens/       # JWT token creation and validation
-├── headers/      # AAuth header parsing and building
-├── metadata/     # Metadata discovery (.well-known)
-├── http/         # Deferred response helpers
-├── agent/        # Agent role (signing, polling, token exchange)
-└── resource/     # Resource role (challenge, verification)
+aauth-signing/          ← standalone pip package (aauth_signing)
+└── aauth_signing/
+    ├── signer.py       # sign_request — builds Signature-Input/Signature/Signature-Key
+    ├── verifier.py     # verify_signature — validates RFC 9421 signatures
+    ├── signature_key.py# Signature-Key header (hwk/jwks_uri/jwt/jkt-jwt schemes)
+    ├── signature_base.py
+    ├── signature_input.py
+    ├── signature.py
+    ├── algorithms.py
+    └── keys/           # JWK helpers used by the signing layer
+
+aauth/                  ← main pip package (aauth), depends on aauth-signing
+├── signing/            # Thin shims — re-exports aauth_signing.{signer,verifier,...}
+├── keys/               # Key management and JWK operations
+├── tokens/             # JWT token creation and validation (resource, auth, agent tokens)
+├── headers/            # AAuth header parsing and building (AAuth-Requirement, etc.)
+├── metadata/           # Metadata discovery (.well-known endpoints)
+├── http/               # Deferred response helpers (202 + polling)
+├── agent/              # Agent role: signing, challenge handling, token exchange, polling
+└── resource/           # Resource role: challenge building, request verification
 ```
 
 ## Testing
