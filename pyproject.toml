@@ -35,11 +35,6 @@ classifiers = [
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-    "pydantic>=2.0.0",
-    "python-dateutil>=2.8.0",
-    "python-multipart>=0.0.6",
 ]
 
 [tool.uv.sources]
@@ -48,7 +43,7 @@ aauth-signing = { path = "aauth-signing", editable = true }
 [tool.setuptools.packages.find]
 # "aauth*" matches subpackages (aauth.agent, …). Exclude sibling project dirs at repo root.
 include = ["aauth*"]
-exclude = ["aauth-signing*", "aauth-demo-ui*"]
+exclude = ["aauth-signing*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]
