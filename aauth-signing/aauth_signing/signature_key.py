@@ -57,13 +57,10 @@ def build_signature_key_header(
     if sig_scheme == "hwk":
         public_key = private_key.public_key()
         jwk = public_key_to_jwk(public_key)
-        params = _format_sf_item_parameters(
-            [
-                ("kty", jwk["kty"]),
-                ("crv", jwk["crv"]),
-                ("x", jwk["x"]),
-            ]
-        )
+        pairs = [("kty", jwk["kty"]), ("crv", jwk["crv"]), ("x", jwk["x"])]
+        if "y" in jwk:  # EC keys carry y coordinate
+            pairs.append(("y", jwk["y"]))
+        params = _format_sf_item_parameters(pairs)
         return f"{label}=hwk;{params}"
     if sig_scheme == "jkt-jwt":
         jwt_token = kwargs.get("jwt")

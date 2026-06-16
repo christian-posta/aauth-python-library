@@ -54,7 +54,7 @@ from .http.request import AAuthRequest
 from .http.response import AAuthResponse
 
 # Key management
-from .keys.keypair import generate_ed25519_keypair
+from .keys.keypair import generate_ed25519_keypair, generate_ec_keypair
 from .keys.jwk import (
     public_key_to_jwk,
     jwk_to_public_key,
@@ -203,6 +203,7 @@ __all__ = [
 
     # Key management
     "generate_ed25519_keypair",
+    "generate_ec_keypair",
     "public_key_to_jwk",
     "jwk_to_public_key",
     "calculate_jwk_thumbprint",

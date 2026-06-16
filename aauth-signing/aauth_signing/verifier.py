@@ -211,7 +211,7 @@ def verify_signature(
 
         # Verify signature
         try:
-            public_key.verify(signature_bytes, signature_base.encode('utf-8'))
+            _verify_with_key(public_key, signature_bytes, signature_base.encode("utf-8"))
             logger.debug("VERIFIER: Signature verification PASSED")
             return True
         except Exception as e:
@@ -500,3 +500,62 @@ def _verify_jwt_scheme(
     except Exception as e:
         logger.debug(f"VERIFIER: cnf.jwk conversion failed: {e}")
         return None
+
+
+def _p1363_to_der(sig: bytes) -> bytes:
+    """Convert IEEE P1363 ECDSA signature (r||s) to DER (ASN.1 SEQUENCE)."""
+    half = len(sig) // 2
+    r = int.from_bytes(sig[:half], "big")
+    s = int.from_bytes(sig[half:], "big")
+
+    def _encode_int(n: int) -> bytes:
+        raw = n.to_bytes((n.bit_length() + 7) // 8 or 1, "big")
+        if raw[0] & 0x80:
+            raw = b"\x00" + raw
+        return b"\x02" + bytes([len(raw)]) + raw
+
+    r_enc = _encode_int(r)
+    s_enc = _encode_int(s)
+    inner = r_enc + s_enc
+    return b"\x30" + bytes([len(inner)]) + inner
+
+
+def _verify_with_key(public_key, signature_bytes: bytes, message: bytes) -> None:
+    """Verify a signature, dispatching to the right algorithm for the key type.
+
+    Raises on failure (same semantics as the underlying cryptography verify calls).
+    Supports Ed25519 and EC (P-256, P-384) keys.  For EC keys, both DER and
+    IEEE P1363 (raw r||s) signature formats are accepted to interoperate with
+    implementations that use the Web Crypto API (which produces P1363).
+    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.hazmat.primitives.asymmetric.ec import (
+        EllipticCurvePublicKey, ECDSA, SECP256R1, SECP384R1,
+    )
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.exceptions import InvalidSignature
+
+    if isinstance(public_key, Ed25519PublicKey):
+        public_key.verify(signature_bytes, message)
+        return
+
+    if isinstance(public_key, EllipticCurvePublicKey):
+        curve = public_key.curve
+        if isinstance(curve, SECP384R1):
+            hash_alg = hashes.SHA384()
+        else:
+            hash_alg = hashes.SHA256()
+
+        # Try the signature as-is first (DER, which is what the cryptography
+        # library produces), then fall back to treating it as IEEE P1363
+        # (raw r||s, produced by the Web Crypto API / Jose / JWT libraries).
+        last_exc: Exception = InvalidSignature("empty")
+        for sig in (signature_bytes, _p1363_to_der(signature_bytes)):
+            try:
+                public_key.verify(sig, message, ECDSA(hash_alg))
+                return
+            except Exception as exc:
+                last_exc = exc
+        raise last_exc
+
+    raise ValueError(f"Unsupported public key type: {type(public_key)}")

@@ -112,7 +112,7 @@ def sign_request(
             logger.debug(f"  Line {i}: {repr(line)}")
 
         # Sign the signature base
-        signature_bytes = private_key.sign(signature_base.encode('utf-8'))
+        signature_bytes = _sign_with_key(private_key, signature_base.encode("utf-8"))
 
         # Build Signature header
         signature_header = build_signature_header(signature_bytes, label=label)
@@ -124,3 +124,20 @@ def sign_request(
         }
     except Exception as e:
         raise SignatureError(f"Failed to sign request: {e}", details={"scheme": sig_scheme}) from e
+
+
+def _sign_with_key(private_key, message: bytes) -> bytes:
+    """Sign *message* with *private_key*, dispatching on key type."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey, ECDSA, SECP384R1
+    from cryptography.hazmat.primitives import hashes
+
+    if isinstance(private_key, Ed25519PrivateKey):
+        return private_key.sign(message)
+
+    if isinstance(private_key, EllipticCurvePrivateKey):
+        curve = private_key.curve
+        hash_alg = hashes.SHA384() if isinstance(curve, SECP384R1) else hashes.SHA256()
+        return private_key.sign(message, ECDSA(hash_alg))
+
+    raise ValueError(f"Unsupported private key type: {type(private_key)}")

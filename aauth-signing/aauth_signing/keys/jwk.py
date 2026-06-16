@@ -3,109 +3,139 @@
 import base64
 import hashlib
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    EllipticCurvePublicKey, EllipticCurvePrivateKey,
+    EllipticCurvePublicNumbers, SECP256R1, SECP384R1,
+)
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 
+PublicKey = Union[Ed25519PublicKey, EllipticCurvePublicKey]
 
-def private_key_to_jwk(private_key: Ed25519PrivateKey, kid: Optional[str] = None) -> Dict[str, Any]:
-    """Convert Ed25519 private key to JWK format.
+# Map JWK crv names to cryptography curve objects
+_CURVE_MAP = {
+    "P-256": SECP256R1,
+    "P-384": SECP384R1,
+}
+
+# Map curve class names to JWK crv strings
+_CURVE_NAME_MAP = {
+    "SECP256R1": "P-256",
+    "SECP384R1": "P-384",
+}
+
+
+def _pad_b64(s: str) -> str:
+    return s + "=" * (4 - len(s) % 4)
+
+
+def private_key_to_jwk(private_key, kid: Optional[str] = None) -> Dict[str, Any]:
+    """Convert a private key to JWK format (Ed25519 or EC).
 
     Args:
-        private_key: Ed25519 private key
+        private_key: Ed25519PrivateKey or EllipticCurvePrivateKey
         kid: Optional key ID
 
     Returns:
         JWK dictionary
     """
-    public_key = private_key.public_key()
-    return public_key_to_jwk(public_key, kid)
+    return public_key_to_jwk(private_key.public_key(), kid)
 
 
-def public_key_to_jwk(public_key: Ed25519PublicKey, kid: Optional[str] = None) -> Dict[str, Any]:
-    """Convert Ed25519 public key to JWK format.
+def public_key_to_jwk(public_key: PublicKey, kid: Optional[str] = None) -> Dict[str, Any]:
+    """Convert a public key to JWK format (Ed25519 or EC P-256/P-384).
 
     Args:
-        public_key: Ed25519 public key
+        public_key: Ed25519PublicKey or EllipticCurvePublicKey
         kid: Optional key ID
 
     Returns:
         JWK dictionary
     """
-    public_bytes = public_key.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw
-    )
-
-    # Ed25519 public key is 32 bytes, encode as base64url
-    x = base64.urlsafe_b64encode(public_bytes).decode('utf-8').rstrip('=')
-
-    jwk = {
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "x": x
-    }
+    if isinstance(public_key, Ed25519PublicKey):
+        raw = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        x = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+        jwk: Dict[str, Any] = {"kty": "OKP", "crv": "Ed25519", "x": x}
+    elif isinstance(public_key, EllipticCurvePublicKey):
+        nums = public_key.public_numbers()
+        curve_name = type(public_key.curve).__name__
+        crv = _CURVE_NAME_MAP.get(curve_name)
+        if crv is None:
+            raise ValueError(f"Unsupported EC curve: {curve_name}")
+        key_size = (public_key.key_size + 7) // 8
+        x = base64.urlsafe_b64encode(nums.x.to_bytes(key_size, "big")).decode("utf-8").rstrip("=")
+        y = base64.urlsafe_b64encode(nums.y.to_bytes(key_size, "big")).decode("utf-8").rstrip("=")
+        jwk = {"kty": "EC", "crv": crv, "x": x, "y": y}
+    else:
+        raise ValueError(f"Unsupported key type: {type(public_key)}")
 
     if kid:
         jwk["kid"] = kid
-
     return jwk
 
 
-def jwk_to_public_key(jwk: Dict[str, Any]) -> Ed25519PublicKey:
-    """Convert JWK to Ed25519PublicKey object.
+def jwk_to_public_key(jwk: Dict[str, Any]) -> PublicKey:
+    """Convert a JWK to a public key object (Ed25519 or EC P-256/P-384).
 
     Args:
-        jwk: JWK dictionary with kty="OKP", crv="Ed25519"
+        jwk: JWK dictionary
 
     Returns:
-        Ed25519PublicKey object
+        Ed25519PublicKey or EllipticCurvePublicKey
 
     Raises:
-        ValueError: If JWK is not Ed25519 format
+        ValueError: If the JWK uses an unsupported key type or curve
     """
-    if jwk.get("kty") != "OKP" or jwk.get("crv") != "Ed25519":
-        raise ValueError("JWK must be Ed25519 (OKP, Ed25519)")
+    kty = jwk.get("kty")
 
-    x = jwk["x"]
-    # Add padding if needed
-    x += '=' * (4 - len(x) % 4)
-    public_bytes = base64.urlsafe_b64decode(x)
+    if kty == "OKP":
+        if jwk.get("crv") != "Ed25519":
+            raise ValueError(f"Unsupported OKP curve: {jwk.get('crv')}")
+        x_bytes = base64.urlsafe_b64decode(_pad_b64(jwk["x"]))
+        return Ed25519PublicKey.from_public_bytes(x_bytes)
 
-    return Ed25519PublicKey.from_public_bytes(public_bytes)
+    if kty == "EC":
+        crv = jwk.get("crv")
+        curve_cls = _CURVE_MAP.get(crv)
+        if curve_cls is None:
+            raise ValueError(f"Unsupported EC curve: {crv}")
+        x = int.from_bytes(base64.urlsafe_b64decode(_pad_b64(jwk["x"])), "big")
+        y = int.from_bytes(base64.urlsafe_b64decode(_pad_b64(jwk["y"])), "big")
+        nums = EllipticCurvePublicNumbers(x=x, y=y, curve=curve_cls())
+        return nums.public_key(default_backend())
+
+    raise ValueError(f"Unsupported JWK kty: {kty!r}")
 
 
 def calculate_jwk_thumbprint(jwk: Dict[str, Any]) -> str:
     """Calculate JWK Thumbprint per RFC 7638.
 
     Args:
-        jwk: JWK dictionary (must be canonical - only include required fields)
+        jwk: JWK dictionary
 
     Returns:
-        Base64url-encoded SHA-256 hash of canonical JWK JSON
+        Base64url-encoded SHA-256 hash of canonical JWK JSON (no padding)
     """
-    # Create canonical JWK (only include required fields, sorted)
-    # For Ed25519: kty, crv, x (kid excluded from thumbprint)
-    canonical_jwk = {}
+    kty = jwk.get("kty", "")
 
-    # Required fields in order
-    if "kty" in jwk:
-        canonical_jwk["kty"] = jwk["kty"]
-    if "crv" in jwk:
-        canonical_jwk["crv"] = jwk["crv"]
-    if "x" in jwk:
-        canonical_jwk["x"] = jwk["x"]
+    # RFC 7638 §3.2: only the required members, lexicographically sorted
+    if kty == "OKP":
+        canonical_jwk = {"crv": jwk["crv"], "kty": kty, "x": jwk["x"]}
+    elif kty == "EC":
+        canonical_jwk = {"crv": jwk["crv"], "kty": kty, "x": jwk["x"], "y": jwk["y"]}
+    elif kty == "RSA":
+        canonical_jwk = {"e": jwk["e"], "kty": kty, "n": jwk["n"]}
+    else:
+        raise ValueError(f"Unsupported kty for thumbprint: {kty!r}")
 
-    # Convert to canonical JSON (no spaces, sorted keys)
-    canonical_json = json.dumps(canonical_jwk, separators=(',', ':'), sort_keys=True)
-
-    # SHA-256 hash
-    hash_bytes = hashlib.sha256(canonical_json.encode('utf-8')).digest()
-
-    # Base64url encode (no padding)
-    thumbprint = base64.urlsafe_b64encode(hash_bytes).decode('utf-8').rstrip('=')
-
-    return thumbprint
+    canonical_json = json.dumps(canonical_jwk, separators=(",", ":"), sort_keys=True)
+    hash_bytes = hashlib.sha256(canonical_json.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(hash_bytes).decode("utf-8").rstrip("=")
 
 
 def generate_jwks(keys: list[Dict[str, Any]]) -> Dict[str, Any]:
