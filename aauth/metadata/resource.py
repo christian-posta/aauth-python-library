@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 
 def generate_resource_metadata(
     resource_id: str,
-    jwks_uri: str,
+    jwks_uri: Optional[str] = None,
     client_name: Optional[str] = None,
     logo_uri: Optional[str] = None,
     logo_dark_uri: Optional[str] = None,
@@ -18,8 +18,11 @@ def generate_resource_metadata(
     scope_descriptions: Optional[Dict[str, str]] = None,
     additional_signature_components: Optional[List[str]] = None,
     signature_window: Optional[int] = None,
-    login_endpoint: Optional[str] = None,
     revocation_endpoint: Optional[str] = None,
+    access_mode: Optional[str] = None,
+    description: Optional[str] = None,
+    documentation_uri: Optional[str] = None,
+    accept_signature_algs: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Generate resource metadata JSON per AAuth spec Section 13.3.
 
@@ -41,13 +44,12 @@ def generate_resource_metadata(
     Returns:
         Resource metadata dictionary
     """
-    metadata = {
-        "issuer": resource_id,
-        "jwks_uri": jwks_uri,
-    }
+    metadata = {"issuer": resource_id}
+    if jwks_uri is not None:
+        metadata["jwks_uri"] = jwks_uri
 
     if client_name is not None:
-        metadata["client_name"] = client_name
+        metadata["name"] = client_name
     if logo_uri is not None:
         metadata["logo_uri"] = logo_uri
     if logo_dark_uri is not None:
@@ -64,9 +66,19 @@ def generate_resource_metadata(
         metadata["additional_signature_components"] = additional_signature_components
     if signature_window is not None:
         metadata["signature_window"] = signature_window
-    if login_endpoint is not None:
-        metadata["login_endpoint"] = login_endpoint
     if revocation_endpoint is not None:
         metadata["revocation_endpoint"] = revocation_endpoint
 
-    return metadata
+    for k, v in [
+        ("access_mode", access_mode),
+        ("description", description),
+        ("documentation_uri", documentation_uri),
+        ("accept_signature_algs", accept_signature_algs),
+    ]:
+        if v is not None:
+            metadata[k] = v
+    from .common import validate_metadata
+
+    return validate_metadata(
+        metadata, resource_id, ("jwks_uri",) if jwks_uri is not None else ()
+    )

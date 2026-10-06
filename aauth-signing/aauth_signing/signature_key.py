@@ -23,10 +23,7 @@ def _format_sf_item_parameters(pairs: List[Tuple[str, str]]) -> str:
 
 
 def build_signature_key_header(
-    sig_scheme: str,
-    private_key=None,
-    label: str = "sig",
-    **kwargs
+    sig_scheme: str, private_key=None, label: str = "sig", **kwargs
 ) -> str:
     """Build Signature-Key header as RFC 8941 Structured Fields Dictionary.
 
@@ -57,7 +54,12 @@ def build_signature_key_header(
     if sig_scheme == "hwk":
         public_key = private_key.public_key()
         jwk = public_key_to_jwk(public_key)
-        pairs = [("kty", jwk["kty"]), ("crv", jwk["crv"]), ("x", jwk["x"])]
+        pairs = [
+            ("alg", jwk["alg"]),
+            ("kty", jwk["kty"]),
+            ("crv", jwk["crv"]),
+            ("x", jwk["x"]),
+        ]
         if "y" in jwk:  # EC keys carry y coordinate
             pairs.append(("y", jwk["y"]))
         params = _format_sf_item_parameters(pairs)

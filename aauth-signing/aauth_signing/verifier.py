@@ -14,7 +14,8 @@ from .signature_input import parse_signature_input
 from .signature import parse_signature
 from .signature_base import build_signature_base
 from .keys.jwk import jwk_to_public_key, calculate_jwk_thumbprint
-from .errors import SignatureError
+from .errors import SignatureError, TokenError
+from .tokens.common import parse_jwt, verify_jwt, validate_algorithm
 
 
 def verify_signature(
@@ -26,7 +27,9 @@ def verify_signature(
     signature_header: str,
     signature_key_header: str,
     public_key=None,
-    jwks_fetcher: Optional[Callable] = None
+    jwks_fetcher: Optional[Callable] = None,
+    required_components=None,
+    signature_window: int = 60,
 ) -> bool:
     """Verify HTTP signature using HTTP Message Signatures (RFC 9421).
 
@@ -71,12 +74,33 @@ def verify_signature(
         # Parse Signature-Input
         components, sig_params = parse_signature_input(signature_input_header)
 
-        # Verify created timestamp (per AAuth spec — default 60s window)
-        if "created" in sig_params:
-            created = int(sig_params["created"])
-            now = int(time.time())
-            if abs(now - created) > 60:
+        required = set(
+            required_components or ["@method", "@authority", "@path", "signature-key"]
+        )
+        if any(k.lower() == "authorization" for k in headers):
+            required.add("authorization")
+        if not required.issubset(components):
+            raise SignatureError(
+                "Missing required covered components",
+                error_code="invalid_input",
+                details={"required_input": sorted(required)},
+            )
+        created = sig_params.get("created")
+        if type(created) is not int:
+            return False
+        now = time.time()
+        if created > now + signature_window:
+            raise SignatureError(
+                "Signature created is in the future", error_code="clock_skew"
+            )
+        if created < now - signature_window:
+            return False
+        if "expires" in sig_params:
+            expires = sig_params["expires"]
+            if type(expires) is not int or expires <= now or expires < created:
                 return False
+        if "content-digest" in components and not _verify_content_digest(headers, body):
+            return False
 
         # Parse Signature-Key
         parsed_key = parse_signature_key(signature_key_header)
@@ -85,8 +109,8 @@ def verify_signature(
         label = parsed_key["label"]
 
         # Verify label consistency across all three headers (SIG-KEY §3.1)
-        label_match = re.match(r'(\w+)=', signature_input_header)
-        sig_label_match = re.match(r'(\w+)=', signature_header)
+        label_match = re.match(r"(\w+)=", signature_input_header)
+        sig_label_match = re.match(r"(\w+)=", signature_header)
 
         if not (label_match and sig_label_match):
             return False
@@ -97,22 +121,21 @@ def verify_signature(
         # --- Extract public key based on scheme ---
 
         if scheme == "hwk":
-            # SIG-KEY §3.3: inline JWK parameters
-            if not public_key:
-                jwk = {
-                    "kty": params.get("kty"),
-                    "crv": params.get("crv"),
-                    "x": params.get("x")
-                }
-                # EC keys also have y
-                if params.get("y"):
-                    jwk["y"] = params["y"]
-                # RSA keys have n, e
-                if params.get("n"):
-                    jwk["n"] = params["n"]
-                if params.get("e"):
-                    jwk["e"] = params["e"]
-                public_key = jwk_to_public_key(jwk)
+            jwk = {
+                name: params[name]
+                for name in ("kty", "crv", "x", "y", "n", "e", "alg")
+                if name in params
+            }
+            validate_algorithm(jwk)
+            discovered_key = jwk_to_public_key(jwk)
+            if public_key is not None:
+                from .keys.jwk import public_key_to_jwk
+
+                if calculate_jwk_thumbprint(
+                    public_key_to_jwk(public_key)
+                ) != calculate_jwk_thumbprint(jwk):
+                    return False
+            public_key = discovered_key
 
         elif scheme == "jwks_uri":
             # SIG-KEY §3.5: JWKS URI Discovery
@@ -127,9 +150,13 @@ def verify_signature(
             if not agent_id:
                 raise SignatureError("scheme=jwks_uri: missing required 'id' parameter")
             if not dwk:
-                raise SignatureError("scheme=jwks_uri: missing required 'dwk' parameter")
+                raise SignatureError(
+                    "scheme=jwks_uri: missing required 'dwk' parameter"
+                )
             if not kid:
-                raise SignatureError("scheme=jwks_uri: missing required 'kid' parameter")
+                raise SignatureError(
+                    "scheme=jwks_uri: missing required 'kid' parameter"
+                )
 
             # Fetch JWKS via two-step discovery: {id}/.well-known/{dwk} -> jwks_uri -> JWKS
             jwks = _fetch_jwks(jwks_fetcher, agent_id, dwk, kid)
@@ -141,6 +168,7 @@ def verify_signature(
             if not signing_key:
                 return False
 
+            validate_algorithm(signing_key)
             public_key = jwk_to_public_key(signing_key)
 
         elif scheme == "jkt-jwt":
@@ -173,6 +201,23 @@ def verify_signature(
         else:
             raise SignatureError(f"Unknown signature scheme: {scheme}")
 
+        if "keyid" in sig_params:
+            if scheme == "jwks_uri":
+                candidates = {params.get("kid")}
+            elif scheme == "hwk":
+                candidates = {calculate_jwk_thumbprint(jwk)}
+            else:
+                _, token_claims = parse_jwt(params["jwt"])
+                confirmation = token_claims["cnf"]["jwk"]
+                candidates = {
+                    confirmation.get("kid"),
+                    calculate_jwk_thumbprint(confirmation),
+                }
+            if sig_params["keyid"] not in candidates:
+                raise SignatureError(
+                    "keyid disagrees with Signature-Key", error_code="invalid_key"
+                )
+
         # Reconstruct signature base
         parsed_uri = urlparse(target_uri)
         authority = parsed_uri.netloc
@@ -182,7 +227,7 @@ def verify_signature(
         # Extract signature params (the part after "{label}=") for @signature-params line
         prefix = f"{label}="
         if signature_input_header.startswith(prefix):
-            signature_params = signature_input_header[len(prefix):]
+            signature_params = signature_input_header[len(prefix) :]
         else:
             signature_params = signature_input_header
         if not signature_params:
@@ -201,7 +246,7 @@ def verify_signature(
             body=body,
             signature_key_header=signature_key_header,
             covered_components=components,
-            signature_params=signature_params
+            signature_params=signature_params,
         )
 
         logger.debug(f"VERIFIER: Signature base length: {len(signature_base)} bytes")
@@ -211,13 +256,19 @@ def verify_signature(
 
         # Verify signature
         try:
-            _verify_with_key(public_key, signature_bytes, signature_base.encode("utf-8"))
+            _verify_with_key(
+                public_key, signature_bytes, signature_base.encode("utf-8")
+            )
             logger.debug("VERIFIER: Signature verification PASSED")
             return True
         except Exception as e:
             logger.debug(f"VERIFIER: Signature verification FAILED: {e}")
             return False
 
+    except TokenError as exc:
+        raise SignatureError(
+            str(exc), error_code=exc.error_code or "invalid_jwt"
+        ) from exc
     except SignatureError:
         raise
     except Exception as e:
@@ -227,6 +278,7 @@ def verify_signature(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fetch_jwks(
     jwks_fetcher: Callable,
@@ -319,35 +371,16 @@ def _verify_jkt_jwt_scheme(params: Dict[str, str], logger) -> Any:
     # Step 7: Verify iss matches
     iss = payload.get("iss")
     if iss != expected_iss:
-        logger.debug(f"VERIFIER: jkt-jwt iss mismatch: expected {expected_iss}, got {iss}")
-        return None
-
-    # Step 8: Verify JWT signature using header jwk
-    try:
-        enclave_public_key = jwk_to_public_key(header_jwk)
-        alg = header.get("alg")
-        if not alg:
-            logger.debug("VERIFIER: jkt-jwt header missing 'alg'")
-            return None
-        pyjwt.decode(
-            jwt_token,
-            enclave_public_key,
-            algorithms=[alg],
-            options={"verify_signature": True, "verify_exp": False, "verify_aud": False}
+        logger.debug(
+            f"VERIFIER: jkt-jwt iss mismatch: expected {expected_iss}, got {iss}"
         )
-    except Exception as e:
-        logger.debug(f"VERIFIER: jkt-jwt signature verification failed: {e}")
         return None
 
-    # Step 9: Validate exp and iat
-    exp = payload.get("exp")
-    if exp and int(time.time()) >= exp:
-        logger.debug("VERIFIER: jkt-jwt expired")
-        return None
+    from .tokens.common import verify_embedded_jwt
 
-    iat = payload.get("iat")
-    if not iat:
-        logger.debug("VERIFIER: jkt-jwt missing iat")
+    try:
+        payload = verify_embedded_jwt(jwt_token, header_jwk)
+    except TokenError:
         return None
 
     # Step 10: Extract ephemeral public key from cnf.jwk
@@ -358,6 +391,7 @@ def _verify_jkt_jwt_scheme(params: Dict[str, str], logger) -> Any:
 
     # Step 11: Return the ephemeral key — caller verifies HTTP sig with it
     try:
+        validate_algorithm(cnf["jwk"])
         return jwk_to_public_key(cnf["jwk"])
     except Exception as e:
         logger.debug(f"VERIFIER: jkt-jwt cnf.jwk conversion failed: {e}")
@@ -380,7 +414,12 @@ def _compute_jwk_thumbprint(jwk_dict: Dict[str, Any], hash_fn) -> str:
     if kty == "OKP":
         canonical = {"crv": jwk_dict["crv"], "kty": kty, "x": jwk_dict["x"]}
     elif kty == "EC":
-        canonical = {"crv": jwk_dict["crv"], "kty": kty, "x": jwk_dict["x"], "y": jwk_dict["y"]}
+        canonical = {
+            "crv": jwk_dict["crv"],
+            "kty": kty,
+            "x": jwk_dict["x"],
+            "y": jwk_dict["y"],
+        }
     elif kty == "RSA":
         canonical = {"e": jwk_dict["e"], "kty": kty, "n": jwk_dict["n"]}
     else:
@@ -391,115 +430,49 @@ def _compute_jwk_thumbprint(jwk_dict: Dict[str, Any], hash_fn) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
-def _verify_jwt_scheme(
-    jwt_token: str,
-    jwks_fetcher: Callable,
-    logger,
-) -> Any:
-    """Verify jwt scheme per SIG-KEY §3.6.
-
-    Generic JWT verification — extracts cnf.jwk from any JWT that has one.
-    AAuth-specific token type validation is NOT done here; it belongs in the
-    protocol layer (aauth/resource/verifier.py).
-
-    Returns the public key from cnf.jwk, or None on failure.
-    """
-    # Step 1: Parse JWT
-    try:
-        header = pyjwt.get_unverified_header(jwt_token)
-        payload = pyjwt.decode(jwt_token, options={"verify_signature": False})
-    except Exception as e:
-        logger.debug(f"VERIFIER: jwt scheme parse failed: {e}")
-        return None
-
-    # Step 2: Check typ if present (application-specific, not enforced here)
-    typ = header.get("typ")
-    logger.debug(f"VERIFIER: jwt scheme typ={typ}")
-
-    # Step 3: Validate exp if present
-    exp = payload.get("exp")
-    if exp and int(time.time()) >= exp:
-        logger.debug(f"VERIFIER: jwt expired (exp={exp})")
-        return None
-
-    # Step 4: Verify cnf.jwk is present
-    cnf = payload.get("cnf")
-    if not cnf or not cnf.get("jwk"):
-        logger.debug("VERIFIER: jwt scheme missing cnf.jwk")
-        return None
-
-    cnf_jwk = cnf["jwk"]
-
-    # Step 5: Discover issuer keys via {iss}/.well-known/{dwk}
-    iss = payload.get("iss")
-    dwk = payload.get("dwk")
-    kid_header = header.get("kid")
-
-    if not iss:
-        logger.debug("VERIFIER: jwt scheme missing iss claim")
-        return None
-
-    # Fetch issuer's JWKS — use dwk if available, fall back to iss-only
-    if dwk:
-        jwks = _fetch_jwks(jwks_fetcher, iss, dwk, kid_header)
-    else:
-        # No dwk — try direct fetcher call (backward compat)
-        try:
-            jwks = jwks_fetcher(iss)
-        except Exception:
-            jwks = None
-
+def _verify_jwt_scheme(jwt_token, jwks_fetcher, logger):
+    header, payload = parse_jwt(jwt_token)
+    iss, dwk = payload.get("iss"), payload.get("dwk")
+    if not isinstance(iss, str) or not iss or not isinstance(dwk, str) or not dwk:
+        raise TokenError("JWT missing issuer or dwk", error_code="invalid_jwt")
+    jwks = _fetch_jwks(jwks_fetcher, iss, dwk, header.get("kid"))
     if not jwks:
-        logger.debug(f"VERIFIER: Failed to fetch JWKS for jwt scheme (iss={iss})")
-        return None
+        raise TokenError("Issuer JWKS unavailable", error_code="unknown_key")
+    payload = verify_jwt(jwt_token, jwks)
+    cnf = payload.get("cnf")
+    if not isinstance(cnf, dict) or not isinstance(cnf.get("jwk"), dict):
+        raise TokenError("JWT missing cnf.jwk", error_code="invalid_jwt")
+    validate_algorithm(cnf["jwk"])
+    return jwk_to_public_key(cnf["jwk"])
 
-    # Find signing key by kid
-    if not kid_header:
-        logger.debug("VERIFIER: JWT header missing 'kid'")
-        return None
 
-    signing_key = _find_key_by_kid(jwks, kid_header)
-    if not signing_key:
-        logger.debug(f"VERIFIER: Signing key not found in JWKS (kid={kid_header})")
-        return None
+def _verify_content_digest(headers, body):
+    import hmac
+    import http_sfv
 
-    # Step 6: Verify JWT signature
-    alg = header.get("alg")
-    if not alg:
-        logger.debug("VERIFIER: JWT header missing 'alg'")
-        return None
-
+    value = next((v for k, v in headers.items() if k.lower() == "content-digest"), None)
+    if not value or body is None:
+        return False
     try:
-        key_type = signing_key.get("kty")
-        if key_type == "RSA":
-            from jwt.algorithms import RSAAlgorithm
-            auth_public_key = RSAAlgorithm.from_jwk(signing_key)
-        elif key_type == "OKP" and signing_key.get("crv") == "Ed25519":
-            auth_public_key = jwk_to_public_key(signing_key)
-        elif key_type == "EC":
-            from jwt.algorithms import ECAlgorithm
-            auth_public_key = ECAlgorithm.from_jwk(signing_key)
-        else:
-            logger.debug(f"VERIFIER: Unsupported key type: {key_type}")
-            return None
-
-        pyjwt.decode(
-            jwt_token,
-            auth_public_key,
-            algorithms=[alg],
-            options={"verify_signature": True, "verify_exp": False, "verify_aud": False}
-        )
-        logger.debug("VERIFIER: JWT signature verification PASSED")
-    except Exception as e:
-        logger.debug(f"VERIFIER: JWT signature verification failed: {e}")
-        return None
-
-    # Steps 7-8: Extract cnf.jwk and return as public key
-    try:
-        return jwk_to_public_key(cnf_jwk)
-    except Exception as e:
-        logger.debug(f"VERIFIER: cnf.jwk conversion failed: {e}")
-        return None
+        fields = http_sfv.Dictionary()
+        fields.parse(value.encode("ascii"))
+        checked = False
+        for alg, item in fields.items():
+            if alg not in ("sha-256", "sha-512"):
+                continue
+            digest = (
+                hashlib.sha256(body).digest()
+                if alg == "sha-256"
+                else hashlib.sha512(body).digest()
+            )
+            if not isinstance(item.value, bytes) or not hmac.compare_digest(
+                item.value, digest
+            ):
+                return False
+            checked = True
+        return checked
+    except Exception:
+        return False
 
 
 def _p1363_to_der(sig: bytes) -> bytes:
@@ -530,7 +503,10 @@ def _verify_with_key(public_key, signature_bytes: bytes, message: bytes) -> None
     """
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives.asymmetric.ec import (
-        EllipticCurvePublicKey, ECDSA, SECP256R1, SECP384R1,
+        EllipticCurvePublicKey,
+        ECDSA,
+        SECP256R1,
+        SECP384R1,
     )
     from cryptography.hazmat.primitives import hashes
     from cryptography.exceptions import InvalidSignature

@@ -67,7 +67,7 @@ def build_error_response(error: str, description: str = None, **extras) -> dict:
     """
     response = {"error": error}
     if description:
-        response["error_description"] = description
+        response["detail"] = description
     response.update(extras)
     return response
 

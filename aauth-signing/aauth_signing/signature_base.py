@@ -21,7 +21,7 @@ def build_signature_base(
     body: Optional[bytes],
     signature_key_header: str,
     covered_components: Optional[List[str]] = None,
-    signature_params: Optional[str] = None
+    signature_params: Optional[str] = None,
 ) -> str:
     """Build signature base string per RFC 9421 Section 2.5.
 
@@ -40,7 +40,9 @@ def build_signature_base(
         Signature base string
     """
     if covered_components is None:
-        covered_components = _determine_covered_components(query, body, additional_components=None)
+        covered_components = _determine_covered_components(
+            query, body, additional_components=None
+        )
 
     components: List[Tuple[str, str]] = []
 
@@ -55,34 +57,52 @@ def build_signature_base(
             if query:
                 components.append(("@query", f"?{query}"))
             else:
-                raise ValueError("@query component specified but no query string present")
+                raise ValueError(
+                    "@query component specified but no query string present"
+                )
         elif component_name == "content-type":
-            if body:
+            if body is not None:
                 content_type = _get_header(headers, "content-type")
                 if content_type:
                     components.append(("content-type", content_type))
                 else:
-                    raise ValueError("content-type component required but header missing")
+                    raise ValueError(
+                        "content-type component required but header missing"
+                    )
             else:
                 raise ValueError("content-type component specified but no body present")
         elif component_name == "content-digest":
-            if body:
+            if body is not None:
                 content_digest = _get_header(headers, "content-digest")
                 if content_digest:
                     components.append(("content-digest", content_digest))
                 else:
-                    raise ValueError("content-digest component required but header missing")
+                    raise ValueError(
+                        "content-digest component required but header missing"
+                    )
             else:
-                raise ValueError("content-digest component specified but no body present")
+                raise ValueError(
+                    "content-digest component specified but no body present"
+                )
         elif component_name == "signature-key":
             components.append(("signature-key", signature_key_header))
+        elif component_name == "authorization":
+            value = _get_header(headers, "authorization")
+            if not value:
+                raise ValueError("authorization component required but header missing")
+            components.append(("authorization", value))
         elif component_name == "aauth-mission":
             mission_val = _get_header(headers, "aauth-mission")
             if not mission_val:
-                raise ValueError("aauth-mission in Signature-Input but AAuth-Mission header missing")
+                raise ValueError(
+                    "aauth-mission in Signature-Input but AAuth-Mission header missing"
+                )
             components.append(("aauth-mission", mission_val))
         else:
-            raise ValueError(f"Unknown component: {component_name}")
+            value = _get_header(headers, component_name)
+            if component_name.startswith("@") or value is None:
+                raise ValueError(f"Unknown or missing component: {component_name}")
+            components.append((component_name, value))
 
     # Build signature base (RFC 9421 Section 2.5)
     signature_base_parts = []
@@ -153,10 +173,7 @@ def _get_header(headers: Dict[str, str], name: str) -> Optional[str]:
     return None
 
 
-def build_signature_params(
-    covered_components: List[str],
-    created: int
-) -> str:
+def build_signature_params(covered_components: List[str], created: int) -> str:
     """Build the Signature-Input value (the part after the label).
 
     Per AAuth spec Section 15.4, only `created` is REQUIRED.
@@ -182,5 +199,5 @@ def calculate_content_digest(body: bytes) -> str:
         Content-Digest header value (e.g., "sha-256=:...:")
     """
     digest = hashlib.sha256(body).digest()
-    digest_b64 = base64.b64encode(digest).decode('ascii')
+    digest_b64 = base64.b64encode(digest).decode("ascii")
     return f"sha-256=:{digest_b64}:"

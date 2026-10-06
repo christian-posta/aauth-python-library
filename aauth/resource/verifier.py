@@ -1,172 +1,153 @@
-"""Request verification for resource role."""
+"""Resource authentication and request-context binding for draft -11."""
 
-from typing import Dict, Any, Optional, List, Callable
+from urllib.parse import urlsplit
 from ..signing.verifier import verify_signature
 from ..signing.signature_key import parse_signature_key
-from ..signing.signature_input import parse_signature_input
-from ..errors import SignatureError
+from ..tokens.common import verify_token, parse_jwt, check_server
+from ..keys.jwk import calculate_jwk_thumbprint
+from ..errors import AAuthError, SignatureError, TokenError
+from ..headers.aauth_header import parse_authorization_aauth_header
 
 
 class RequestVerifier:
-    """Verifies incoming requests for resources."""
-
     def __init__(
         self,
-        canonical_authorities: List[str],
-        jwks_fetcher: Optional[Callable] = None,
-        trusted_auth_servers: Optional[List[str]] = None
+        canonical_authorities,
+        jwks_fetcher=None,
+        trusted_auth_servers=None,
+        *,
+        resource_id=None,
+        trusted_person_servers=None,
+        session_token_verifier=None,
+        additional_signature_components=None,
+        signature_window=60,
+        revocation_checker=None,
     ):
-        """Initialize request verifier.
-
-        Args:
-            canonical_authorities: List of canonical authorities (host:port) per SPEC 10.3.1
-            jwks_fetcher: Optional JWKS fetcher function
-            trusted_auth_servers: Optional list of trusted auth server identifiers
-        """
         self.canonical_authorities = canonical_authorities
         self.jwks_fetcher = jwks_fetcher
-        self.trusted_auth_servers = trusted_auth_servers or []
+        self.resource_id = check_server(resource_id) if resource_id else None
+        self.trusted_auth_servers = frozenset(trusted_auth_servers or [])
+        self.trusted_person_servers = frozenset(
+            trusted_person_servers or trusted_auth_servers or []
+        )
+        self.session_token_verifier = session_token_verifier
+        self.additional_signature_components = additional_signature_components or []
+        self.signature_window = signature_window
+        self.revocation_checker = revocation_checker
 
     def verify_request(
         self,
-        method: str,
-        target_uri: str,
-        headers: Dict[str, str],
-        body: Optional[bytes],
-        require_identity: bool = False,
-        require_auth_token: bool = False
-    ) -> Dict[str, Any]:
-        """Verify incoming request.
-
-        Args:
-            method: HTTP method
-            target_uri: Target URI
-            headers: Request headers
-            body: Request body bytes
-            require_identity: Whether agent identity is required
-            require_auth_token: Whether auth token is required
-
-        Returns:
-            Dictionary with verification result:
-            - valid: bool
-            - agent_id: Optional[str]
-            - act: Optional[Dict] — actor claim (delegation chain)
-            - user_sub: Optional[str]
-            - scopes: Optional[List[str]]
-            - error: Optional[str]
-
-        Raises:
-            SignatureError: If verification fails due to invalid format
-        """
-        # Extract signature headers
-        signature_input_header = headers.get("signature-input") or headers.get("Signature-Input")
-        signature_header = headers.get("signature") or headers.get("Signature")
-        signature_key_header = headers.get("signature-key") or headers.get("Signature-Key")
-
-        if not (signature_input_header and signature_header and signature_key_header):
-            return {
-                "valid": False,
-                "error": "Missing signature headers"
-            }
-
-        # Parse Signature-Key to determine scheme
+        method,
+        target_uri,
+        headers,
+        body=None,
+        require_identity=False,
+        require_auth_token=False,
+        *,
+        require_person_token=False,
+        require_session_token=False,
+        required_scopes=None,
+    ):
         try:
-            parsed_key = parse_signature_key(signature_key_header)
-            scheme = parsed_key["scheme"]
-        except Exception as e:
-            return {
-                "valid": False,
-                "error": f"Invalid Signature-Key: {e}"
-            }
-
-        # Check canonical authority
-        from urllib.parse import urlparse
-        parsed_uri = urlparse(target_uri)
-        request_authority = parsed_uri.netloc
-
-        if request_authority not in self.canonical_authorities:
-            return {
-                "valid": False,
-                "error": f"Request authority {request_authority} not in canonical authorities"
-            }
-
-        # Verify signature
-        try:
-            is_valid = verify_signature(
-                method=method,
-                target_uri=target_uri,
-                headers=headers,
-                body=body,
-                signature_input_header=signature_input_header,
-                signature_header=signature_header,
-                signature_key_header=signature_key_header,
-                jwks_fetcher=self.jwks_fetcher
+            h = {k.lower(): v for k, v in headers.items()}
+            u = urlsplit(target_uri)
+            if u.netloc not in self.canonical_authorities:
+                raise TokenError("Request authority is not canonical")
+            resource = self.resource_id or check_server(u.scheme + "://" + u.netloc)
+            key = parse_signature_key(h.get("signature-key", ""))
+            if key["scheme"] != "jwt":
+                raise SignatureError(
+                    "AAuth agents must use jwt", error_code="unsupported_scheme"
+                )
+            tok = key["params"].get("jwt")
+            header, unverified = parse_jwt(tok)
+            typ = header.get("typ")
+            if typ not in ("aa-agent+jwt", "aa-person+jwt", "aa-auth+jwt"):
+                raise TokenError(
+                    "Unexpected request token type", error_code="invalid_jwt"
+                )
+            if (
+                typ == "aa-auth+jwt"
+                and unverified.get("iss") not in self.trusted_auth_servers
+            ):
+                raise TokenError(
+                    "Untrusted auth token issuer", error_code="invalid_jwt"
+                )
+            if (
+                typ == "aa-person+jwt"
+                and unverified.get("iss") not in self.trusted_person_servers
+            ):
+                raise TokenError(
+                    "Untrusted person token issuer", error_code="invalid_jwt"
+                )
+            if not self.jwks_fetcher:
+                raise TokenError("JWKS fetcher is required")
+            required = [
+                "@method",
+                "@authority",
+                "@path",
+                "signature-key",
+                *self.additional_signature_components,
+            ]
+            if not verify_signature(
+                method,
+                target_uri,
+                headers,
+                body,
+                h.get("signature-input", ""),
+                h.get("signature", ""),
+                h.get("signature-key", ""),
+                jwks_fetcher=self.jwks_fetcher,
+                required_components=required,
+                signature_window=self.signature_window,
+            ):
+                raise SignatureError("Signature verification failed")
+            p = verify_token(
+                tok,
+                self.jwks_fetcher,
+                expected_typ=typ,
+                expected_aud=resource,
+                revocation_checker=self.revocation_checker,
             )
-
-            if not is_valid:
+            if require_auth_token and typ != "aa-auth+jwt":
+                raise TokenError("Auth token required")
+            if require_person_token and typ != "aa-person+jwt":
+                raise TokenError("Person token required")
+            if require_identity and typ != "aa-agent+jwt":
+                raise TokenError("Agent token required for agent identity")
+            scopes = p.get("scope", "").split()
+            if required_scopes and not set(required_scopes).issubset(scopes):
                 return {
                     "valid": False,
-                    "error": "Signature verification failed"
+                    "error": "Insufficient scope",
+                    "error_code": "insufficient_scope",
                 }
-        except SignatureError as e:
+            session = parse_authorization_aauth_header(h.get("authorization", ""))
+            if require_session_token and not session:
+                raise TokenError("Session token required")
+            if session and (
+                not self.session_token_verifier
+                or not self.session_token_verifier(
+                    session, calculate_jwk_thumbprint(p["cnf"]["jwk"])
+                )
+            ):
+                raise TokenError("Invalid or unbound session token")
+            return {
+                "valid": True,
+                "token_type": typ,
+                "claims": p,
+                "agent_id": p["sub"] if typ == "aa-agent+jwt" else None,
+                "user_sub": p["sub"] if typ != "aa-agent+jwt" else None,
+                "person_server": (
+                    p.get("ps", p["iss"]) if typ != "aa-agent+jwt" else p.get("ps")
+                ),
+                "scopes": scopes,
+                "act": None,
+                "session_token": session,
+            }
+        except (AAuthError, ValueError, TypeError, KeyError) as exc:
             return {
                 "valid": False,
-                "error": str(e)
+                "error": str(exc),
+                "error_code": getattr(exc, "error_code", None) or "invalid_jwt",
             }
-
-        # Extract identity/authorization info based on scheme
-        result: Dict[str, Any] = {
-            "valid": True,
-            "agent_id": None,
-            "act": None,
-            "user_sub": None,
-            "scopes": None,
-        }
-
-        if scheme == "jwks_uri":
-            # Identity via JWKS URI discovery — agent_id from 'id' param
-            params = parsed_key["params"]
-            result["agent_id"] = params.get("id")
-
-        elif scheme == "jwt":
-            # Identity/authorization via JWT — extract claims
-            jwt_token = parsed_key["params"].get("jwt")
-            if jwt_token:
-                try:
-                    import jwt as pyjwt
-                    payload = pyjwt.decode(jwt_token, options={"verify_signature": False})
-                    header = pyjwt.get_unverified_header(jwt_token)
-                    typ = header.get("typ")
-
-                    if typ == "aa-agent+jwt":
-                        # Agent token: iss is agent server, sub is agent identifier
-                        result["agent_id"] = payload.get("sub")
-                    elif typ == "aa-auth+jwt":
-                        # Auth token: agent claim is agent identifier
-                        result["agent_id"] = payload.get("agent")
-                        result["user_sub"] = payload.get("sub")
-                        result["act"] = payload.get("act")
-                        scope_str = payload.get("scope")
-                        if scope_str:
-                            result["scopes"] = scope_str.split()
-                except Exception:
-                    pass
-
-        elif scheme == "jkt-jwt":
-            # Pseudonymous via enclave key delegation — no identity
-            pass
-
-        # Check requirements
-        if require_identity and not result["agent_id"]:
-            return {
-                "valid": False,
-                "error": "Agent identity required but not present"
-            }
-
-        if require_auth_token and not result.get("scopes"):
-            return {
-                "valid": False,
-                "error": "Auth token required but not present"
-            }
-
-        return result

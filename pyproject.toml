@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aauth"
-version = "0.3.5"
+version = "0.5.0"
 description = "AAuth protocol implementation for Python"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE"}
 dependencies = [
-    "aauth-signing>=0.1.3",
+    "aauth-signing>=0.2.0",
     "cryptography>=41.0.0",
     "PyJWT>=2.8.0",
     "httpx>=0.25.0",
@@ -48,3 +48,6 @@ exclude = ["aauth-signing*"]
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.txt"]
 
+
+[tool.pytest.ini_options]
+pythonpath = [".", "aauth-signing"]

@@ -4,10 +4,16 @@ import base64
 import hashlib
 import json
 from typing import Dict, Any, Optional, Union
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from cryptography.hazmat.primitives.asymmetric.ec import (
-    EllipticCurvePublicKey, EllipticCurvePrivateKey,
-    EllipticCurvePublicNumbers, SECP256R1, SECP384R1,
+    EllipticCurvePublicKey,
+    EllipticCurvePrivateKey,
+    EllipticCurvePublicNumbers,
+    SECP256R1,
+    SECP384R1,
 )
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -44,7 +50,9 @@ def private_key_to_jwk(private_key, kid: Optional[str] = None) -> Dict[str, Any]
     return public_key_to_jwk(private_key.public_key(), kid)
 
 
-def public_key_to_jwk(public_key: PublicKey, kid: Optional[str] = None) -> Dict[str, Any]:
+def public_key_to_jwk(
+    public_key: PublicKey, kid: Optional[str] = None
+) -> Dict[str, Any]:
     """Convert a public key to JWK format (Ed25519 or EC P-256/P-384).
 
     Args:
@@ -60,7 +68,7 @@ def public_key_to_jwk(public_key: PublicKey, kid: Optional[str] = None) -> Dict[
             format=serialization.PublicFormat.Raw,
         )
         x = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
-        jwk: Dict[str, Any] = {"kty": "OKP", "crv": "Ed25519", "x": x}
+        jwk: Dict[str, Any] = {"kty": "OKP", "crv": "Ed25519", "x": x, "alg": "Ed25519"}
     elif isinstance(public_key, EllipticCurvePublicKey):
         nums = public_key.public_numbers()
         curve_name = type(public_key.curve).__name__
@@ -68,9 +76,23 @@ def public_key_to_jwk(public_key: PublicKey, kid: Optional[str] = None) -> Dict[
         if crv is None:
             raise ValueError(f"Unsupported EC curve: {curve_name}")
         key_size = (public_key.key_size + 7) // 8
-        x = base64.urlsafe_b64encode(nums.x.to_bytes(key_size, "big")).decode("utf-8").rstrip("=")
-        y = base64.urlsafe_b64encode(nums.y.to_bytes(key_size, "big")).decode("utf-8").rstrip("=")
-        jwk = {"kty": "EC", "crv": crv, "x": x, "y": y}
+        x = (
+            base64.urlsafe_b64encode(nums.x.to_bytes(key_size, "big"))
+            .decode("utf-8")
+            .rstrip("=")
+        )
+        y = (
+            base64.urlsafe_b64encode(nums.y.to_bytes(key_size, "big"))
+            .decode("utf-8")
+            .rstrip("=")
+        )
+        jwk = {
+            "kty": "EC",
+            "crv": crv,
+            "x": x,
+            "y": y,
+            "alg": "ES256" if crv == "P-256" else "ES384",
+        }
     else:
         raise ValueError(f"Unsupported key type: {type(public_key)}")
 
@@ -147,6 +169,4 @@ def generate_jwks(keys: list[Dict[str, Any]]) -> Dict[str, Any]:
     Returns:
         JWKS document dictionary
     """
-    return {
-        "keys": keys
-    }
+    return {"keys": keys}

@@ -8,6 +8,7 @@ import aauth
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def agent_keys():
     """Ed25519 key pair for an agent."""
@@ -42,16 +43,17 @@ def agent_token(agent_keys, agent_jwk):
     private_key, _ = agent_keys
     return aauth.create_agent_token(
         iss="https://agent-server.example",
-        sub="https://agent.example",
+        sub="aauth:agent@agent-server.example",
         cnf_jwk=agent_jwk,
         private_key=private_key,
-        kid="key-1"
+        kid="key-1",
     )
 
 
 # ---------------------------------------------------------------------------
 # Quick Start — sign_request
 # ---------------------------------------------------------------------------
+
 
 class TestQuickStartSignRequest:
     """README: Quick Start — sign_request examples."""
@@ -65,7 +67,7 @@ class TestQuickStartSignRequest:
             headers={},
             body=None,
             private_key=private_key,
-            sig_scheme="hwk"
+            sig_scheme="hwk",
         )
         assert "Signature-Input" in signed_headers
         assert "Signature" in signed_headers
@@ -84,7 +86,7 @@ class TestQuickStartSignRequest:
             sig_scheme="jwks_uri",
             id="https://agent.example",
             kid="key-1",
-            dwk="aauth-agent.json"
+            dwk="aauth-agent.json",
         )
         assert "Signature-Input" in signed_headers
         assert "Signature" in signed_headers
@@ -102,7 +104,7 @@ class TestQuickStartSignRequest:
             body=None,
             private_key=private_key,
             sig_scheme="jwt",
-            jwt=agent_token
+            jwt=agent_token,
         )
         assert "Signature-Input" in signed_headers
         assert "Signature" in signed_headers
@@ -113,6 +115,7 @@ class TestQuickStartSignRequest:
 # ---------------------------------------------------------------------------
 # Key Management
 # ---------------------------------------------------------------------------
+
 
 class TestKeyManagement:
     """README: Key Management section."""
@@ -143,6 +146,7 @@ class TestKeyManagement:
 # Signature Verification
 # ---------------------------------------------------------------------------
 
+
 class TestSignatureVerification:
     """README: Signature Verification section."""
 
@@ -160,7 +164,7 @@ class TestSignatureVerification:
             headers=headers,
             body=body,
             private_key=private_key,
-            sig_scheme="hwk"
+            sig_scheme="hwk",
         )
         all_headers = {**headers, **signed_headers}
 
@@ -194,7 +198,7 @@ class TestSignatureVerification:
             headers={},
             body=None,
             private_key=private_key_a,
-            sig_scheme="hwk"
+            sig_scheme="hwk",
         )
 
         # Swap the Signature-Key to claim key B but keep the signature from key A
@@ -204,7 +208,7 @@ class TestSignatureVerification:
             headers={},
             body=None,
             private_key=private_key_b,
-            sig_scheme="hwk"
+            sig_scheme="hwk",
         )
         tampered_headers = {
             "Signature-Input": signed_headers["Signature-Input"],
@@ -228,20 +232,24 @@ class TestSignatureVerification:
 # Token Creation
 # ---------------------------------------------------------------------------
 
+
 class TestTokenCreation:
     """README: Token Creation section."""
 
-    def test_create_resource_token(self, resource_keys, agent_thumbprint):
+    def test_create_resource_token(
+        self, resource_keys, agent_thumbprint, person_token, ps_fetcher
+    ):
         """create_resource_token returns a signed aa-resource+jwt."""
         resource_private_key, _ = resource_keys
         resource_token = aauth.create_resource_token(
             iss="https://resource.example",
             aud="https://auth.example",
-            agent="https://agent.example",
             agent_jkt=agent_thumbprint,
+            presented_token=person_token,
+            jwks_fetcher=ps_fetcher,
             scope="data.read data.write",
             private_key=resource_private_key,
-            kid="resource-key-1"
+            kid="resource-key-1",
         )
         assert isinstance(resource_token, str)
         claims = aauth.parse_token_claims(resource_token)
@@ -255,32 +263,38 @@ class TestTokenCreation:
         auth_token = aauth.create_auth_token(
             iss="https://auth.example",
             aud="https://resource.example",
-            agent="https://agent.example",
             cnf_jwk=agent_jwk,
-            act={"sub": "https://agent.example"},
+            ps="https://ps.example",
+            sub="person-1",
+            agent_exp=int(__import__("time").time()) + 600,
+            presented_exp=int(__import__("time").time()) + 600,
             scope="data.read",
             private_key=auth_private_key,
-            kid="auth-key-1"
+            kid="auth-key-1",
         )
         assert isinstance(auth_token, str)
         claims = aauth.parse_token_claims(auth_token)
         assert claims["header"]["typ"] == "aa-auth+jwt"
-        assert claims["payload"]["agent"] == "https://agent.example"
+        assert claims["payload"]["ps"] == "https://ps.example"
+        assert "agent" not in claims["payload"]
         assert claims["payload"]["scope"] == "data.read"
-        assert claims["payload"]["act"] == {"sub": "https://agent.example"}
+        assert "act" not in claims["payload"]
         assert "cnf" in claims["payload"]
 
-    def test_parse_token_claims(self, resource_keys, agent_thumbprint):
+    def test_parse_token_claims(
+        self, resource_keys, agent_thumbprint, person_token, ps_fetcher
+    ):
         """parse_token_claims returns header and payload dicts without verification."""
         resource_private_key, _ = resource_keys
         token = aauth.create_resource_token(
             iss="https://resource.example",
             aud="https://auth.example",
-            agent="https://agent.example",
             agent_jkt=agent_thumbprint,
+            presented_token=person_token,
+            jwks_fetcher=ps_fetcher,
             scope="read",
             private_key=resource_private_key,
-            kid="k1"
+            kid="k1",
         )
         claims = aauth.parse_token_claims(token)
         assert "header" in claims
@@ -292,6 +306,7 @@ class TestTokenCreation:
 # ---------------------------------------------------------------------------
 # AAuth Header Parsing
 # ---------------------------------------------------------------------------
+
 
 class TestAAuthHeaderParsing:
     """README: AAuth Header Parsing section."""
@@ -320,7 +335,7 @@ class TestAAuthHeaderParsing:
             require_identity=True,
             require_auth_token=True,
             resource_token="some-resource-token",
-            auth_server="https://auth.example"
+            auth_server="https://auth.example",
         )
         assert isinstance(challenge_header, str)
         # Round-trip: what we build should be parseable
@@ -336,12 +351,13 @@ class TestAAuthHeaderParsing:
         )
         assert isinstance(challenge_header, str)
         parsed = aauth.parse_agent_auth_header(challenge_header)
-        assert parsed["requirement"] == "identity"
+        assert parsed["requirement"] == "agent-token"
 
 
 # ---------------------------------------------------------------------------
 # High-Level Agent and Resource APIs
 # ---------------------------------------------------------------------------
+
 
 class TestAgentRequestSigner:
     """README: High-Level Agent API — AgentRequestSigner."""
@@ -352,49 +368,25 @@ class TestAgentRequestSigner:
         signer = aauth.AgentRequestSigner(
             private_key=private_key,
             agent_id="https://agent.example",
-            agent_token=agent_token
+            agent_token=agent_token,
         )
         signed_headers = signer.sign_request(
             method="GET",
             target_uri="https://resource.example/api/data",
             headers={},
             body=None,
-            sig_scheme="jwt"
+            sig_scheme="jwt",
         )
         assert "Signature-Input" in signed_headers
         assert "Signature" in signed_headers
         assert "Signature-Key" in signed_headers
 
-    def test_sign_request_hwk_scheme(self, agent_keys):
-        """AgentRequestSigner.sign_request with sig_scheme='hwk' works without agent_token."""
-        private_key, _ = agent_keys
-        signer = aauth.AgentRequestSigner(private_key=private_key)
-        signed_headers = signer.sign_request(
-            method="GET",
-            target_uri="https://resource.example/api/data",
-            headers={},
-            body=None,
-            sig_scheme="hwk"
-        )
-        assert "Signature-Key" in signed_headers
-        assert "hwk" in signed_headers["Signature-Key"]
-
-    def test_sign_request_jwks_uri_scheme(self, agent_keys):
-        """AgentRequestSigner.sign_request with sig_scheme='jwks_uri' requires agent_id."""
-        private_key, _ = agent_keys
-        signer = aauth.AgentRequestSigner(
-            private_key=private_key,
-            agent_id="https://agent.example"
-        )
-        signed_headers = signer.sign_request(
-            method="GET",
-            target_uri="https://resource.example/api/data",
-            headers={},
-            body=None,
-            sig_scheme="jwks_uri"
-        )
-        assert "jwks_uri" in signed_headers["Signature-Key"]
-        assert "https://agent.example" in signed_headers["Signature-Key"]
+    @pytest.mark.parametrize("scheme", ["hwk", "jwks_uri"])
+    def test_non_aauth_schemes_rejected(self, agent_keys, scheme):
+        with pytest.raises(aauth.SignatureError):
+            aauth.AgentRequestSigner(agent_keys[0]).sign_request(
+                "GET", "https://resource.example/api/data", {}, sig_scheme=scheme
+            )
 
     def test_jwt_scheme_requires_agent_token(self, agent_keys):
         """AgentRequestSigner raises SignatureError when jwt scheme used without agent_token."""
@@ -406,41 +398,26 @@ class TestAgentRequestSigner:
                 target_uri="https://resource.example/api/data",
                 headers={},
                 body=None,
-                sig_scheme="jwt"
+                sig_scheme="jwt",
             )
 
 
 class TestRequestVerifier:
     """README: High-Level Resource API — RequestVerifier."""
 
-    def test_verify_valid_hwk_request(self, agent_keys):
-        """RequestVerifier.verify_request returns valid=True for a correctly signed hwk request."""
-        private_key, _ = agent_keys
-        method = "GET"
-        target_uri = "https://resource.example/api/data"
-        headers = {}
-        signed_headers = aauth.sign_request(
-            method=method,
-            target_uri=target_uri,
-            headers=headers,
-            body=None,
-            private_key=private_key,
-            sig_scheme="hwk"
-        )
-        request_headers = {**headers, **signed_headers}
-
-        verifier = aauth.RequestVerifier(
-            canonical_authorities=["resource.example"]
-        )
+    def test_verify_valid_agent_request(self, agent_keys, agent_token):
+        private, public = agent_keys
+        headers = aauth.AgentRequestSigner(
+            private, agent_token=agent_token
+        ).sign_request("GET", "https://resource.example/api/data", {})
+        fetcher = lambda *args: {"keys": [aauth.public_key_to_jwk(public, kid="key-1")]}
+        verifier = aauth.RequestVerifier(["resource.example"], fetcher)
         result = verifier.verify_request(
-            method=method,
-            target_uri=target_uri,
-            headers=request_headers,
-            body=None,
-            require_identity=False,
-            require_auth_token=False
+            "GET", "https://resource.example/api/data", headers, require_identity=True
         )
-        assert result["valid"] is True
+        assert (
+            result["valid"] and result["agent_id"] == "aauth:agent@agent-server.example"
+        )
 
     def test_verify_rejects_wrong_authority(self, agent_keys):
         """RequestVerifier rejects requests whose authority is not in canonical_authorities."""
@@ -454,13 +431,11 @@ class TestRequestVerifier:
             headers=headers,
             body=None,
             private_key=private_key,
-            sig_scheme="hwk"
+            sig_scheme="hwk",
         )
         request_headers = {**headers, **signed_headers}
 
-        verifier = aauth.RequestVerifier(
-            canonical_authorities=["other.example"]
-        )
+        verifier = aauth.RequestVerifier(canonical_authorities=["other.example"])
         result = verifier.verify_request(
             method=method,
             target_uri=target_uri,
@@ -476,15 +451,40 @@ class TestRequestVerifier:
         target_uri = "https://resource.example/api/data"
         headers = {}
         signed_headers = aauth.sign_request(
-            method=method, target_uri=target_uri,
-            headers=headers, body=None,
-            private_key=private_key, sig_scheme="hwk"
+            method=method,
+            target_uri=target_uri,
+            headers=headers,
+            body=None,
+            private_key=private_key,
+            sig_scheme="hwk",
         )
         verifier = aauth.RequestVerifier(canonical_authorities=["resource.example"])
         result = verifier.verify_request(
-            method=method, target_uri=target_uri,
-            headers={**headers, **signed_headers}, body=None,
+            method=method,
+            target_uri=target_uri,
+            headers={**headers, **signed_headers},
+            body=None,
         )
         assert "valid" in result
-        assert "agent_id" in result
-        assert "scopes" in result
+        assert result["valid"] is False
+        assert result["error_code"] == "unsupported_scheme"
+
+
+@pytest.fixture
+def ps_fetcher(auth_keys):
+    return lambda *args: {"keys": [aauth.public_key_to_jwk(auth_keys[1], kid="ps-key")]}
+
+
+@pytest.fixture
+def person_token(auth_keys, agent_jwk):
+    import time
+
+    return aauth.create_person_token(
+        "https://ps.example",
+        "https://resource.example",
+        "person-1",
+        agent_jwk,
+        auth_keys[0],
+        "ps-key",
+        agent_exp=int(time.time()) + 600,
+    )

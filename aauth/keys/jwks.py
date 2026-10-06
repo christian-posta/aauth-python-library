@@ -39,12 +39,16 @@ class DefaultHTTPClient:
         """Fetch JSON using httpx."""
         try:
             import httpx
+
             async with httpx.AsyncClient() as client:
+                admit_public_url(url)
                 response = await client.get(url, timeout=10.0)
                 response.raise_for_status()
                 return response.json()
         except ImportError:
-            raise JWKSError("httpx not installed. Install it or provide custom HTTP client.")
+            raise JWKSError(
+                "httpx not installed. Install it or provide custom HTTP client."
+            )
         except Exception as e:
             raise JWKSError(f"Failed to fetch JWKS from {url}: {e}", jwks_uri=url)
 
@@ -157,7 +161,7 @@ class JWKSFetcher:
         self,
         identifier: str,
         kid: Optional[str] = None,
-        metadata_path: str = "aauth-agent.json"
+        metadata_path: str = "aauth-agent.json",
     ) -> Dict[str, Any]:
         """Fetch JWKS for an identifier via metadata discovery.
 
@@ -180,19 +184,25 @@ class JWKSFetcher:
         # Fetch metadata to discover jwks_uri
         metadata_url = f"{identifier}/.well-known/{metadata_path}"
         try:
-            metadata = await self._http_client.fetch_json(metadata_url)
+            from ..metadata.common import validate_metadata
+
+            metadata = validate_metadata(
+                await self._http_client.fetch_json(metadata_url),
+                identifier,
+                ("jwks_uri",),
+            )
             jwks_uri = metadata.get("jwks_uri")
             if not jwks_uri:
                 raise JWKSError(
                     f"No jwks_uri in metadata from {metadata_url}",
-                    jwks_uri=metadata_url
+                    jwks_uri=metadata_url,
                 )
         except JWKSError:
             raise
         except Exception as e:
             raise JWKSError(
                 f"Failed to fetch metadata from {metadata_url}: {e}",
-                jwks_uri=metadata_url
+                jwks_uri=metadata_url,
             )
 
         # Check cache first
@@ -215,9 +225,11 @@ class JWKSFetcher:
         if not self._can_fetch(identifier):
             raise JWKSError(
                 f"Rate limited: cannot fetch JWKS for {identifier} more than once per {self._min_fetch_interval}s",
-                jwks_uri=jwks_uri
+                jwks_uri=jwks_uri,
             )
 
+        # Count failed fetches too, so outages cannot bypass the rate limit.
+        self._record_fetch(identifier)
         # Fetch JWKS
         try:
             jwks = await self._http_client.fetch_json(jwks_uri)
@@ -225,8 +237,7 @@ class JWKSFetcher:
             # Validate JWKS structure
             if not isinstance(jwks, dict) or "keys" not in jwks:
                 raise JWKSError(
-                    f"Invalid JWKS structure from {jwks_uri}",
-                    jwks_uri=jwks_uri
+                    f"Invalid JWKS structure from {jwks_uri}", jwks_uri=jwks_uri
                 )
 
             # Cache it and record fetch time
@@ -238,11 +249,12 @@ class JWKSFetcher:
             raise
         except Exception as e:
             raise JWKSError(
-                f"Failed to fetch JWKS from {jwks_uri}: {e}",
-                jwks_uri=jwks_uri
+                f"Failed to fetch JWKS from {jwks_uri}: {e}", jwks_uri=jwks_uri
             )
 
-    def get_key_by_kid(self, jwks: Dict[str, Any], kid: str) -> Optional[Dict[str, Any]]:
+    def get_key_by_kid(
+        self, jwks: Dict[str, Any], kid: str
+    ) -> Optional[Dict[str, Any]]:
         """Get key from JWKS by kid.
 
         Args:
@@ -257,3 +269,43 @@ class JWKSFetcher:
             if key.get("kid") == kid:
                 return key
         return None
+
+
+def admit_public_url(url):
+    """Default network policy: HTTPS without credentials, resolving to public IPs.
+
+    Callers providing a custom HTTP client own its egress policy. Production
+    deployments should additionally enforce egress at their proxy/network layer.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    u = urlsplit(url)
+    if u.scheme != "https" or not u.hostname or u.username or u.password or u.fragment:
+        raise JWKSError("Network URL must be HTTPS without credentials or fragment")
+    try:
+        addresses = socket.getaddrinfo(
+            u.hostname, u.port or 443, type=socket.SOCK_STREAM
+        )
+        if not addresses or any(
+            not ipaddress.ip_address(item[4][0]).is_global for item in addresses
+        ):
+            raise JWKSError("Network URL resolves to a non-public address")
+    except OSError as exc:
+        raise JWKSError("Network host cannot be resolved") from exc
+
+
+class AdmittedHTTPClient:
+    """Apply admission before each request, including discovered endpoints."""
+
+    def __init__(self, client):
+        self.client = client
+
+    async def get(self, url, **kwargs):
+        admit_public_url(url)
+        return await self.client.get(url, **kwargs)
+
+    async def post(self, url, **kwargs):
+        admit_public_url(url)
+        return await self.client.post(url, **kwargs)

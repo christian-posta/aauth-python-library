@@ -7,7 +7,7 @@ until a terminal response is received.
 
 import uuid
 import string
-import random
+import secrets
 from typing import Dict, Any, Optional, List
 
 from ..headers.aauth_header import HEADER_AAUTH_REQUIREMENT
@@ -32,7 +32,7 @@ def generate_interaction_code(length: int = 8) -> str:
     """
     # Use uppercase + digits for readability (spec examples use this pattern)
     chars = string.ascii_uppercase + string.digits
-    return ''.join(random.choices(chars, k=length))
+    return "".join(secrets.choice(chars) for _ in range(length))
 
 
 def build_pending_response_body(
@@ -105,16 +105,17 @@ def build_pending_response_headers(
 
     # Build AAuth-Requirement header if needed (protocol-level deferred requirements)
     if require == "interaction" and code and url:
-        headers[HEADER_AAUTH_REQUIREMENT] = f'requirement=interaction; url="{url}"; code="{code}"'
+        headers[HEADER_AAUTH_REQUIREMENT] = (
+            f'requirement=interaction; url="{url}"; code="{code}"'
+        )
     elif require == "approval":
         headers[HEADER_AAUTH_REQUIREMENT] = "requirement=approval"
     elif require == "clarification":
         # Spec §Clarification Chat: MUST include AAuth-Requirement: requirement=clarification
         # when a 202 response carries a clarification question.
         headers[HEADER_AAUTH_REQUIREMENT] = "requirement=clarification"
-    elif require == "claims" and required_claims:
-        inner = " ".join(f'"{c}"' for c in required_claims)
-        headers[HEADER_AAUTH_REQUIREMENT] = f"requirement=claims; required_claims=({inner})"
+    elif require == "claims":
+        headers[HEADER_AAUTH_REQUIREMENT] = "requirement=claims"
 
     return headers
 
@@ -135,7 +136,9 @@ def build_success_response(auth_token: str, expires_in: int = 3600) -> Dict[str,
     }
 
 
-def build_polling_error_body(error: str, description: Optional[str] = None) -> Dict[str, Any]:
+def build_polling_error_body(
+    error: str, description: Optional[str] = None
+) -> Dict[str, Any]:
     """Build error response body for terminal polling responses.
 
     Args:
@@ -147,7 +150,7 @@ def build_polling_error_body(error: str, description: Optional[str] = None) -> D
     """
     body = {"error": error}
     if description:
-        body["error_description"] = description
+        body["detail"] = description
     return body
 
 
@@ -181,6 +184,7 @@ def is_pending_response(status_code: int) -> bool:
 
 
 # --- Token endpoint request mode detection ---
+
 
 def detect_token_request_mode(params: Dict[str, Any]) -> str:
     """Detect token endpoint mode from request parameters.

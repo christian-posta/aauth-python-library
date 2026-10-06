@@ -1,6 +1,6 @@
 """AAuth - Agent Authentication Protocol implementation for Python."""
 
-__version__ = "0.3.4"
+__version__ = "0.5.0"
 
 # Errors and error codes
 from .errors import (
@@ -59,7 +59,7 @@ from .keys.jwk import (
     public_key_to_jwk,
     jwk_to_public_key,
     calculate_jwk_thumbprint,
-    generate_jwks
+    generate_jwks,
 )
 from .keys.jwks import JWKSFetcher, JWKSCache, DefaultHTTPClient
 
@@ -73,13 +73,14 @@ from .signing.algorithms import (
     ECDSA_P256_SHA256,
     ECDSA_P384_SHA384,
     SUPPORTED_ALGORITHMS,
-    is_supported
+    is_supported,
 )
 
 # Token handling
 from .tokens.agent_token import create_agent_token, verify_agent_token
 from .tokens.auth_token import create_auth_token, parse_token_claims, verify_token
 from .tokens.resource_token import create_resource_token, verify_resource_token
+from .tokens.person_token import create_person_token, verify_person_token
 
 # Header handling
 from .signing.signature_key import build_signature_key_header, parse_signature_key
@@ -122,6 +123,10 @@ from .headers.aauth_header import (
     HEADER_AAUTH_REQUIREMENT,
     HEADER_AAUTH_ACCESS,
     HEADER_AAUTH_CAPABILITIES,
+    REQUIRE_AGENT_TOKEN,
+    REQUIRE_PERSON_TOKEN,
+    build_agent_token_requirement,
+    build_person_token_requirement,
     REQUIRE_PSEUDONYM,
     REQUIRE_IDENTITY,
     REQUIRE_AUTH_TOKEN,
@@ -137,8 +142,15 @@ from .headers.aauth_header import (
 # Metadata
 from .metadata.agent import generate_agent_metadata
 from .metadata.resource import generate_resource_metadata
-from .metadata.auth_server import generate_auth_metadata, fetch_auth_metadata, fetch_metadata
+from .metadata.auth_server import (
+    generate_auth_metadata,
+    fetch_auth_metadata,
+    fetch_metadata,
+)
 from .metadata.mission_manager import (
+    generate_ps_metadata,
+    fetch_ps_metadata,
+    fetch_ps_metadata_async,
     generate_mm_metadata,
     fetch_mm_metadata,
     fetch_mm_metadata_async,
@@ -147,7 +159,12 @@ from .metadata.mission_manager import (
 # Agent role
 from .agent.signer import AgentRequestSigner
 from .agent.challenge_handler import ChallengeHandler
-from .agent.token_exchange import exchange_resource_token, extract_resource_token
+from .agent.token_exchange import (
+    exchange_resource_token,
+    extract_resource_token,
+    request_person_token,
+    complete_deferred_resource_request,
+)
 from .agent.poller import poll_pending_url, async_poll_pending_url, PollingResult
 
 # Resource role
@@ -156,9 +173,20 @@ from .resource.challenge_builder import ChallengeBuilder
 from .resource.token_issuer import ResourceTokenIssuer
 
 __all__ = [
+    "create_person_token",
+    "verify_person_token",
+    "verify_resource_token",
+    "request_person_token",
+    "complete_deferred_resource_request",
+    "generate_ps_metadata",
+    "fetch_ps_metadata",
+    "fetch_ps_metadata_async",
+    "REQUIRE_AGENT_TOKEN",
+    "REQUIRE_PERSON_TOKEN",
+    "build_agent_token_requirement",
+    "build_person_token_requirement",
     # Version
     "__version__",
-
     # Errors and error codes
     "AAuthError",
     "SignatureError",
@@ -186,21 +214,17 @@ __all__ = [
     "ERROR_EXPIRED",
     "ERROR_INVALID_CODE",
     "ERROR_SLOW_DOWN",
-
     # Identifiers
     "validate_server_identifier",
     "validate_endpoint_url",
     "validate_other_url",
-
     # Debug
     "_is_debug_enabled",
     "_is_http_debug_enabled",
     "_is_jwt_token_debug_enabled",
-
     # HTTP abstraction
     "AAuthRequest",
     "AAuthResponse",
-
     # Key management
     "generate_ed25519_keypair",
     "generate_ec_keypair",
@@ -211,7 +235,6 @@ __all__ = [
     "JWKSFetcher",
     "JWKSCache",
     "DefaultHTTPClient",
-
     # HTTP Message Signing
     "sign_request",
     "verify_signature",
@@ -222,7 +245,6 @@ __all__ = [
     "ECDSA_P384_SHA384",
     "SUPPORTED_ALGORITHMS",
     "is_supported",
-
     # Token handling
     "create_agent_token",
     "verify_agent_token",
@@ -230,7 +252,6 @@ __all__ = [
     "parse_token_claims",
     "verify_token",
     "create_resource_token",
-
     # Header handling
     "build_signature_key_header",
     "parse_signature_key",
@@ -267,7 +288,6 @@ __all__ = [
     "REQUIRE_CLAIMS",
     "HEADER_SIGNATURE_REQUIREMENT",
     "HEADER_AAUTH_REQUIREMENT",
-
     # Metadata
     "generate_agent_metadata",
     "generate_resource_metadata",
@@ -277,7 +297,6 @@ __all__ = [
     "generate_mm_metadata",
     "fetch_mm_metadata",
     "fetch_mm_metadata_async",
-
     # Agent role
     "AgentRequestSigner",
     "ChallengeHandler",
@@ -286,9 +305,36 @@ __all__ = [
     "poll_pending_url",
     "async_poll_pending_url",
     "PollingResult",
-
     # Resource role
     "RequestVerifier",
     "ChallengeBuilder",
     "ResourceTokenIssuer",
 ]
+
+from .revocation import (
+    RevocationStore,
+    RevocationManager,
+    sign_revocation_request,
+    send_revocation,
+)
+from .missions import (
+    build_mission_approval,
+    parse_mission_approval,
+    mission_request,
+    token_needs_refresh,
+)
+
+__all__ += [
+    "RevocationStore",
+    "RevocationManager",
+    "sign_revocation_request",
+    "send_revocation",
+    "build_mission_approval",
+    "parse_mission_approval",
+    "mission_request",
+    "token_needs_refresh",
+]
+
+from .tokens.delegation import verify_subagent_token, verify_upstream_token
+
+__all__ += ["verify_subagent_token", "verify_upstream_token"]

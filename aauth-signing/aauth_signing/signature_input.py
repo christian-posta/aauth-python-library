@@ -6,9 +6,7 @@ from typing import List, Dict, Any, Optional
 
 
 def build_signature_input_header(
-    covered_components: List[str],
-    label: str = "sig",
-    created: Optional[int] = None
+    covered_components: List[str], label: str = "sig", created: Optional[int] = None
 ) -> str:
     """Build Signature-Input header per RFC 9421 Section 4.1.
 
@@ -23,11 +21,9 @@ def build_signature_input_header(
     if created is None:
         created = int(time.time())
 
-    component_list = ' '.join([
-        f'"{comp}"' for comp in covered_components
-    ])
+    component_list = " ".join([f'"{comp}"' for comp in covered_components])
 
-    return f'{label}=({component_list});created={created}'
+    return f"{label}=({component_list});created={created}"
 
 
 def parse_signature_input(header_value: str) -> tuple[List[str], Dict[str, Any]]:
@@ -42,21 +38,18 @@ def parse_signature_input(header_value: str) -> tuple[List[str], Dict[str, Any]]
     Raises:
         ValueError: If header format is invalid
     """
-    match = re.match(r'(\w+)=\((.*)\)(?:;(.*))?', header_value)
-    if not match:
-        raise ValueError(f"Invalid Signature-Input format: {header_value}")
+    import http_sfv
 
-    components_str = match.group(2)
-    params_str = match.group(3) or ""
-
-    components = []
-    for match in re.finditer(r'"([^"]+)"', components_str):
-        components.append(match.group(1))
-
-    params = {}
-    for match in re.finditer(r'(\w+)=([^\s;]+)', params_str):
-        key = match.group(1)
-        value = match.group(2).strip('"')
-        params[key] = value
-
-    return components, params
+    fields = http_sfv.Dictionary()
+    fields.parse(header_value.encode("ascii"))
+    if len(fields) != 1:
+        raise ValueError("Exactly one signature label is supported")
+    inner = next(iter(fields.values()))
+    if not isinstance(inner, http_sfv.InnerList):
+        raise ValueError("Covered components must be an inner list")
+    components = [item.value for item in inner]
+    if any(not isinstance(c, str) or isinstance(c, http_sfv.Token) for c in components):
+        raise ValueError("Covered components must be strings")
+    if len(set(components)) != len(components):
+        raise ValueError("Duplicate covered components")
+    return components, dict(inner.params)

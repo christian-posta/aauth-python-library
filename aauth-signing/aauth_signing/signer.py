@@ -6,7 +6,11 @@ import time
 import logging
 from .signature_key import build_signature_key_header
 from .signature import build_signature_header
-from .signature_base import build_signature_base, calculate_content_digest, build_signature_params
+from .signature_base import (
+    build_signature_base,
+    calculate_content_digest,
+    build_signature_params,
+)
 from .errors import SignatureError
 
 
@@ -18,7 +22,7 @@ def sign_request(
     private_key,
     sig_scheme: str = "hwk",
     additional_signature_components: Optional[List[str]] = None,
-    **kwargs
+    **kwargs,
 ) -> Dict[str, str]:
     """Sign an HTTP request using HTTP Message Signatures (RFC 9421).
 
@@ -50,45 +54,40 @@ def sign_request(
 
         # Build Signature-Key header first (needed for signature-key component)
         signature_key_header = build_signature_key_header(
-            sig_scheme=sig_scheme,
-            private_key=private_key,
-            label=label,
-            **kwargs
+            sig_scheme=sig_scheme, private_key=private_key, label=label, **kwargs
         )
 
         headers["Signature-Key"] = signature_key_header
 
-        # Determine body components to include (opt-in only)
-        body_components = []
-        if body and additional_signature_components:
-            for comp in additional_signature_components:
-                if comp in ("content-type", "content-digest"):
-                    body_components.append(comp)
-
-            if "content-digest" in body_components and "Content-Digest" not in headers:
-                content_digest = calculate_content_digest(body)
-                headers["Content-Digest"] = content_digest
-
-            if "content-type" in body_components and "Content-Type" not in headers:
-                headers["Content-Type"] = "application/octet-stream"
-
-        # Include aauth-mission when the request carries AAuth-Mission (spec §Authorization Endpoint Request).
-        include_aauth_mission = any(k.lower() == "aauth-mission" for k in headers)
-
-        # Determine covered components
+        # Callers select body coverage according to the recipient's profile.
+        components = list(additional_signature_components or [])
+        if any(k.lower() == "authorization" for k in headers):
+            components.append("authorization")
+        if "content-digest" in components:
+            if body is None:
+                raise ValueError("content-digest requires body bytes")
+            for k in list(headers):
+                if k.lower() == "content-digest":
+                    del headers[k]
+            headers["Content-Digest"] = calculate_content_digest(body)
+        if "content-type" in components and not any(
+            k.lower() == "content-type" for k in headers
+        ):
+            headers["Content-Type"] = "application/octet-stream"
         from .signature_base import _determine_covered_components
-        covered_components = _determine_covered_components(
-            query_string,
-            body,
-            additional_components=body_components,
-            include_aauth_mission=include_aauth_mission,
+
+        covered_components = list(
+            dict.fromkeys(
+                _determine_covered_components(
+                    query_string, body, additional_components=components
+                )
+            )
         )
 
         # Build signature params (only created is required per spec Section 15.4)
         created = int(time.time())
         signature_params = build_signature_params(
-            covered_components=covered_components,
-            created=created
+            covered_components=covered_components, created=created
         )
 
         signature_input_header = f"{label}={signature_params}"
@@ -103,12 +102,12 @@ def sign_request(
             body=body,
             signature_key_header=signature_key_header,
             covered_components=covered_components,
-            signature_params=signature_params
+            signature_params=signature_params,
         )
 
         logger = logging.getLogger("aauth_signing")
         logger.debug(f"Signature base length: {len(signature_base)} bytes")
-        for i, line in enumerate(signature_base.split('\n')):
+        for i, line in enumerate(signature_base.split("\n")):
             logger.debug(f"  Line {i}: {repr(line)}")
 
         # Sign the signature base
@@ -120,16 +119,22 @@ def sign_request(
         return {
             "Signature-Input": signature_input_header,
             "Signature": signature_header,
-            "Signature-Key": signature_key_header
+            "Signature-Key": signature_key_header,
         }
     except Exception as e:
-        raise SignatureError(f"Failed to sign request: {e}", details={"scheme": sig_scheme}) from e
+        raise SignatureError(
+            f"Failed to sign request: {e}", details={"scheme": sig_scheme}
+        ) from e
 
 
 def _sign_with_key(private_key, message: bytes) -> bytes:
     """Sign *message* with *private_key*, dispatching on key type."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey, ECDSA, SECP384R1
+    from cryptography.hazmat.primitives.asymmetric.ec import (
+        EllipticCurvePrivateKey,
+        ECDSA,
+        SECP384R1,
+    )
     from cryptography.hazmat.primitives import hashes
 
     if isinstance(private_key, Ed25519PrivateKey):

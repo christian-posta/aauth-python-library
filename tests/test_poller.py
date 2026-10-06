@@ -17,6 +17,29 @@ def make_response(status_code: int, body: dict, headers: dict = None):
     return r
 
 
+def test_repeated_clarification_posts_obey_request_limit():
+    pending = make_response(
+        202,
+        {"clarification": "Approve?"},
+        {"AAuth-Requirement": "requirement=clarification", "Retry-After": "0"},
+    )
+    get = AsyncMock(return_value=pending)
+    post = AsyncMock(return_value=pending)
+    result = asyncio.run(
+        async_poll_pending_url(
+            "https://ps.example/pending/1",
+            get,
+            max_polls=2,
+            initial_response=pending,
+            on_clarification=AsyncMock(return_value="yes"),
+            sign_and_send_post=post,
+        )
+    )
+    assert not result.success and result.error == "max_polls_exceeded"
+    assert post.await_count == 2
+    get.assert_not_awaited()
+
+
 class TestAsyncPollPendingUrl:
     """Tests for async_poll_pending_url."""
 
@@ -38,7 +61,11 @@ class TestAsyncPollPendingUrl:
         get.assert_awaited_once_with("http://ps/pending/1")
 
     def test_403_returns_denied(self):
-        get = AsyncMock(return_value=make_response(403, {"error": "denied", "error_description": "User rejected"}))
+        get = AsyncMock(
+            return_value=make_response(
+                403, {"error": "denied", "error_description": "User rejected"}
+            )
+        )
 
         result = self.run(async_poll_pending_url("http://ps/pending/1", get))
 
@@ -64,7 +91,11 @@ class TestAsyncPollPendingUrl:
         assert result.error == "invalid_code"
 
     def test_500_returns_server_error(self):
-        get = AsyncMock(return_value=make_response(500, {"error": "server_error"}, {"content-type": "application/json"}))
+        get = AsyncMock(
+            return_value=make_response(
+                500, {"error": "server_error"}, {"content-type": "application/json"}
+            )
+        )
 
         result = self.run(async_poll_pending_url("http://ps/pending/1", get))
 
@@ -90,16 +121,24 @@ class TestAsyncPollPendingUrl:
         ]
         get = AsyncMock(side_effect=responses)
 
-        result = self.run(async_poll_pending_url("http://ps/pending/1", get, default_wait=0))
+        result = self.run(
+            async_poll_pending_url("http://ps/pending/1", get, default_wait=0)
+        )
 
         assert result.success is True
         assert result.auth_token == "tok_final"
         assert get.await_count == 2
 
     def test_max_polls_exceeded(self):
-        get = AsyncMock(return_value=make_response(202, {"status": "pending"}, {"Retry-After": "0"}))
+        get = AsyncMock(
+            return_value=make_response(202, {"status": "pending"}, {"Retry-After": "0"})
+        )
 
-        result = self.run(async_poll_pending_url("http://ps/pending/1", get, max_polls=3, default_wait=0))
+        result = self.run(
+            async_poll_pending_url(
+                "http://ps/pending/1", get, max_polls=3, default_wait=0
+            )
+        )
 
         assert result.success is False
         assert result.error == "max_polls_exceeded"
@@ -116,21 +155,30 @@ class TestAsyncPollPendingUrl:
             interaction_calls.append((pending_url, code))
 
         responses = [
-            make_response(202, {"status": "pending", "requirement": "interaction", "code": "ABCD1234"}, {"Retry-After": "0"}),
+            make_response(
+                202,
+                {"status": "pending", "requirement": "interaction", "code": "ABCD1234"},
+                {"Retry-After": "0"},
+            ),
             make_response(202, {"status": "interacting"}, {"Retry-After": "0"}),
             make_response(200, {"auth_token": "tok_after_interaction"}),
         ]
         get = AsyncMock(side_effect=responses)
 
-        result = self.run(async_poll_pending_url(
-            "http://ps/pending/1", get, default_wait=0, on_interaction=on_interaction,
-        ))
+        result = self.run(
+            async_poll_pending_url(
+                "http://ps/pending/1",
+                get,
+                default_wait=0,
+                on_interaction=on_interaction,
+            )
+        )
 
         assert result.success is True
         assert len(interaction_calls) == 1
         assert interaction_calls[0] == ("http://ps/pending/1", "ABCD1234")
 
-    def test_on_interaction_not_called_after_first_poll(self):
+    def test_late_interaction_is_prompted_once(self):
         """on_interaction fires only on attempt 0, not on subsequent 202s."""
         interaction_calls = []
 
@@ -141,16 +189,25 @@ class TestAsyncPollPendingUrl:
         # but second 202 does — should be ignored since attempt != 0)
         responses = [
             make_response(202, {"status": "pending"}, {"Retry-After": "0"}),
-            make_response(202, {"status": "pending", "requirement": "interaction", "code": "LATE99"}, {"Retry-After": "0"}),
+            make_response(
+                202,
+                {"status": "pending", "requirement": "interaction", "code": "LATE99"},
+                {"Retry-After": "0"},
+            ),
             make_response(200, {"auth_token": "tok"}),
         ]
         get = AsyncMock(side_effect=responses)
 
-        self.run(async_poll_pending_url(
-            "http://ps/pending/1", get, default_wait=0, on_interaction=on_interaction,
-        ))
+        self.run(
+            async_poll_pending_url(
+                "http://ps/pending/1",
+                get,
+                default_wait=0,
+                on_interaction=on_interaction,
+            )
+        )
 
-        assert interaction_calls == []  # no call: first 202 had no code, second wasn't attempt 0
+        assert interaction_calls == ["LATE99"]
 
     # ------------------------------------------------------------------ #
     # Clarification callback                                               #
@@ -163,7 +220,9 @@ class TestAsyncPollPendingUrl:
             clarification_calls.append(question)
             return "yes"
 
-        post = AsyncMock(return_value=make_response(202, {"status": "pending"}, {"Retry-After": "0"}))
+        post = AsyncMock(
+            return_value=make_response(202, {"status": "pending"}, {"Retry-After": "0"})
+        )
 
         responses = [
             make_response(
@@ -175,14 +234,22 @@ class TestAsyncPollPendingUrl:
         ]
         get = AsyncMock(side_effect=responses)
 
-        result = self.run(async_poll_pending_url(
-            "http://ps/pending/1", get, default_wait=0,
-            on_clarification=on_clarification, sign_and_send_post=post,
-        ))
+        result = self.run(
+            async_poll_pending_url(
+                "http://ps/pending/1",
+                get,
+                default_wait=0,
+                on_clarification=on_clarification,
+                sign_and_send_post=post,
+            )
+        )
 
         assert result.success is True
         assert clarification_calls == ["Do you approve?"]
-        post.assert_awaited_once_with("http://ps/pending/1", {"clarification_response": "yes"})
+        post.assert_awaited_once_with(
+            "http://ps/pending/1",
+            {"action": "clarification_response", "clarification_response": "yes"},
+        )
 
     def test_on_clarification_none_answer_skips_post(self):
         async def on_clarification(pending_url, question):
@@ -190,15 +257,24 @@ class TestAsyncPollPendingUrl:
 
         post = AsyncMock()
         responses = [
-            make_response(202, {"status": "pending", "clarification": "Approve?"}, {"Retry-After": "0", "AAuth-Requirement": "requirement=clarification"}),
+            make_response(
+                202,
+                {"status": "pending", "clarification": "Approve?"},
+                {"Retry-After": "0", "AAuth-Requirement": "requirement=clarification"},
+            ),
             make_response(200, {"auth_token": "tok"}),
         ]
         get = AsyncMock(side_effect=responses)
 
-        self.run(async_poll_pending_url(
-            "http://ps/pending/1", get, default_wait=0,
-            on_clarification=on_clarification, sign_and_send_post=post,
-        ))
+        self.run(
+            async_poll_pending_url(
+                "http://ps/pending/1",
+                get,
+                default_wait=0,
+                on_clarification=on_clarification,
+                sign_and_send_post=post,
+            )
+        )
 
         post.assert_not_awaited()
 
@@ -213,7 +289,9 @@ class TestAsyncPollPendingUrl:
         ]
         get = AsyncMock(side_effect=responses)
 
-        result = self.run(async_poll_pending_url("http://ps/pending/1", get, default_wait=0))
+        result = self.run(
+            async_poll_pending_url("http://ps/pending/1", get, default_wait=0)
+        )
 
         assert result.success is True
         assert get.await_count == 2

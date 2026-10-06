@@ -1,82 +1,44 @@
-"""High-level request signing for agent role."""
+"""Agent signing under the AAuth jwt profile."""
 
-from typing import Dict, Any, Optional
-from urllib.parse import urlparse
 from ..signing.signer import sign_request
-from ..signing.signature_key import build_signature_key_header
 from ..errors import SignatureError
 
 
 class AgentRequestSigner:
-    """High-level request signer for agents."""
-    
-    def __init__(
-        self,
-        private_key,
-        agent_id: Optional[str] = None,
-        agent_token: Optional[str] = None,
-        kid: str = "key-1",
-        dwk: str = "aauth-agent.json",
-    ):
-        """Initialize agent request signer.
-
-        Args:
-            private_key: Agent's private signing key
-            agent_id: Agent identifier (HTTPS URL) - required for jwks_uri scheme
-            agent_token: Agent token (JWT) - required for jwt scheme
-            kid: Key ID for jwks_uri scheme
-            dwk: Well-known metadata document name for jwks_uri scheme
-        """
+    def __init__(self, private_key, agent_id=None, agent_token=None, **kwargs):
         self.private_key = private_key
         self.agent_id = agent_id
         self.agent_token = agent_token
-        self.kid = kid
-        self.dwk = dwk
-    
+
     def sign_request(
         self,
-        method: str,
-        target_uri: str,
-        headers: Dict[str, str],
-        body: Optional[bytes] = None,
-        sig_scheme: str = "hwk"
-    ) -> Dict[str, str]:
-        """Sign an HTTP request.
-        
-        Args:
-            method: HTTP method
-            target_uri: Target URI
-            headers: Request headers (will be modified)
-            body: Request body bytes
-            sig_scheme: Signature scheme ("hwk", "jwks_uri", or "jwt")
-        
-        Returns:
-            Dictionary with signature headers
-        
-        Raises:
-            SignatureError: If signing fails
-        """
-        kwargs = {}
-        
-        if sig_scheme == "jwks_uri":
-            if not self.agent_id:
-                raise SignatureError("agent_id required for jwks_uri scheme")
-            kwargs["id"] = self.agent_id
-            kwargs["dwk"] = self.dwk
-            kwargs["kid"] = self.kid
-        
-        elif sig_scheme == "jwt":
-            if not self.agent_token:
-                raise SignatureError("agent_token required for jwt scheme")
-            kwargs["jwt"] = self.agent_token
-        
+        method,
+        target_uri,
+        headers,
+        body=None,
+        sig_scheme="jwt",
+        *,
+        token=None,
+        recipient_role="resource",
+        additional_signature_components=None,
+    ):
+        if sig_scheme != "jwt":
+            raise SignatureError(
+                "AAuth agents must use jwt", error_code="unsupported_scheme"
+            )
+        token = token or self.agent_token
+        if not token:
+            raise SignatureError("A token is required")
+        components = list(additional_signature_components or [])
+        if body is not None and recipient_role in ("ps", "as", "revocation"):
+            components.extend(["content-digest", "content-type"])
         return sign_request(
-            method=method,
-            target_uri=target_uri,
-            headers=headers,
-            body=body,
-            private_key=self.private_key,
-            sig_scheme=sig_scheme,
-            **kwargs
+            method,
+            target_uri,
+            headers,
+            body,
+            self.private_key,
+            sig_scheme="jwt",
+            jwt=token,
+            additional_signature_components=components,
         )
-

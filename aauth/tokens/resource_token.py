@@ -1,216 +1,123 @@
-"""Resource token creation and validation for AAuth."""
+"""Resource tokens bound to the verified person/auth token that prompted them."""
 
 import time
-import uuid
-from typing import Dict, Any, Optional, Callable
-import jwt
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from .common import base_claims, verify_token, parse_jwt, encode_jwt, check_server
 from ..keys.jwk import calculate_jwk_thumbprint
 from ..errors import TokenError
 
 
+def _presented(token, fetcher, resource, jkt, revocation_checker=None):
+    header, _ = parse_jwt(token)
+    if header.get("typ") not in ("aa-person+jwt", "aa-auth+jwt"):
+        raise TokenError(
+            "Expected person or auth presented_token",
+            error_code="invalid_presented_token",
+        )
+    try:
+        p = verify_token(
+            token, fetcher, expected_aud=resource, revocation_checker=revocation_checker
+        )
+        if calculate_jwk_thumbprint(p["cnf"]["jwk"]) != jkt:
+            raise TokenError("Presented confirmation key mismatch")
+    except TokenError as exc:
+        code = {
+            "expired_jwt": "expired_presented_token",
+            "revoked_jwt": "revoked_presented_token",
+        }.get(exc.error_code, "invalid_presented_token")
+        raise TokenError(str(exc), error_code=code) from exc
+    return p, p["iss"] if header["typ"] == "aa-person+jwt" else p["ps"]
+
+
 def create_resource_token(
-    iss: str,
-    aud: str,
-    agent: str,
-    agent_jkt: str,
-    scope: str,
-    private_key: Ed25519PrivateKey,
-    kid: str,
-    exp: Optional[int] = None,
-    mission: Optional[Dict[str, Any]] = None,
-) -> str:
-    """Create a resource token (aa-resource+jwt) per AAuth spec Section 8.1.
-
-    Args:
-        iss: Resource identifier (HTTPS URL)
-        aud: Auth server identifier (HTTPS URL)
-        agent: Agent identifier (HTTPS URL)
-        agent_jkt: JWK Thumbprint of agent's signing key
-        scope: Space-separated scope values
-        private_key: Resource's Ed25519 private key for signing
-        kid: Key ID for signing key
-        exp: Expiration timestamp (Unix time). Defaults to 10 minutes from now.
-        mission: Optional ``{"approver": url, "s256": hash}`` when mission-aware.
-
-    Returns:
-        Signed JWT string (aa-resource+jwt)
-    """
-    now = int(time.time())
-    if exp is None:
-        exp = now + 600  # 10 minutes
-
-    header = {
-        "typ": "aa-resource+jwt",
-        "alg": "EdDSA",
-        "kid": kid
-    }
-
-    payload = {
-        "iss": iss,
-        "aud": aud,
-        "dwk": "aauth-resource.json",
-        "jti": str(uuid.uuid4()),
-        "agent": agent,
-        "agent_jkt": agent_jkt,
-        "scope": scope,
-        "iat": now,
-        "exp": exp,
-    }
-    if mission is not None:
-        payload["mission"] = mission
-
-    return jwt.encode(
-        payload,
-        private_key,
-        algorithm="EdDSA",
-        headers=header
+    iss,
+    aud,
+    agent_jkt,
+    private_key,
+    kid,
+    *,
+    presented_token,
+    jwks_fetcher,
+    scope=None,
+    exp=None,
+    account=None,
+    login_hint=None,
+    interaction=None,
+    revocation_checker=None,
+):
+    check_server(aud)
+    p, ps = _presented(
+        presented_token, jwks_fetcher, iss, agent_jkt, revocation_checker
     )
+    now = int(time.time())
+    exp = now + 300 if exp is None else exp
+    if type(exp) is not int or exp <= now:
+        raise TokenError("Invalid resource token expiration")
+    claims = base_claims(iss, "aauth-resource.json", exp)
+    claims.update(
+        aud=aud, ps=ps, sub=p["sub"], presented_jti=p["jti"], agent_jkt=agent_jkt
+    )
+    for name in ("mission_s256", "tenant"):
+        if name in p:
+            claims[name] = p[name]
+    for name, value in [
+        ("scope", scope),
+        ("account", account),
+        ("login_hint", login_hint),
+        ("interaction", interaction),
+    ]:
+        if value is not None:
+            claims[name] = value
+    return encode_jwt(claims, private_key, kid, "aa-resource+jwt")
 
 
 def verify_resource_token(
-    token: str,
-    jwks_fetcher: Callable[[str], Optional[Dict[str, Any]]],
-    expected_aud: Optional[str] = None,
-    expected_agent: Optional[str] = None,
-    expected_agent_jkt: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Verify a resource token per SPEC §Resource Token Verification.
-
-    Steps:
-    1. Decode JWT header. Verify typ is aa-resource+jwt.
-    2. Verify dwk is aauth-resource.json. Discover JWKS and verify JWT signature.
-    3. Verify exp is in the future and iat is not in the future.
-    4. Verify aud matches the recipient's own identifier.
-    5. Verify agent matches the requesting agent's identifier.
-    6. Verify agent_jkt matches the JWK Thumbprint of the signing key.
-    7. If mission is present, verify mission.approver matches the PS.
-
-    Args:
-        token: Resource token JWT string
-        jwks_fetcher: Function that takes issuer URL and returns JWKS dict
-        expected_aud: Expected audience (PS or AS identifier)
-        expected_agent: Expected agent identifier
-        expected_agent_jkt: Expected JWK Thumbprint of agent's signing key
-
-    Returns:
-        Dictionary with verified claims
-
-    Raises:
-        TokenError: If token is invalid
-    """
+    token,
+    jwks_fetcher,
+    *,
+    presented_token,
+    expected_aud=None,
+    expected_iss=None,
+    expected_ps=None,
+    expected_agent_jkt=None,
+    revocation_checker=None,
+    mission_checker=None,
+):
     try:
-        header = jwt.get_unverified_header(token)
-        payload = jwt.decode(token, options={"verify_signature": False})
-    except Exception as e:
-        raise TokenError(f"Failed to parse resource token: {e}", token_type="aa-resource+jwt")
-
-    # Step 1: Verify typ
-    typ = header.get("typ")
-    if typ != "aa-resource+jwt":
-        raise TokenError(
-            f"Invalid token type: expected aa-resource+jwt, got {typ}",
-            token_type="aa-resource+jwt"
-        )
-
-    # Step 2: Verify dwk
-    dwk = payload.get("dwk")
-    if dwk != "aauth-resource.json":
-        raise TokenError(
-            f"Invalid dwk: expected aauth-resource.json, got {dwk}",
-            token_type="aa-resource+jwt"
-        )
-
-    # Step 3: Check exp and iat
-    exp_val = payload.get("exp")
-    if exp_val:
-        now = int(time.time())
-        if now >= exp_val:
-            raise TokenError("Resource token has expired", token_type="aa-resource+jwt")
-    else:
-        raise TokenError("Resource token missing 'exp' claim", token_type="aa-resource+jwt")
-
-    iat = payload.get("iat")
-    if iat:
-        now = int(time.time())
-        if iat > now + 60:
-            raise TokenError("Resource token iat is in the future", token_type="aa-resource+jwt")
-
-    # Step 4: Verify aud
-    if expected_aud:
-        aud = payload.get("aud")
-        if aud != expected_aud:
-            raise TokenError(
-                f"Invalid audience: expected {expected_aud}, got {aud}",
-                token_type="aa-resource+jwt"
-            )
-
-    # Step 5: Verify agent
-    if expected_agent:
-        agent = payload.get("agent")
-        if agent != expected_agent:
-            raise TokenError(
-                f"Invalid agent: expected {expected_agent}, got {agent}",
-                token_type="aa-resource+jwt"
-            )
-
-    # Step 6: Verify agent_jkt
-    if expected_agent_jkt:
-        agent_jkt = payload.get("agent_jkt")
-        if agent_jkt != expected_agent_jkt:
-            raise TokenError(
-                f"agent_jkt mismatch: expected {expected_agent_jkt}, got {agent_jkt}",
-                token_type="aa-resource+jwt"
-            )
-
-    # Verify required claims
-    for claim in ("jti", "iss", "aud", "agent", "agent_jkt", "scope"):
-        if claim not in payload:
-            raise TokenError(
-                f"Resource token missing required '{claim}' claim",
-                token_type="aa-resource+jwt"
-            )
-
-    # Verify JWT signature via JWKS
-    kid_header = header.get("kid")
-    if not kid_header:
-        raise TokenError("Token header missing 'kid'", token_type="aa-resource+jwt")
-
-    iss = payload.get("iss")
-    jwks = jwks_fetcher(iss)
-    if not jwks:
-        raise TokenError(
-            f"Failed to fetch JWKS from {iss}",
-            token_type="aa-resource+jwt"
-        )
-
-    keys = jwks.get("keys", [])
-    signing_key = None
-    for key in keys:
-        if key.get("kid") == kid_header:
-            signing_key = key
-            break
-
-    if not signing_key:
-        raise TokenError(
-            f"Signing key with kid={kid_header} not found in JWKS",
-            token_type="aa-resource+jwt"
-        )
-
-    from ..keys.jwk import jwk_to_public_key
-    public_key = jwk_to_public_key(signing_key)
-
-    try:
-        jwt.decode(
+        p = verify_token(
             token,
-            public_key,
-            algorithms=["EdDSA"],
-            options={"verify_signature": True, "verify_exp": False, "verify_aud": False}
+            jwks_fetcher,
+            expected_typ="aa-resource+jwt",
+            expected_aud=expected_aud,
+            expected_iss=expected_iss,
+            revocation_checker=revocation_checker,
         )
-    except jwt.InvalidSignatureError as e:
+    except TokenError as exc:
+        code = {
+            "expired_jwt": "expired_resource_token",
+            "revoked_jwt": "revoked_resource_token",
+        }.get(exc.error_code, "invalid_resource_token")
+        raise TokenError(str(exc), error_code=code) from exc
+    if expected_agent_jkt and p["agent_jkt"] != expected_agent_jkt:
+        raise TokenError("agent_jkt mismatch", error_code="invalid_resource_token")
+    presented, ps = _presented(
+        presented_token, jwks_fetcher, p["iss"], p["agent_jkt"], revocation_checker
+    )
+    if expected_ps and p["ps"] != expected_ps:
+        raise TokenError("PS mismatch", error_code="invalid_resource_token")
+    if (
+        p["ps"] != ps
+        or p["sub"] != presented["sub"]
+        or p["presented_jti"] != presented["jti"]
+    ):
         raise TokenError(
-            f"Resource token signature verification failed: {e}",
-            token_type="aa-resource+jwt"
+            "Presented token binding mismatch", error_code="invalid_resource_token"
         )
-
-    return payload
+    for name in ("mission_s256", "tenant"):
+        if p.get(name) != presented.get(name) or (name in p) != (name in presented):
+            raise TokenError(
+                f"{name} binding mismatch", error_code="invalid_resource_token"
+            )
+    if "mission_s256" in p and expected_aud == expected_ps:
+        if mission_checker is None or not mission_checker(p["mission_s256"]):
+            raise TokenError("Mission is not active", error_code="mission_terminated")
+    return p

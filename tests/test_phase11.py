@@ -1,6 +1,9 @@
 """Tests for Phase 11: MM–AS federation helpers."""
 
-from aauth.http.deferred import build_pending_response_body, build_pending_response_headers
+from aauth.http.deferred import (
+    build_pending_response_body,
+    build_pending_response_headers,
+)
 
 
 def test_claims_pending_body_and_headers():
@@ -20,3 +23,7 @@ def test_claims_pending_body_and_headers():
     )
     assert "AAuth-Requirement" in hdrs
     assert "claims" in hdrs["AAuth-Requirement"]
+    from aauth.headers.aauth_header import parse_aauth_header
+
+    assert hdrs["AAuth-Requirement"] == "requirement=claims"
+    assert parse_aauth_header(hdrs["AAuth-Requirement"])["requirement"] == "claims"

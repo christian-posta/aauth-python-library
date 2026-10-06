@@ -13,11 +13,12 @@ def generate_agent_metadata(
     logo_uri: Optional[str] = None,
     logo_dark_uri: Optional[str] = None,
     callback_endpoint: Optional[str] = None,
-    login_endpoint: Optional[str] = None,
     localhost_callback_allowed: Optional[bool] = None,
-    clarification_supported: Optional[bool] = None,
     tos_uri: Optional[str] = None,
     policy_uri: Optional[str] = None,
+    description: Optional[str] = None,
+    documentation_uri: Optional[str] = None,
+    accept_signature_algs: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Generate agent metadata JSON per SPEC §Agent Server Metadata.
 
@@ -45,22 +46,27 @@ def generate_agent_metadata(
     }
 
     if client_name is not None:
-        metadata["client_name"] = client_name
+        metadata["name"] = client_name
     if logo_uri is not None:
         metadata["logo_uri"] = logo_uri
     if logo_dark_uri is not None:
         metadata["logo_dark_uri"] = logo_dark_uri
     if callback_endpoint is not None:
         metadata["callback_endpoint"] = callback_endpoint
-    if login_endpoint is not None:
-        metadata["login_endpoint"] = login_endpoint
     if localhost_callback_allowed is not None:
         metadata["localhost_callback_allowed"] = localhost_callback_allowed
-    if clarification_supported is not None:
-        metadata["clarification_supported"] = clarification_supported
     if tos_uri is not None:
         metadata["tos_uri"] = tos_uri
     if policy_uri is not None:
         metadata["policy_uri"] = policy_uri
 
-    return metadata
+    for k, v in [
+        ("description", description),
+        ("documentation_uri", documentation_uri),
+        ("accept_signature_algs", accept_signature_algs),
+    ]:
+        if v is not None:
+            metadata[k] = v
+    from .common import validate_metadata
+
+    return validate_metadata(metadata, agent_id, ("jwks_uri",))

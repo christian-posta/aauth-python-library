@@ -1,55 +1,24 @@
-"""Polling state machine for deferred responses.
-
-Per spec Section 10.6, the agent polls the pending URL with GET
-until a terminal response is received.
-
-This module provides both a synchronous polling implementation (for demos
-and scripts) and an async implementation suitable for use inside async
-frameworks and the exchange_resource_token() function.
-"""
+"""Shared sync/async deferred-response state machine for draft -11."""
 
 import asyncio
 import time
-import logging
-from typing import Awaitable, Dict, Any, Optional, Callable
-
-logger = logging.getLogger("aauth.agent.poller")
-
-
-def _extract_interaction_url(aauth_req_header: str, code: str, pending_url: str) -> str:
-    """Extract the user-facing interaction URL from AAuth-Requirement header.
-
-    The header carries ``url="<interaction_endpoint>"`` per spec §6.2.
-    The code is appended as a query parameter so the user arrives pre-filled.
-    Falls back to ``pending_url`` when the header carries no url field.
-    """
-    if not aauth_req_header:
-        return pending_url
-    try:
-        from ..headers.aauth_header import parse_aauth_header
-        parsed = parse_aauth_header(aauth_req_header)
-        endpoint = parsed.get("url")
-        if endpoint:
-            sep = "&" if "?" in endpoint else "?"
-            return f"{endpoint}{sep}code={code}"
-    except Exception:
-        pass
-    return pending_url
+from urllib.parse import urljoin, urlsplit, urlencode
+from ..headers.aauth_header import parse_aauth_header
+from ..errors import TokenError
 
 
 class PollingResult:
-    """Result of polling a pending URL."""
-
     def __init__(
         self,
-        success: bool,
-        auth_token: Optional[str] = None,
-        response_body: Optional[Dict[str, Any]] = None,
-        status_code: int = 0,
-        error: Optional[str] = None,
-        error_description: Optional[str] = None,
-        require: Optional[str] = None,
-        code: Optional[str] = None,
+        success,
+        auth_token=None,
+        response_body=None,
+        status_code=0,
+        error=None,
+        error_description=None,
+        require=None,
+        code=None,
+        response=None,
     ):
         self.success = success
         self.auth_token = auth_token
@@ -59,407 +28,240 @@ class PollingResult:
         self.error_description = error_description
         self.require = require
         self.code = code
+        self.response = response
+
+
+def pending_location(location, base):
+    if not isinstance(location, str) or not location:
+        raise TokenError("202 response has no Location header")
+    target = urljoin(base, location)
+    a, b = urlsplit(base), urlsplit(target)
+    origin = lambda u: (
+        u.scheme,
+        u.hostname,
+        u.port or (443 if u.scheme == "https" else 80),
+    )
+    if origin(a) != origin(b) or b.username or b.password or b.fragment:
+        raise TokenError("Pending Location must remain on the same origin")
+    return target
+
+
+def _body(response):
+    try:
+        value = response.json()
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _wait(headers, default):
+    try:
+        value = int(headers.get("retry-after", default))
+        return max(value, 0)
+    except (ValueError, TypeError):
+        return default
+
+
+def _steps(
+    pending_url,
+    max_polls,
+    default_wait,
+    initial_response,
+    interaction_enabled,
+    clarify_enabled,
+):
+    """Yield I/O operations; limit GET polls and clarification POSTs together."""
+    prompted = set()
+    response = initial_response
+    count = 0
+    while True:
+        if response is None:
+            if count >= max_polls:
+                return PollingResult(
+                    False,
+                    error="max_polls_exceeded",
+                    error_description=f"Exceeded {max_polls} polls",
+                )
+            response = yield ("get", pending_url)
+            count += 1
+        status = response.status_code
+        body = _body(response)
+        headers = {str(k).lower(): v for k, v in response.headers.items()}
+        if status == 429:
+            default_wait += 5
+            yield ("sleep", max(default_wait, _wait(headers, default_wait)))
+        elif status == 503:
+            yield ("sleep", _wait(headers, max(default_wait * 2, 1)))
+        elif status != 202:
+            success = 200 <= status < 400
+            error = body.get("error") or {
+                403: "denied",
+                408: "expired",
+                410: "invalid_code",
+                500: "server_error",
+            }.get(status, "unexpected_status")
+            return PollingResult(
+                success,
+                auth_token=body.get("auth_token"),
+                response_body=body,
+                status_code=status,
+                error=None if success else error,
+                error_description=body.get("detail", body.get("error_description")),
+                response=response,
+            )
+        else:
+            if "location" in headers:
+                pending_url = pending_location(headers["location"], pending_url)
+            raw = headers.get("aauth-requirement", "")
+            parsed = parse_aauth_header(raw) if raw else {}
+            requirement = (
+                parsed.get("requirement")
+                or body.get("requirement")
+                or body.get("require")
+            )
+            code = parsed.get("code") or body.get("code")
+            if (
+                requirement == "interaction"
+                and code
+                and interaction_enabled
+                and body.get("status") != "interacting"
+            ):
+                endpoint = parsed.get("url")
+                if endpoint:
+                    u = urlsplit(endpoint)
+                    if (
+                        u.scheme != "https"
+                        or u.query
+                        or u.fragment
+                        or u.username
+                        or u.password
+                    ):
+                        raise TokenError("Invalid interaction URL")
+                    endpoint += "?" + urlencode({"code": code})
+                else:
+                    endpoint = pending_url  # Read older body-mirrored responses.
+                key = (endpoint, code)
+                if key not in prompted:
+                    yield ("interaction", endpoint, code)
+                    prompted.add(key)
+            if (
+                requirement == "clarification"
+                and body.get("clarification")
+                and clarify_enabled
+            ):
+                answer = yield ("clarify", pending_url, body["clarification"])
+                if answer is not None:
+                    if count >= max_polls:
+                        return PollingResult(
+                            False,
+                            error="max_polls_exceeded",
+                            error_description=f"Exceeded {max_polls} polls/replies",
+                        )
+                    count += 1
+                    reply = yield (
+                        "post",
+                        pending_url,
+                        {
+                            "action": "clarification_response",
+                            "clarification_response": answer,
+                        },
+                    )
+                    # POST can itself complete or deny the pending operation.
+                    response = reply
+                    continue
+            yield ("sleep", _wait(headers, default_wait))
+        response = None
 
 
 def poll_pending_url(
-    pending_url: str,
-    sign_and_send_get: Callable[[str], Any],
-    max_polls: int = 60,
-    default_wait: int = 2,
-    on_interaction: Optional[Callable[[str, str], None]] = None,
-    on_clarification: Optional[Callable[[str, str], Optional[str]]] = None,
-    sign_and_send_post: Optional[Callable[[str, Dict], Any]] = None,
-) -> PollingResult:
-    """Poll a pending URL until a terminal response.
-
-    Implements the agent state machine from spec Section 10.6.
-
-    Args:
-        pending_url: The Location URL from the 202 response
-        sign_and_send_get: Function that sends a signed GET to a URL and returns
-            an object with .status_code and .json() method
-        max_polls: Maximum number of poll attempts
-        default_wait: Default seconds between polls
-        on_interaction: Callback when require=interaction is received.
-            Called with (interaction_endpoint, code). Agent should direct user there.
-        on_clarification: Callback when clarification question is received.
-            Called with (pending_url, question). Should return response string or None.
-        sign_and_send_post: Function for POST requests (needed for clarification responses).
-            Called with (url, json_body).
-
-    Returns:
-        PollingResult with the outcome
-    """
-    for attempt in range(max_polls):
-        logger.debug(f"Poll attempt {attempt + 1}/{max_polls}: GET {pending_url}")
-
-        try:
-            response = sign_and_send_get(pending_url)
-        except Exception as e:
-            logger.error(f"Poll request failed: {e}")
-            return PollingResult(
-                success=False,
-                error="network_error",
-                error_description=str(e),
-            )
-
-        status = response.status_code
-
-        # Terminal: 200 OK — success
-        if status == 200:
-            body = response.json()
-            return PollingResult(
-                success=True,
-                auth_token=body.get("auth_token"),
-                response_body=body,
-                status_code=200,
-            )
-
-        # Terminal: 403 Denied/Abandoned
-        if status == 403:
-            body = response.json()
-            return PollingResult(
-                success=False,
-                status_code=403,
-                response_body=body,
-                error=body.get("error", "denied"),
-                error_description=body.get("error_description"),
-            )
-
-        # Terminal: 408 Expired
-        if status == 408:
-            body = response.json()
-            return PollingResult(
-                success=False,
-                status_code=408,
-                response_body=body,
-                error=body.get("error", "expired"),
-                error_description=body.get("error_description"),
-            )
-
-        # Terminal: 410 Gone
-        if status == 410:
-            body = response.json()
-            return PollingResult(
-                success=False,
-                status_code=410,
-                response_body=body,
-                error=body.get("error", "invalid_code"),
-                error_description=body.get("error_description"),
-            )
-
-        # Terminal: 500 Server Error
-        if status == 500:
-            body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-            return PollingResult(
-                success=False,
-                status_code=500,
-                response_body=body,
-                error=body.get("error", "server_error"),
-                error_description=body.get("error_description"),
-            )
-
-        # Transient: 429 Too Many Requests (slow_down)
-        if status == 429:
-            default_wait += 5  # Per spec: increase interval by 5 seconds
-            retry_after = default_wait
-            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
-            if retry_header:
-                try:
-                    retry_after = max(int(retry_header), default_wait)
-                except (ValueError, TypeError):
-                    pass
-            logger.debug(f"Received 429 slow_down, increasing poll interval to {retry_after}s")
-            time.sleep(retry_after)
-            continue
-
-        # Transient: 202 Pending or Interacting — continue polling
-        if status == 202:
-            body = response.json()
-            require = body.get("requirement") or body.get("require")
-            code = body.get("code")
-            # Spec §Clarification Chat: AAuth-Requirement: requirement=clarification MUST
-            # be present in the header; the question text is in the body "clarification" field.
-            # Check both: header for the requirement signal, body for the question text.
-            aauth_req_header = (
-                getattr(response, "headers", {}).get("aauth-requirement")
-                or getattr(response, "headers", {}).get("AAuth-Requirement")
-                or ""
-            )
-            if not require and "requirement=clarification" in aauth_req_header:
-                require = "clarification"
-            clarification = body.get("clarification")
-            poll_status = body.get("status", "pending")
-
-            # Handle interaction requirement (first time only)
-            if require == "interaction" and code and on_interaction and attempt == 0:
-                interaction_url = _extract_interaction_url(aauth_req_header, code, pending_url)
-                on_interaction(interaction_url, code)
-
-            # When status=interacting, user has arrived — stop prompting
-            if poll_status == "interacting":
-                logger.debug("User has arrived at interaction endpoint (status=interacting)")
-
-            # Handle clarification question
-            if clarification and on_clarification and sign_and_send_post:
-                answer = on_clarification(pending_url, clarification)
-                if answer:
-                    try:
-                        sign_and_send_post(pending_url, {
-                            "clarification_response": answer
-                        })
-                    except Exception as e:
-                        logger.warning(f"Failed to send clarification response: {e}")
-
-            # Respect Retry-After
-            retry_after = default_wait
-            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
-            if retry_header:
-                try:
-                    retry_after = max(int(retry_header), 0)
-                except (ValueError, TypeError):
-                    pass
-
-            if retry_after > 0:
-                time.sleep(retry_after)
-            continue
-
-        # Transient: 503 Temporarily unavailable
-        if status == 503:
-            retry_after = default_wait * 2
-            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
-            if retry_header:
-                try:
-                    retry_after = max(int(retry_header), 1)
-                except (ValueError, TypeError):
-                    pass
-            time.sleep(retry_after)
-            continue
-
-        # Unknown status — treat as fatal
-        logger.warning(f"Unexpected status code {status} during polling")
-        body = {}
-        try:
-            body = response.json()
-        except Exception:
-            pass
-        return PollingResult(
-            success=False,
-            status_code=status,
-            response_body=body,
-            error="unexpected_status",
-            error_description=f"Unexpected HTTP status {status}",
-        )
-
-    # Exhausted polls
-    return PollingResult(
-        success=False,
-        error="max_polls_exceeded",
-        error_description=f"Exceeded maximum {max_polls} poll attempts",
+    pending_url,
+    sign_and_send_get,
+    max_polls=60,
+    default_wait=5,
+    on_interaction=None,
+    on_clarification=None,
+    sign_and_send_post=None,
+    initial_response=None,
+):
+    steps = _steps(
+        pending_url,
+        max_polls,
+        default_wait,
+        initial_response,
+        bool(on_interaction),
+        bool(on_clarification and sign_and_send_post),
     )
+    value = None
+    try:
+        while True:
+            event = steps.send(value)
+            value = None
+            op, *args = event
+            if op == "get":
+                value = sign_and_send_get(*args)
+            elif op == "sleep":
+                if args[0]:
+                    time.sleep(args[0])
+            elif op == "interaction":
+                on_interaction(*args)
+            elif op == "clarify":
+                value = on_clarification(*args)
+            elif op == "post":
+                value = sign_and_send_post(*args)
+    except StopIteration as done:
+        return done.value
+    except TokenError as exc:
+        return PollingResult(
+            False, error="invalid_response", error_description=str(exc)
+        )
+    except Exception as exc:
+        return PollingResult(False, error="network_error", error_description=str(exc))
 
 
 async def async_poll_pending_url(
-    pending_url: str,
-    sign_and_send_get: Callable[[str], Awaitable[Any]],
-    max_polls: int = 60,
-    default_wait: int = 2,
-    on_interaction: Optional[Callable[[str, str], Awaitable[None]]] = None,
-    on_clarification: Optional[Callable[[str, str], Awaitable[Optional[str]]]] = None,
-    sign_and_send_post: Optional[Callable[[str, Dict], Awaitable[Any]]] = None,
-) -> PollingResult:
-    """Async version of poll_pending_url — same state machine, awaitable throughout.
-
-    Implements the agent state machine from spec Section 10.6.
-
-    Args:
-        pending_url: The Location URL from the 202 response.
-        sign_and_send_get: Async callable that sends a signed GET to a URL and
-            returns a response with .status_code, .json(), and .headers.
-        max_polls: Maximum number of poll attempts.
-        default_wait: Default seconds between polls.
-        on_interaction: Async callback when require=interaction is received.
-            Called with (pending_url, code). Agent should direct user there.
-        on_clarification: Async callback when clarification question is received.
-            Called with (pending_url, question). Should return answer string or None.
-        sign_and_send_post: Async callable for POST requests (needed for
-            clarification responses). Called with (url, json_body).
-
-    Returns:
-        PollingResult with the outcome.
-    """
-    for attempt in range(max_polls):
-        logger.debug(f"Poll attempt {attempt + 1}/{max_polls}: GET {pending_url}")
-
-        try:
-            response = await sign_and_send_get(pending_url)
-        except Exception as e:
-            logger.error(f"Poll request failed: {e}")
-            return PollingResult(
-                success=False,
-                error="network_error",
-                error_description=str(e),
-            )
-
-        status = response.status_code
-
-        # Terminal: 200 OK — success
-        if status == 200:
-            body = response.json()
-            return PollingResult(
-                success=True,
-                auth_token=body.get("auth_token"),
-                response_body=body,
-                status_code=200,
-            )
-
-        # Terminal: 403 Denied/Abandoned
-        if status == 403:
-            body = response.json()
-            return PollingResult(
-                success=False,
-                status_code=403,
-                response_body=body,
-                error=body.get("error", "denied"),
-                error_description=body.get("error_description"),
-            )
-
-        # Terminal: 408 Expired
-        if status == 408:
-            body = response.json()
-            return PollingResult(
-                success=False,
-                status_code=408,
-                response_body=body,
-                error=body.get("error", "expired"),
-                error_description=body.get("error_description"),
-            )
-
-        # Terminal: 410 Gone
-        if status == 410:
-            body = response.json()
-            return PollingResult(
-                success=False,
-                status_code=410,
-                response_body=body,
-                error=body.get("error", "invalid_code"),
-                error_description=body.get("error_description"),
-            )
-
-        # Terminal: 500 Server Error
-        if status == 500:
-            body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-            return PollingResult(
-                success=False,
-                status_code=500,
-                response_body=body,
-                error=body.get("error", "server_error"),
-                error_description=body.get("error_description"),
-            )
-
-        # Transient: 429 Too Many Requests (slow_down)
-        if status == 429:
-            default_wait += 5  # Per spec: increase interval by 5 seconds
-            retry_after = default_wait
-            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
-            if retry_header:
-                try:
-                    retry_after = max(int(retry_header), default_wait)
-                except (ValueError, TypeError):
-                    pass
-            logger.debug(f"Received 429 slow_down, increasing poll interval to {retry_after}s")
-            await asyncio.sleep(retry_after)
-            continue
-
-        # Transient: 202 Pending or Interacting — continue polling
-        if status == 202:
-            body = response.json()
-            require = body.get("requirement") or body.get("require")
-            code = body.get("code")
-            aauth_req_header = (
-                getattr(response, "headers", {}).get("aauth-requirement")
-                or getattr(response, "headers", {}).get("AAuth-Requirement")
-                or ""
-            )
-            if not require and "requirement=clarification" in aauth_req_header:
-                require = "clarification"
-            clarification = body.get("clarification")
-            poll_status = body.get("status", "pending")
-
-            # Handle interaction requirement (first time only)
-            if require == "interaction" and code and on_interaction and attempt == 0:
-                interaction_url = _extract_interaction_url(aauth_req_header, code, pending_url)
-                await on_interaction(interaction_url, code)
-
-            # When status=interacting, user has arrived — stop prompting
-            if poll_status == "interacting":
-                logger.debug("User has arrived at interaction endpoint (status=interacting)")
-
-            # Handle clarification question
-            if clarification and on_clarification and sign_and_send_post:
-                answer = await on_clarification(pending_url, clarification)
-                if answer:
-                    try:
-                        await sign_and_send_post(pending_url, {
-                            "clarification_response": answer
-                        })
-                    except Exception as e:
-                        logger.warning(f"Failed to send clarification response: {e}")
-
-            # Respect Retry-After
-            retry_after = default_wait
-            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
-            if retry_header:
-                try:
-                    retry_after = max(int(retry_header), 0)
-                except (ValueError, TypeError):
-                    pass
-
-            if retry_after > 0:
-                await asyncio.sleep(retry_after)
-            continue
-
-        # Transient: 503 Temporarily unavailable
-        if status == 503:
-            retry_after = default_wait * 2
-            retry_header = getattr(response, 'headers', {}).get('retry-after') or getattr(response, 'headers', {}).get('Retry-After')
-            if retry_header:
-                try:
-                    retry_after = max(int(retry_header), 1)
-                except (ValueError, TypeError):
-                    pass
-            await asyncio.sleep(retry_after)
-            continue
-
-        # Unknown status — treat as fatal
-        logger.warning(f"Unexpected status code {status} during polling")
-        body = {}
-        try:
-            body = response.json()
-        except Exception:
-            pass
-        return PollingResult(
-            success=False,
-            status_code=status,
-            response_body=body,
-            error="unexpected_status",
-            error_description=f"Unexpected HTTP status {status}",
-        )
-
-    # Exhausted polls
-    return PollingResult(
-        success=False,
-        error="max_polls_exceeded",
-        error_description=f"Exceeded maximum {max_polls} poll attempts",
+    pending_url,
+    sign_and_send_get,
+    max_polls=60,
+    default_wait=5,
+    on_interaction=None,
+    on_clarification=None,
+    sign_and_send_post=None,
+    initial_response=None,
+):
+    steps = _steps(
+        pending_url,
+        max_polls,
+        default_wait,
+        initial_response,
+        bool(on_interaction),
+        bool(on_clarification and sign_and_send_post),
     )
+    value = None
+    try:
+        while True:
+            event = steps.send(value)
+            value = None
+            op, *args = event
+            if op == "get":
+                value = await sign_and_send_get(*args)
+            elif op == "sleep":
+                if args[0]:
+                    await asyncio.sleep(args[0])
+            elif op == "interaction":
+                await on_interaction(*args)
+            elif op == "clarify":
+                value = await on_clarification(*args)
+            elif op == "post":
+                value = await sign_and_send_post(*args)
+    except StopIteration as done:
+        return done.value
+    except TokenError as exc:
+        return PollingResult(
+            False, error="invalid_response", error_description=str(exc)
+        )
+    except Exception as exc:
+        return PollingResult(False, error="network_error", error_description=str(exc))
 
 
-def cancel_pending_request(
-    sign_and_send_delete: Callable[[str], Any],
-    pending_url: str,
-) -> Any:
-    """Send DELETE to a pending URL to cancel the request (spec Section 11.4.3).
-
-    The caller must provide ``sign_and_send_delete`` that performs a signed DELETE.
-    """
+def cancel_pending_request(sign_and_send_delete, pending_url):
     return sign_and_send_delete(pending_url)

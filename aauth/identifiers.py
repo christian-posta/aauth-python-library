@@ -8,14 +8,14 @@ import re
 from urllib.parse import urlparse
 
 # aauth: URI scheme — local part character set per spec
-_AAUTH_LOCAL_RE = re.compile(r'^[a-z0-9\-_+.]+$')
+_AAUTH_LOCAL_RE = re.compile(r"^[A-Za-z0-9\-_+.]+$")
 
 
 def validate_agent_identifier(identifier: str) -> str:
     """Validate an agent identifier per AAuth spec (aauth:local@domain format).
 
     Agent identifiers MUST be of the form ``aauth:local@domain`` where:
-    - The ``local`` part consists of lowercase ASCII letters (a-z), digits (0-9),
+    - The ``local`` part consists of ASCII letters (A-Z, a-z), digits (0-9),
       hyphen (-), underscore (_), plus (+), and period (.).
     - The ``local`` part MUST NOT be empty and MUST NOT exceed 255 characters.
     - The ``domain`` part MUST be a valid domain name (no scheme, no port).
@@ -35,29 +35,39 @@ def validate_agent_identifier(identifier: str) -> str:
     if not identifier.startswith("aauth:"):
         raise ValueError(f"Agent identifier must use aauth: scheme: {identifier!r}")
 
-    rest = identifier[len("aauth:"):]
+    rest = identifier[len("aauth:") :]
     if "@" not in rest:
-        raise ValueError(f"Agent identifier must contain '@' separating local and domain: {identifier!r}")
+        raise ValueError(
+            f"Agent identifier must contain '@' separating local and domain: {identifier!r}"
+        )
 
     local, _, domain = rest.partition("@")
 
     if not local:
-        raise ValueError(f"Agent identifier local part must not be empty: {identifier!r}")
+        raise ValueError(
+            f"Agent identifier local part must not be empty: {identifier!r}"
+        )
 
     if len(local) > 255:
-        raise ValueError(f"Agent identifier local part must not exceed 255 characters: {identifier!r}")
+        raise ValueError(
+            f"Agent identifier local part must not exceed 255 characters: {identifier!r}"
+        )
 
     if not _AAUTH_LOCAL_RE.match(local):
         raise ValueError(
             f"Agent identifier local part contains invalid characters "
-            f"(only a-z, 0-9, -, _, +, . allowed): {identifier!r}"
+            f"(only A-Z, a-z, 0-9, -, _, +, . allowed): {identifier!r}"
         )
 
     if not domain:
-        raise ValueError(f"Agent identifier domain part must not be empty: {identifier!r}")
+        raise ValueError(
+            f"Agent identifier domain part must not be empty: {identifier!r}"
+        )
 
     if "://" in domain:
-        raise ValueError(f"Agent identifier domain must not include a scheme: {identifier!r}")
+        raise ValueError(
+            f"Agent identifier domain must not include a scheme: {identifier!r}"
+        )
 
     return identifier
 
@@ -68,7 +78,7 @@ def parse_agent_identifier(identifier: str):
     Raises ValueError if the identifier is invalid.
     """
     validate_agent_identifier(identifier)
-    rest = identifier[len("aauth:"):]
+    rest = identifier[len("aauth:") :]
     local, _, domain = rest.partition("@")
     return local, domain
 
@@ -121,6 +131,9 @@ def validate_server_identifier(url: str) -> str:
 
     if not parsed.hostname:
         raise ValueError(f"Server identifier must have a hostname: {url}")
+
+    if parsed.netloc != parsed.hostname or not url.isascii():
+        raise ValueError("Server identifier contains credentials or invalid host")
 
     if parsed.port is not None:
         raise ValueError(f"Server identifier must not contain a port: {url}")
