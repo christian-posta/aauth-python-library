@@ -8,16 +8,18 @@ resolution-markers = [
 
 [[package]]
 name = "aauth-signing"
-version = "0.1.2"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
+    { name = "http-sfv" },
     { name = "pyjwt" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=41.0.0" },
+    { name = "http-sfv", specifier = ">=0.9.8" },
     { name = "pyjwt", specifier = ">=2.8.0" },
 ]
 
@@ -174,6 +176,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/da/9870eec4b69c63ef5925bf7d8342b7e13bc2ee3d47791461c4e49ca212f4/cryptography-46.0.7-pp311-pypy311_pp73-manylinux_2_34_aarch64.whl", hash = "sha256:04959522f938493042d595a736e7dbdff6eb6cc2339c11465b3ff89343b65f65", size = 4219115, upload_time = "2026-04-08T01:57:44.939Z" },
     { url = "https://files.pythonhosted.org/packages/f4/72/05aa5832b82dd341969e9a734d1812a6aadb088d9eb6f0430fc337cc5a8f/cryptography-46.0.7-pp311-pypy311_pp73-manylinux_2_34_x86_64.whl", hash = "sha256:3986ac1dee6def53797289999eabe84798ad7817f3e97779b5061a95b0ee4968", size = 4385479, upload_time = "2026-04-08T01:57:46.86Z" },
     { url = "https://files.pythonhosted.org/packages/20/2a/1b016902351a523aa2bd446b50a5bc1175d7a7d1cf90fe2ef904f9b84ebc/cryptography-46.0.7-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:258514877e15963bd43b558917bc9f54cf7cf866c38aa576ebf47a77ddbc43a4", size = 3412829, upload_time = "2026-04-08T01:57:48.874Z" },
+]
+
+[[package]]
+name = "http-sfv"
+version = "0.9.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/ae/7684925d335eb4182d95b2d179c81fc05dbc89dc93e42b239c13f800525c/http_sfv-0.9.9.tar.gz", hash = "sha256:e132dc9bef990832bc01824f5fa9d4efc7d0f4271e4b227db35c8ef38540c739", size = 15973, upload_time = "2024-01-25T05:16:26.969Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/f7/f5adcd777e7e641c7824f4e45875a14cc7e0c6cd30b0f9db0c3698fd8e16/http_sfv-0.9.9-py3-none-any.whl", hash = "sha256:5feed51c90e9a1dc797701662d044d936923cf0027255c75452b8240e33d6c82", size = 16846, upload_time = "2024-01-25T05:16:24.072Z" },
 ]
 
 [[package]]
